@@ -1,10 +1,10 @@
 #!/bin/bash
 
 #######################################################################
-# Local Repository Server Installation Script
+# MIRRORET Installation Script
 # Purpose: Turn this machine into a central package repository server
 # Supports: Debian/Ubuntu and RHEL/CentOS/Fedora based systems
-# Author: Professional Linux DevOps & System Architect
+# Author: Mher Saratikyan
 #######################################################################
 
 set -e  # Exit on error
