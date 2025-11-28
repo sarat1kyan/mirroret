@@ -1,10 +1,10 @@
 #!/bin/bash
 
 #######################################################################
-# UNIFIED LOCAL REPOSITORY SERVER - Complete Installation Script
+# UNIFIED MIRRORET SERVER - Complete Installation Script
 # Supports: deb, rpm, pip, Docker, npm packages
 # Purpose: Central package repository for all Linux distributions
-# Author: Professional Linux DevOps & System Architect
+# Author: Mher Saratikyan
 #######################################################################
 
 set -e  # Exit on error
