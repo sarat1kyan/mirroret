@@ -17,13 +17,13 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Configuration
-REPO_BASE_DIR="/var/local-repo"
+REPO_BASE_DIR="/var/mirroret"
 WEB_PORT=8080
 SYNC_HOUR=2  # Hour for daily sync (2 AM)
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
 # Logging
-LOG_FILE="/var/log/local-repo-setup.log"
+LOG_FILE="/var/log/mirroret-setup.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
 #######################################################################
@@ -174,7 +174,7 @@ configure_apt_mirror() {
     cat > /etc/apt/mirror.list << 'EOF'
 ############# config ##################
 #
-set base_path    /var/local-repo/mirror
+set base_path    /var/mirroret/mirror
 set mirror_path  $base_path/mirror
 set skel_path    $base_path/skel
 set var_path     $base_path/var
@@ -214,8 +214,8 @@ configure_createrepo() {
     cat > "$REPO_BASE_DIR/scripts/sync-repos.sh" << 'EOF'
 #!/bin/bash
 
-REPO_BASE="/var/local-repo/mirror"
-LOG_FILE="/var/local-repo/logs/sync-$(date +%Y%m%d-%H%M%S).log"
+REPO_BASE="/var/mirroret/mirror"
+LOG_FILE="/var/mirroret/logs/sync-$(date +%Y%m%d-%H%M%S).log"
 
 echo "Starting repository sync: $(date)" | tee -a "$LOG_FILE"
 
@@ -245,7 +245,7 @@ EOF
 configure_nginx() {
     print_header "Configuring Nginx Web Server"
     
-    cat > /etc/nginx/sites-available/local-repo << EOF
+    cat > /etc/nginx/sites-available/mirroret << EOF
 server {
     listen $WEB_PORT;
     server_name _;
@@ -271,17 +271,17 @@ server {
     client_max_body_size 0;
     
     # Logging
-    access_log /var/log/nginx/local-repo-access.log;
-    error_log /var/log/nginx/local-repo-error.log;
+    access_log /var/log/nginx/mirroret-access.log;
+    error_log /var/log/nginx/mirroret-error.log;
 }
 EOF
     
     # Enable site
     if [ -d /etc/nginx/sites-enabled ]; then
-        ln -sf /etc/nginx/sites-available/local-repo /etc/nginx/sites-enabled/
+        ln -sf /etc/nginx/sites-available/mirroret /etc/nginx/sites-enabled/
     else
         # RHEL-based systems
-        cat > /etc/nginx/conf.d/local-repo.conf << EOF
+        cat > /etc/nginx/conf.d/mirroret.conf << EOF
 server {
     listen $WEB_PORT;
     server_name _;
@@ -305,8 +305,8 @@ server {
     
     client_max_body_size 0;
     
-    access_log /var/log/nginx/local-repo-access.log;
-    error_log /var/log/nginx/local-repo-error.log;
+    access_log /var/log/nginx/mirroret-access.log;
+    error_log /var/log/nginx/mirroret-error.log;
 }
 EOF
     fi
@@ -334,7 +334,7 @@ create_approval_script() {
 # Usage: ./approve-packages.sh [--auto-approve]
 #######################################################################
 
-REPO_BASE="/var/local-repo"
+REPO_BASE="/var/mirroret"
 MIRROR_DIR="$REPO_BASE/mirror"
 APPROVED_DIR="$REPO_BASE/approved"
 STAGING_DIR="$REPO_BASE/staging"
@@ -433,7 +433,7 @@ create_update_check_script() {
 # Check for Available Updates
 #######################################################################
 
-REPO_BASE="/var/local-repo"
+REPO_BASE="/var/mirroret"
 LOG_FILE="$REPO_BASE/logs/update-check-$(date +%Y%m%d).log"
 
 echo "═══════════════════════════════════════════════════════════" | tee "$LOG_FILE"
@@ -481,7 +481,7 @@ create_sync_script() {
         cat > "$REPO_BASE_DIR/scripts/sync-mirror.sh" << 'EOF'
 #!/bin/bash
 
-LOG_FILE="/var/local-repo/logs/sync-$(date +%Y%m%d-%H%M%S).log"
+LOG_FILE="/var/mirroret/logs/sync-$(date +%Y%m%d-%H%M%S).log"
 
 echo "Starting mirror sync: $(date)" | tee "$LOG_FILE"
 
@@ -489,7 +489,7 @@ echo "Starting mirror sync: $(date)" | tee "$LOG_FILE"
 /usr/bin/apt-mirror 2>&1 | tee -a "$LOG_FILE"
 
 # Clean old packages
-bash /var/local-repo/mirror/var/clean.sh 2>&1 | tee -a "$LOG_FILE"
+bash /var/mirroret/mirror/var/clean.sh 2>&1 | tee -a "$LOG_FILE"
 
 echo "Sync completed: $(date)" | tee -a "$LOG_FILE"
 
@@ -500,8 +500,8 @@ EOF
         cat > "$REPO_BASE_DIR/scripts/sync-mirror.sh" << 'EOF'
 #!/bin/bash
 
-REPO_BASE="/var/local-repo/mirror"
-LOG_FILE="/var/local-repo/logs/sync-$(date +%Y%m%d-%H%M%S).log"
+REPO_BASE="/var/mirroret/mirror"
+LOG_FILE="/var/mirroret/logs/sync-$(date +%Y%m%d-%H%M%S).log"
 
 echo "Starting repository sync: $(date)" | tee "$LOG_FILE"
 
@@ -604,7 +604,7 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-EXCLUDE_FILE="/var/local-repo/config/excluded-packages.txt"
+EXCLUDE_FILE="/var/mirroret/config/excluded-packages.txt"
 
 echo "$1" >> "$EXCLUDE_FILE"
 echo "Package $1 added to exclusion list: $EXCLUDE_FILE"
@@ -616,7 +616,7 @@ EOF
     cat > "$REPO_BASE_DIR/scripts/list-packages.sh" << 'EOF'
 #!/bin/bash
 
-APPROVED_DIR="/var/local-repo/approved"
+APPROVED_DIR="/var/mirroret/approved"
 
 echo "═══════════════════════════════════════════════════════════"
 echo "  Available Packages in Approved Repository"
