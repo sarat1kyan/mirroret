@@ -25,12 +25,12 @@ This is a **production-ready unified local repository server** that supports **A
 ### Main Installation Script
 | File | Size | Purpose |
 |------|------|---------|
-| **[unified-repo-install.sh](computer:///mnt/user-data/outputs/unified-repo-install.sh)** | 31 KB | **MAIN INSTALLATION SCRIPT** - Run this first! |
+| **[mirroret-unified.sh](computer:///mnt/user-data/outputs/mirroret-unified.sh)** | 31 KB | **MAIN INSTALLATION SCRIPT** - Run this first! |
 
 ### Previous Basic Solution (Optional)
 | File | Size | Purpose |
 |------|------|---------|
-| [local-repo-server-install.sh](computer:///mnt/user-data/outputs/local-repo-server-install.sh) | 29 KB | Basic deb/rpm only solution (superseded by unified version) |
+| [mirroret.sh](computer:///mnt/user-data/outputs/mirroret.sh) | 29 KB | Basic deb/rpm only solution (superseded by unified version) |
 
 ### Complete Documentation Suite
 | File | Size | Purpose |
@@ -52,8 +52,8 @@ This is a **production-ready unified local repository server** that supports **A
 ### Step 1: Install Server (15 minutes)
 ```bash
 # Download and run installation script
-chmod +x unified-repo-install.sh
-sudo ./unified-repo-install.sh
+chmod +x mirroret-unified.sh
+sudo ./mirroret-unified.sh
 
 # Wait for installation to complete
 # Services installed:
@@ -417,7 +417,7 @@ grep -i error /srv/localrepo/logs/*.log | tail -20
 ✅ Single management interface  
 ✅ Comprehensive documentation  
 
-### Basic Solution (local-repo-server-install.sh)
+### Basic Solution (mirroret.sh)
 ✅ Debian/Ubuntu packages (.deb)  
 ✅ RHEL/CentOS/Fedora packages (.rpm)  
 ❌ pip packages  
@@ -442,7 +442,7 @@ grep -i error /srv/localrepo/logs/*.log | tail -20
 
 ### Installation
 ```bash
-sudo ./unified-repo-install.sh
+sudo ./mirroret-unified.sh
 ```
 
 ### Management
@@ -479,7 +479,7 @@ npm set registry http://SERVER_IP:4873/
 
 ## 🚀 Next Steps
 
-1. **Install the server** using unified-repo-install.sh
+1. **Install the server** using mirroret-unified.sh
 2. **Run initial sync** (takes 2-8 hours)
 3. **Configure first client** using CLIENT-CONFIGURATION-GUIDE.md
 4. **Test all package types** (apt, dnf, pip, docker, npm)
@@ -517,5 +517,5 @@ This unified repository server represents a **complete solution** for managing a
 **You're ready to take complete control of your infrastructure's package management!**
 
 ```bash
-sudo ./unified-repo-install.sh  # Let's get started!
+sudo ./mirroret-unified.sh  # Let's get started!
 ```
