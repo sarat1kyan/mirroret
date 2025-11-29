@@ -1,93 +1,118 @@
-# Local Repository Server - Complete Solution
 
-## 🎯 Project Overview
+---
 
-This is a **production-ready local repository server** that gives you **100% manual control** over package management across your entire Linux infrastructure. It supports both Debian-based (Ubuntu, Debian) and RHEL-based (CentOS, Fedora, RHEL) systems.
+# 🪞 **MIRRORET**
 
-### Key Features
-✅ **Full Manual Control** - Approve every package before deployment  
-✅ **Multi-Distribution Support** - Debian, Ubuntu, CentOS, Fedora, RHEL  
-✅ **Security-First** - Review security updates, track CVEs  
-✅ **Automated Syncing** - Daily automatic sync from official repos  
-✅ **Web-Based Access** - Nginx serving packages on port 8080  
-✅ **Package Approval Workflow** - Mirror → Review → Approve → Deploy  
-✅ **Blacklist/Whitelist** - Control exactly what can be installed  
-✅ **Rollback Support** - Revert to previous package versions  
-✅ **Testing Environment** - Isolated testing before approval  
+### *Enterprise-Grade Local Repository & Package Control System*
 
-## 📋 Files Included
+> **Take full control over every package in your infrastructure.**
+> MIRRORET gives you a **secure, auditable, and centralized package repository** for all major Linux distributions.
 
-| File | Purpose |
-|------|---------|
-| `local-repo-server-install.sh` | Main installation script (run this first) |
-| `NETWORK-ARCHITECTURE.md` | Network topology, ports, client configs |
-| `PACKAGE-CONTROL.md` | Advanced approval workflows, security |
-| `DIRECTORY-STRUCTURE.md` | Complete directory layout, quick start guide |
-| `README.md` | This file - overview and getting started |
+---
 
-## 🚀 Quick Start (5 Steps)
+## 🚀 **Overview**
 
-### Step 1: Install Repository Server
+**MIRRORET** is a **production-ready Local Repository Server** that gives you **100% manual control** over package deployments across your Linux infrastructure.
+
+✔ Supports **Debian / Ubuntu / RHEL / CentOS / Fedora**
+
+✔ Prevents unauthorized package installations
+
+✔ Fully auditable **approval workflow**
+
+✔ Designed for **security, compliance & forensics**
+
+✔ Built for **enterprise-grade DevOps** and **air-gapped environments**
+
+---
+
+## 🔥 **Key Features**
+
+| Feature                          | Description                             |
+| -------------------------------- | --------------------------------------- |
+| 🔐 **Total Manual Control**      | Approve every package before deployment |
+| 🌍 **Multi-Distro Support**      | Debian, Ubuntu, RHEL, CentOS, Fedora    |
+| 🛡 **Security-First Design**     | CVE checks, audits, rollback support    |
+| 🔄 **Automated Syncing**         | Daily sync from official repositories   |
+| 🌐 **Web Interface (Port 8080)** | Nginx-based package access              |
+| 📦 **Approval Workflow**         | Mirror → Review → Approve → Deploy      |
+| 📛 **Blacklist/Whitelist**       | Block or restrict unwanted packages     |
+| ↩ **Rollback Support**           | Restore previous versions instantly     |
+| 🧪 **Testing Environment**       | Isolated testing before approval        |
+
+---
+
+## 📁 **Included Files**
+
+| File                           | Purpose                                   |
+| ------------------------------ | ----------------------------------------- |
+| `mirroret.sh` | Main installation script (run first)      |
+| `NETWORK-ARCHITECTURE.md`      | Ports, topology & client setup            |
+| `PACKAGE-CONTROL.md`           | Security, approvals & rollback procedures |
+| `DIRECTORY-STRUCTURE.md`       | Repo layout & quick setup                 |
+| `README.md`                    | Overview and documentation (this file)    |
+
+---
+
+## ⚡ **Quick Start – 5 Steps**
+
+### 1️⃣ Install MIRRORET Server
+
 ```bash
-# Download the script
-wget https://your-server.com/local-repo-server-install.sh
-chmod +x local-repo-server-install.sh
-
-# Run as root
-sudo ./local-repo-server-install.sh
-
-# Wait 5-10 minutes for installation
+git clone https://github.com/sarat1kyan/mirroret.git
+chmod +x mirroret.sh
+sudo ./mirroret.sh   # Run as root
 ```
 
-### Step 2: Initial Package Sync
-```bash
-# Start first sync (takes 2-8 hours)
-sudo /var/local-repo/scripts/sync-mirror.sh
+### 2️⃣ First Sync (2–8 hours)
 
-# Monitor progress
-tail -f /var/local-repo/logs/sync-*.log
+```bash
+sudo /var/mirroret/scripts/sync-mirror.sh
+tail -f /var/mirroret/logs/sync-*.log
 ```
 
-### Step 3: Approve Packages
-```bash
-# Auto-approve all packages (initial setup)
-sudo /var/local-repo/scripts/approve-packages.sh --auto-approve
+### 3️⃣ Approve Packages
 
-# Or review first
-sudo /var/local-repo/scripts/show-updates.sh
+```bash
+sudo /var/mirroret/scripts/approve-packages.sh --auto-approve
+# OR
+sudo /var/mirroret/scripts/show-updates.sh
 ```
 
-### Step 4: Configure Clients
+### 4️⃣ Configure Clients
 
-**Ubuntu/Debian Clients:**
+**Ubuntu/Debian**
+
 ```bash
-REPO_SERVER="192.168.1.100"  # Your server IP
+REPO_SERVER="192.168.1.100"
 wget http://${REPO_SERVER}:8080/config/localrepo.list
 sudo mv localrepo.list /etc/apt/sources.list.d/
 sudo apt update
 ```
 
-**RHEL/CentOS Clients:**
+**RHEL/CentOS/Fedora**
+
 ```bash
-REPO_SERVER="192.168.1.100"  # Your server IP
+REPO_SERVER="192.168.1.100"
 wget http://${REPO_SERVER}:8080/config/localrepo.repo
 sudo mv localrepo.repo /etc/yum.repos.d/
 sudo dnf clean all && sudo dnf makecache
 ```
 
-### Step 5: Test Installation
+### 5️⃣ Test Access
+
 ```bash
-# On client machine
 sudo apt install htop    # Debian/Ubuntu
-# or
 sudo dnf install htop    # RHEL/CentOS
 ```
 
-## 📊 System Architecture
+---
 
-```
-                    LOCAL REPOSITORY SERVER
-                    
+## 🧠 **System Architecture**
+
+```text
+                      MIRRORET SERVER
+
 ┌─────────────────────────────────────────────────────────┐
 │  Nginx Web Server (Port 8080)                           │
 │  ├─ /mirror/     - Downloaded from official repos       │
@@ -98,360 +123,162 @@ sudo dnf install htop    # RHEL/CentOS
                           │
         ┌─────────────────┼─────────────────┐
         │                 │                 │
-        ▼                 ▼                 ▼
-    ┌────────┐        ┌────────┐      ┌────────┐
-    │ Client │        │ Client │      │ Client │
-    │ Ubuntu │        │ CentOS │      │ Debian │
-    └────────┘        └────────┘      └────────┘
+    ┌────────┐        ┌────────┐        ┌────────┐
+    │ Ubuntu │        │ CentOS │        │ Debian │
+    └────────┘        └────────┘        └────────┘
 ```
 
-## 🔧 Management Commands
+---
 
-### Daily Operations
+## 🛠 **Management Commands**
+
+### 🗓 Daily Operations
+
 ```bash
-# Check for new updates
-/var/local-repo/scripts/check-updates.sh
-
-# Approve packages
-/var/local-repo/scripts/approve-packages.sh
-
-# List available packages
-/var/local-repo/scripts/list-packages.sh
-
-# Sync manually (instead of waiting for cron)
-/var/local-repo/scripts/sync-mirror.sh
+/var/mirroret/scripts/check-updates.sh
+/var/mirroret/scripts/approve-packages.sh
+/var/mirroret/scripts/list-packages.sh
+/var/mirroret/scripts/sync-mirror.sh
 ```
 
-### Package Control
+### 🔍 Package Control
+
 ```bash
-# View package details
-/var/local-repo/scripts/package-info.sh nginx
-
-# Exclude unwanted package
-/var/local-repo/scripts/exclude-package.sh telnet
-
-# Check security updates
-/var/local-repo/scripts/detect-security-updates.sh
-
-# Rollback to previous version
-/var/local-repo/scripts/rollback-package.sh nginx 1.18.0
+/var/mirroret/scripts/package-info.sh nginx
+/var/mirroret/scripts/exclude-package.sh telnet
+/var/mirroret/scripts/detect-security-updates.sh
+/var/mirroret/scripts/rollback-package.sh nginx 1.18.0
 ```
 
-### System Monitoring
+### 📊 Monitoring
+
 ```bash
-# Check nginx status
 sudo systemctl status nginx
-
-# View sync logs
-tail -f /var/local-repo/logs/sync-*.log
-
-# Check disk usage
-df -h /var/local-repo
-
-# Monitor client access
-tail -f /var/log/nginx/local-repo-access.log
+tail -f /var/mirroret/logs/sync-*.log
+df -h /var/mirroret
+tail -f /var/log/nginx/mirroret-access.log
 ```
 
-## 📁 Directory Structure
+---
 
-```
-/var/local-repo/
-├── mirror/          # Downloaded packages (not for clients)
-├── approved/        # Approved packages (served to clients)
+## 📂 **Directory Structure**
+
+```text
+/var/mirroret/
+├── mirror/          # Raw mirrored packages
+├── approved/        # Client-accessible packages
 ├── staging/         # Testing area
 ├── archive/         # Historical versions
-├── logs/           # All system logs
-├── scripts/        # Management scripts
-└── config/         # Configuration files
+├── logs/            # Sync & system logs
+├── scripts/         # Management scripts
+└── config/          # Config files
 ```
 
-## 🔐 Security Features
+---
 
-### 1. Package Approval Workflow
-```
-Official Repos → Mirror → Manual Review → Approved → Clients
-```
-Nothing reaches clients without your approval.
+## 🔐 **Security Features**
 
-### 2. Security Update Detection
+### 📌 Approval Pipeline
+
+```
+Official Repo → Mirror → Manual Review → Approved → Clients
+```
+
+### ⚠ Detect Security Updates
+
 ```bash
-# Automatically detect security updates
-/var/local-repo/scripts/detect-security-updates.sh
-
-# Check for CVEs
-/var/local-repo/scripts/check-cve.sh package-name
+/var/mirroret/scripts/detect-security-updates.sh
+/var/mirroret/scripts/check-cve.sh package-name
 ```
 
-### 3. Blacklist/Whitelist System
-```bash
-# Whitelist: Only these packages allowed
-echo "nginx curl wget git" > /var/local-repo/config/approved-packages.txt
+### 🧱 Blacklist / Whitelist Control
 
-# Blacklist: Never allow these
-echo "telnet rsh-server" > /var/local-repo/config/blacklist-packages.txt
+```bash
+echo "nginx curl wget git" > /var/mirroret/config/approved-packages.txt
+echo "telnet rsh-server" > /var/mirroret/config/blacklist-packages.txt
 ```
 
-### 4. Testing Before Deployment
+### 🧪 Test in Docker
+
 ```bash
-# Test package in isolated Docker container
-/var/local-repo/scripts/test-package-docker.sh package-name
+/var/mirroret/scripts/test-package-docker.sh package-name
 ```
 
-## 🌐 Network Configuration
+---
 
-### Ports Used
-| Port | Service | Purpose |
-|------|---------|---------|
-| 8080 | Nginx HTTP | Repository access (clients download packages) |
-| 22 | SSH | Server management |
+## 🌐 **Network Configuration**
 
-### Firewall Rules
+| Port | Service | Purpose            |
+| ---- | ------- | ------------------ |
+| 8080 | Nginx   | Client repo access |
+| 22   | SSH     | Server management  |
+
+#### 🔥 Firewall Rules
+
 ```bash
-# Ubuntu/Debian (UFW)
+# Debian/Ubuntu
 sudo ufw allow from 192.168.1.0/24 to any port 8080
 
-# RHEL/CentOS (firewalld)
+# RHEL/CentOS
 sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.1.0/24" port port="8080" protocol="tcp" accept'
 sudo firewall-cmd --reload
 ```
 
-## 💾 Disk Space Requirements
+---
 
-### Debian/Ubuntu
-- **Minimal** (main only): 80 GB
-- **Standard** (main + updates + security): 280 GB
-- **Full** (all components): 500 GB
-
-### RHEL/CentOS
-- **Minimal** (baseos only): 15 GB
-- **Standard** (baseos + appstream): 50 GB
-- **Full** (all repos): 100 GB
-
-### Recommended
-- **Production**: 500 GB - 1 TB
-- **Testing**: 100 GB - 200 GB
-
-## 🔄 Automatic Sync Schedule
-
-By default, the system syncs daily at 2:00 AM:
+## 🔄 **Automatic Sync Schedule**
 
 ```bash
-# View cron schedule
 crontab -l | grep sync-mirror
-
-# Modify sync time (edit crontab)
-crontab -e
-# Change: 0 2 * * * to your preferred time
+crontab -e      # Change sync time
 ```
-
-## 📖 Documentation Files
-
-### Detailed Guides
-1. **NETWORK-ARCHITECTURE.md** - Complete network setup, client configuration, security hardening
-2. **PACKAGE-CONTROL.md** - Advanced approval workflows, security features, rollback procedures  
-3. **DIRECTORY-STRUCTURE.md** - Full directory layout, quick start, troubleshooting
-
-### Generated on Server
-- `/var/local-repo/README.md` - Server-specific documentation with actual IPs and paths
-
-## 🛠️ Typical Workflows
-
-### Workflow 1: Daily Package Approval
-```bash
-# Morning routine (5 minutes)
-1. Check logs: tail -50 /var/local-repo/logs/sync-*.log
-2. Security check: /var/local-repo/scripts/detect-security-updates.sh
-3. Approve updates: /var/local-repo/scripts/approve-packages.sh
-```
-
-### Workflow 2: New Client Setup
-```bash
-# On new client (2 minutes)
-1. Download config: wget http://REPO_IP:8080/config/localrepo.list
-2. Install config: sudo mv localrepo.list /etc/apt/sources.list.d/
-3. Update cache: sudo apt update
-4. Test install: sudo apt install htop
-```
-
-### Workflow 3: Emergency Rollback
-```bash
-# If bad package deployed (5 minutes)
-1. Identify issue: Check client reports
-2. Find old version: ls /var/local-repo/archive/
-3. Rollback: /var/local-repo/scripts/rollback-package.sh nginx 1.18.0
-4. Notify clients: "Update available - run apt/dnf update"
-```
-
-### Workflow 4: Security Update Deployment
-```bash
-# Critical security update (10 minutes)
-1. Detect: /var/local-repo/scripts/detect-security-updates.sh
-2. Review: /var/local-repo/scripts/package-info.sh package-name
-3. Fast-track approve: cp mirror/package.deb approved/
-4. Update metadata: dpkg-scanpackages approved/ | gzip > Packages.gz
-5. Notify clients: Email blast "Critical update available"
-```
-
-## 🎓 Advanced Features
-
-### Rule-Based Auto-Approval
-```bash
-# Configure approval rules
-vim /var/local-repo/config/approval-rules.conf
-
-# Example rules:
-SECURITY:*:security      # Auto-approve security updates
-MANUAL:kernel:*          # Always require manual review for kernel
-DENY:telnet:*            # Never approve telnet
-```
-
-### Version Pinning
-```bash
-# Pin specific versions for clients
-# Client-side: /etc/apt/preferences.d/pins
-Package: nginx
-Pin: version 1.18.0-*
-Pin-Priority: 1001
-```
-
-### Custom Mirrors
-```bash
-# Use faster/closer mirrors
-# Edit /etc/apt/mirror.list
-deb http://us.archive.ubuntu.com/ubuntu jammy main
-```
-
-## 📊 Monitoring & Alerts
-
-### Email Notifications
-```bash
-# Configure for sync completion
-# Add to /var/local-repo/scripts/sync-mirror.sh:
-echo "Sync completed" | mail -s "Repo Sync Complete" admin@example.com
-
-# For security updates
-# Add to cron:
-0 8 * * * /var/local-repo/scripts/detect-security-updates.sh | mail -s "Security Updates" admin@example.com
-```
-
-### Disk Space Alerts
-```bash
-# Add to cron (daily check)
-0 6 * * * [ $(df /var/local-repo | awk 'NR==2 {print $5}' | sed 's/%//') -gt 80 ] && echo "Disk usage over 80%" | mail -s "Disk Alert" admin@example.com
-```
-
-## 🚨 Troubleshooting
-
-### Problem: Sync Fails
-```bash
-# Check logs
-tail -100 /var/local-repo/logs/sync-*.log
-
-# Test mirror connectivity
-wget -O /dev/null http://archive.ubuntu.com/ubuntu/README
-
-# Switch to different mirror
-vim /etc/apt/mirror.list
-```
-
-### Problem: Clients Can't Connect
-```bash
-# On server
-sudo systemctl status nginx
-sudo netstat -tlnp | grep 8080
-sudo ufw status
-
-# On client
-telnet REPO_IP 8080
-curl -v http://REPO_IP:8080/
-```
-
-### Problem: Out of Disk Space
-```bash
-# Clean old logs
-find /var/local-repo/logs -mtime +30 -delete
-
-# Run cleanup script
-/var/local-repo/mirror/var/clean.sh
-
-# Archive old packages
-mv /var/local-repo/archive/* /external/backup/
-```
-
-## 📞 Support & Resources
-
-### Log Locations
-- Installation: `/var/log/local-repo-setup.log`
-- Sync operations: `/var/local-repo/logs/sync-*.log`
-- Nginx access: `/var/log/nginx/local-repo-access.log`
-- Nginx errors: `/var/log/nginx/local-repo-error.log`
-
-### Configuration Files
-- Nginx: `/etc/nginx/sites-available/local-repo`
-- apt-mirror: `/etc/apt/mirror.list`
-- Cron: `crontab -l`
-
-### Web Interface
-Access repository browser: `http://YOUR_SERVER_IP:8080/`
-
-## 📝 Best Practices
-
-1. **Daily**: Check security updates and approve critical patches
-2. **Weekly**: Review approval queue, clean old logs
-3. **Monthly**: Full audit, test rollback procedures, backup configs
-4. **Quarterly**: Review and update approval rules, test disaster recovery
-
-## ⚡ Performance Tips
-
-1. **Use local mirrors** for faster sync
-2. **Increase nginx workers** for more clients
-3. **Use XFS filesystem** for better large-file performance
-4. **Schedule sync during off-hours** (2 AM default)
-5. **Monitor bandwidth** to avoid network saturation
-
-## 🔧 Customization
-
-All scripts are fully customizable:
-- Located in `/var/local-repo/scripts/`
-- Well-commented Python/Bash code
-- Modify sync schedules, approval rules, exclusions
-- Add custom notifications, integrations
-
-## 🎯 Project Goals Achieved
-
-✅ **Full manual control** over package deployment  
-✅ **Multi-distribution** support (Debian, Ubuntu, RHEL, CentOS, Fedora)  
-✅ **Automatic syncing** with manual approval workflow  
-✅ **Security-first** approach with CVE tracking  
-✅ **Easy client setup** with pre-configured files  
-✅ **Complete documentation** for all scenarios  
-✅ **Production-ready** with monitoring and alerts  
-
-## 📜 License & Credits
-
-This is a professional DevOps solution for enterprise package management.
-
-**Author**: Professional Linux DevOps & System Architect  
-**Version**: 1.0.0  
-**Last Updated**: 2024
-
-## 🚀 Next Steps
-
-1. Run the installation script
-2. Perform initial sync
-3. Configure your first client
-4. Set up monitoring and alerts
-5. Document your organization's approval procedures
-6. Train team on daily operations
-
-**Need help?** Check the detailed guides:
-- Network setup → `NETWORK-ARCHITECTURE.md`
-- Package control → `PACKAGE-CONTROL.md`  
-- Directory layout → `DIRECTORY-STRUCTURE.md`
 
 ---
 
-**Ready to take control of your infrastructure? Start with:**
+## 🧰 **Typical Workflows**
+
+### ☀ Daily Approval (5 min)
+
 ```bash
-sudo ./local-repo-server-install.sh
+tail -50 /var/mirroret/logs/sync-*.log
+/var/mirroret/scripts/detect-security-updates.sh
+/var/mirroret/scripts/approve-packages.sh
 ```
+
+### 🆕 New Client Setup
+
+```bash
+wget http://REPO_IP:8080/config/localrepo.list
+sudo mv localrepo.list /etc/apt/sources.list.d/
+sudo apt update && sudo apt install htop
+```
+
+### 🚨 Emergency Rollback
+
+```bash
+/var/mirroret/scripts/rollback-package.sh nginx 1.18.0
+```
+
+---
+
+## 📜 **License & Credits**
+
+**MIRRORET** — A professional DevOps solution for secure enterprise package management.
+
+| Field            | Info                            |
+| ---------------- | ------------------------------- |
+| **Author**       | Mher Saratikyan                 |
+| **Version**      | 1.5.2                           |
+| **Last Updated** | 2025                            |
+| **License**      | MIT                             |
+
+---
+
+## 🙏 Acknowledgments
+
+**⭐ Star this repo if you found it helpful!**
+[![BuyMeACoffee](https://raw.githubusercontent.com/pachadotdev/buymeacoffee-badges/main/bmc-donate-yellow.svg)](https://www.buymeacoffee.com/saratikyan)
+[![Report Bug](https://img.shields.io/badge/Report-Bug-red.svg)](https://github.com/sarat1kyan/mirroret/issues)
+
+> **Note**: Always test management commands in staging before production use.
+
