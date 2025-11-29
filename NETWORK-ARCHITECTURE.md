@@ -3,29 +3,29 @@
 ## Network Topology
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Local Repository Server                      │
+┌────────────────────────────────────────────────────────────────┐
+│                    Local Repository Server                     │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │  Nginx Web Server (Port 8080)                            │  │
 │  │  ├── /mirror/     (Downloaded packages)                  │  │
 │  │  └── /approved/   (Approved packages for clients)        │  │
 │  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
+│                                                                │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │  Automatic Sync Service (Cron)                           │  │
 │  │  ├── Daily sync at 2 AM                                  │  │
 │  │  ├── Package approval workflow                           │  │
 │  │  └── Repository metadata generation                      │  │
 │  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  Directory Structure: /var/local-repo/                          │
-│  ├── mirror/       # Official repo downloads                    │
-│  ├── approved/     # Packages ready for client use              │
-│  ├── staging/      # Temporary area for review                  │
-│  ├── logs/         # Sync and operation logs                    │
-│  ├── scripts/      # Management automation                      │
-│  └── config/       # Client configuration files                 │
-└─────────────────────────────────────────────────────────────────┘
+│                                                                │
+│  Directory Structure: /var/mirroret/                           │
+│  ├── mirror/       # Official repo downloads                   │
+│  ├── approved/     # Packages ready for client use             │
+│  ├── staging/      # Temporary area for review                 │
+│  ├── logs/         # Sync and operation logs                   │
+│  ├── scripts/      # Management automation                     │
+│  └── config/       # Client configuration files                │
+└────────────────────────────────────────────────────────────────┘
                               │
                     HTTP Port 8080
                               │
@@ -107,7 +107,7 @@ sudo apt install htop
 #### Step 6: Lock to Local Repository Only (Optional)
 ```bash
 # Create apt preferences to prevent external repos
-sudo tee /etc/apt/preferences.d/local-repo-only << EOF
+sudo tee /etc/apt/preferences.d/mirroret-only << EOF
 Package: *
 Pin: origin "${REPO_SERVER}"
 Pin-Priority: 1000
@@ -200,7 +200,7 @@ sudo dnf install htop
 ### Automatic Client Configuration Script (Debian/Ubuntu)
 ```bash
 #!/bin/bash
-# save as: configure-local-repo-debian.sh
+# save as: configure-mirroret-debian.sh
 
 REPO_SERVER="192.168.1.100"  # CHANGE THIS
 REPO_PORT="8080"
@@ -230,7 +230,7 @@ echo "Configuration complete!"
 ### Automatic Client Configuration Script (RHEL/CentOS/Fedora)
 ```bash
 #!/bin/bash
-# save as: configure-local-repo-rhel.sh
+# save as: configure-mirroret-rhel.sh
 
 REPO_SERVER="192.168.1.100"  # CHANGE THIS
 REPO_PORT="8080"
@@ -321,7 +321,7 @@ server {
     ssl_certificate /etc/nginx/ssl/localrepo.crt;
     ssl_certificate_key /etc/nginx/ssl/localrepo.key;
     
-    root /var/local-repo;
+    root /var/mirroret;
     autoindex on;
     
     # ... rest of configuration
@@ -336,10 +336,10 @@ server {
 sudo systemctl status nginx
 
 # Check disk usage
-df -h /var/local-repo
+df -h /var/mirroret
 
 # View recent sync logs
-tail -f /var/local-repo/logs/sync-*.log
+tail -f /var/mirroret/logs/sync-*.log
 
 # Check web server access
 curl http://localhost:8080/
@@ -365,7 +365,7 @@ fi
 
 # Test package manager
 if [ -f /etc/debian_version ]; then
-    sudo apt update 2>&1 | grep -q "local-repo" && echo "✓ APT configured correctly"
+    sudo apt update 2>&1 | grep -q "mirroret" && echo "✓ APT configured correctly"
 elif [ -f /etc/redhat-release ]; then
     sudo dnf repolist 2>&1 | grep -q "localrepo" && echo "✓ DNF configured correctly"
 fi
@@ -394,17 +394,17 @@ curl http://<SERVER_IP>:8080/
 #### Issue 2: No Packages Available
 ```bash
 # On server, check if packages exist
-ls -lah /var/local-repo/approved/
+ls -lah /var/mirroret/approved/
 
 # Re-run approval script
-/var/local-repo/scripts/approve-packages.sh --auto-approve
+/var/mirroret/scripts/approve-packages.sh --auto-approve
 
 # Regenerate metadata (Debian)
-cd /var/local-repo/approved/mirror
+cd /var/mirroret/approved/mirror
 dpkg-scanpackages . /dev/null | gzip -9c > Packages.gz
 
 # Regenerate metadata (RHEL)
-createrepo --update /var/local-repo/approved/
+createrepo --update /var/mirroret/approved/
 ```
 
 #### Issue 3: GPG Key Errors (Debian/Ubuntu)
@@ -500,7 +500,7 @@ http {
 set nthreads 20
 
 # For reposync (RHEL)
-reposync --download-metadata --newest-only --delete -p /var/local-repo/mirror
+reposync --download-metadata --newest-only --delete -p /var/mirroret/mirror
 ```
 
 This comprehensive network architecture ensures reliable package management with full control!
