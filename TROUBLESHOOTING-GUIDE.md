@@ -445,7 +445,7 @@ find /srv/localrepo/debian/approved -name "nginx*.deb"
 ls -lh /srv/localrepo/debian/approved/Packages.gz
 
 # On CLIENT - Check sources.list
-cat /etc/apt/sources.list.d/local-repo.list
+cat /etc/apt/sources.list.d/mirroret.list
 ```
 
 **Solutions:**
@@ -474,14 +474,14 @@ dpkg-scanpackages . /dev/null | gzip -9c > Packages.gz
 **C. Wrong Repository URL**
 ```bash
 # On CLIENT - Verify URL in sources.list
-cat /etc/apt/sources.list.d/local-repo.list
+cat /etc/apt/sources.list.d/mirroret.list
 
 # Should match server structure
 # Test URL manually
 curl http://REPO_SERVER:8080/debian/approved/Packages.gz
 
 # Fix if needed
-sudo vim /etc/apt/sources.list.d/local-repo.list
+sudo vim /etc/apt/sources.list.d/mirroret.list
 sudo apt update
 ```
 

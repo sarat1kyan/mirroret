@@ -12,7 +12,7 @@ Official Repos → [MIRROR] → [REVIEW] → [APPROVED] → Clients
 
 ### Stage 1: Mirror (Automatic)
 - Downloads packages from official repositories
-- Location: `/var/local-repo/mirror/`
+- Location: `/var/mirroret/mirror/`
 - Runs automatically via cron (daily at 2 AM)
 - No client access to this directory
 
@@ -24,7 +24,7 @@ Official Repos → [MIRROR] → [REVIEW] → [APPROVED] → Clients
 
 ### Stage 3: Approved (Serve to Clients)
 - Only approved packages available here
-- Location: `/var/local-repo/approved/`
+- Location: `/var/mirroret/approved/`
 - Served via nginx on port 8080
 - Clients can only install from here
 
@@ -36,9 +36,9 @@ Official Repos → [MIRROR] → [REVIEW] → [APPROVED] → Clients
 #!/bin/bash
 # Advanced selective approval script
 
-MIRROR_DIR="/var/local-repo/mirror"
-APPROVED_DIR="/var/local-repo/approved"
-STAGING_DIR="/var/local-repo/staging"
+MIRROR_DIR="/var/mirroret/mirror"
+APPROVED_DIR="/var/mirroret/approved"
+STAGING_DIR="/var/mirroret/staging"
 
 # 1. Find new packages
 echo "=== New Packages Available ==="
@@ -79,8 +79,8 @@ fi
 
 PACKAGE="docker-ce"
 APPROVED_VERSION="24.0.7"
-MIRROR_DIR="/var/local-repo/mirror"
-APPROVED_DIR="/var/local-repo/approved"
+MIRROR_DIR="/var/mirroret/mirror"
+APPROVED_DIR="/var/mirroret/approved"
 
 # Find exact version
 if [ -f /etc/debian_version ]; then
@@ -113,9 +113,9 @@ fi
 #!/bin/bash
 # Approve only packages from whitelist
 
-WHITELIST="/var/local-repo/config/approved-packages.txt"
-MIRROR_DIR="/var/local-repo/mirror"
-APPROVED_DIR="/var/local-repo/approved"
+WHITELIST="/var/mirroret/config/approved-packages.txt"
+MIRROR_DIR="/var/mirroret/mirror"
+APPROVED_DIR="/var/mirroret/approved"
 
 # Create whitelist file
 cat > "$WHITELIST" << EOF
@@ -160,10 +160,10 @@ echo "Whitelist-based approval complete!"
 
 ```bash
 #!/bin/bash
-# /var/local-repo/scripts/manage-blacklist.sh
+# /var/mirroret/scripts/manage-blacklist.sh
 
-BLACKLIST="/var/local-repo/config/blacklist-packages.txt"
-MIRROR_DIR="/var/local-repo/mirror"
+BLACKLIST="/var/mirroret/config/blacklist-packages.txt"
+MIRROR_DIR="/var/mirroret/mirror"
 
 # Initialize blacklist
 cat > "$BLACKLIST" << EOF
@@ -220,7 +220,7 @@ remove_blacklisted
 # Edit /etc/apt/mirror.list
 
 # Add package exclusions
-set base_path    /var/local-repo/mirror
+set base_path    /var/mirroret/mirror
 set mirror_path  $base_path/mirror
 set skel_path    $base_path/skel
 set var_path     $base_path/var
@@ -233,12 +233,12 @@ set postmirror_script $var_path/postmirror.sh
 set run_postmirror 1
 ```
 
-Create `/var/local-repo/mirror/var/postmirror.sh`:
+Create `/var/mirroret/mirror/var/postmirror.sh`:
 ```bash
 #!/bin/bash
 
-BLACKLIST="/var/local-repo/config/blacklist-packages.txt"
-MIRROR_DIR="/var/local-repo/mirror/mirror"
+BLACKLIST="/var/mirroret/config/blacklist-packages.txt"
+MIRROR_DIR="/var/mirroret/mirror/mirror"
 
 # Remove blacklisted packages after sync
 while read -r pattern; do
@@ -257,10 +257,10 @@ echo "Blacklisted packages removed"
 
 ```bash
 #!/bin/bash
-# /var/local-repo/scripts/show-updates.sh
+# /var/mirroret/scripts/show-updates.sh
 
-MIRROR_DIR="/var/local-repo/mirror"
-APPROVED_DIR="/var/local-repo/approved"
+MIRROR_DIR="/var/mirroret/mirror"
+APPROVED_DIR="/var/mirroret/approved"
 
 echo "════════════════════════════════════════════════════════"
 echo "  Available Updates - Package Comparison"
@@ -301,10 +301,10 @@ echo "════════════════════════�
 
 ```bash
 #!/bin/bash
-# /var/local-repo/scripts/package-info.sh
+# /var/mirroret/scripts/package-info.sh
 
 PACKAGE_NAME="$1"
-MIRROR_DIR="/var/local-repo/mirror"
+MIRROR_DIR="/var/mirroret/mirror"
 
 if [ -z "$PACKAGE_NAME" ]; then
     echo "Usage: $0 <package-name>"
@@ -363,10 +363,10 @@ echo "════════════════════════�
 
 ```bash
 #!/bin/bash
-# /var/local-repo/scripts/detect-security-updates.sh
+# /var/mirroret/scripts/detect-security-updates.sh
 
-MIRROR_DIR="/var/local-repo/mirror"
-LOG_FILE="/var/local-repo/logs/security-updates-$(date +%Y%m%d).log"
+MIRROR_DIR="/var/mirroret/mirror"
+LOG_FILE="/var/mirroret/logs/security-updates-$(date +%Y%m%d).log"
 
 echo "Security Update Detection - $(date)" > "$LOG_FILE"
 echo "══════════════════════════════════════════════════════" >> "$LOG_FILE"
@@ -404,7 +404,7 @@ fi
 
 ```bash
 #!/bin/bash
-# /var/local-repo/scripts/check-cve.sh
+# /var/mirroret/scripts/check-cve.sh
 
 PACKAGE_NAME="$1"
 
@@ -442,7 +442,7 @@ echo "  - https://nvd.nist.gov/"
 
 ```bash
 #!/bin/bash
-# /var/local-repo/scripts/test-package-docker.sh
+# /var/mirroret/scripts/test-package-docker.sh
 
 PACKAGE_NAME="$1"
 DISTRO="${2:-ubuntu:22.04}"
@@ -486,11 +486,11 @@ echo "Test complete!"
 
 ```bash
 #!/bin/bash
-# /var/local-repo/scripts/auto-approve-rules.sh
+# /var/mirroret/scripts/auto-approve-rules.sh
 
-RULES_FILE="/var/local-repo/config/approval-rules.conf"
-MIRROR_DIR="/var/local-repo/mirror"
-APPROVED_DIR="/var/local-repo/approved"
+RULES_FILE="/var/mirroret/config/approval-rules.conf"
+MIRROR_DIR="/var/mirroret/mirror"
+APPROVED_DIR="/var/mirroret/approved"
 
 # Create rules configuration
 cat > "$RULES_FILE" << EOF
@@ -547,7 +547,7 @@ process_rules() {
                 if [[ "$pkg_name" == $pattern ]]; then
                     echo "MANUAL REVIEW REQUIRED: $pkg_name"
                     # Add to review queue
-                    echo "$pkg_file" >> /var/local-repo/logs/manual-review-queue.txt
+                    echo "$pkg_file" >> /var/mirroret/logs/manual-review-queue.txt
                     return 1
                 fi
                 ;;
@@ -571,12 +571,12 @@ done
 
 ```bash
 #!/bin/bash
-# /var/local-repo/scripts/rollback-package.sh
+# /var/mirroret/scripts/rollback-package.sh
 
 PACKAGE_NAME="$1"
 VERSION="$2"
-APPROVED_DIR="/var/local-repo/approved"
-ARCHIVE_DIR="/var/local-repo/archive"
+APPROVED_DIR="/var/mirroret/approved"
+ARCHIVE_DIR="/var/mirroret/archive"
 
 if [ -z "$PACKAGE_NAME" ] || [ -z "$VERSION" ]; then
     echo "Usage: $0 <package-name> <version>"

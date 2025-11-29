@@ -2,19 +2,19 @@
 
 ## 🚀 Installation (One Command)
 ```bash
-sudo ./local-repo-server-install.sh
+sudo ./mirroret-server-install.sh
 ```
 
 ## 📍 Important Locations
 
 | Location | Purpose |
 |----------|---------|
-| `/var/local-repo/` | Base directory |
-| `/var/local-repo/mirror/` | Downloaded packages (not for clients) |
-| `/var/local-repo/approved/` | Approved packages (served to clients) |
-| `/var/local-repo/scripts/` | All management scripts |
-| `/var/local-repo/config/` | Client configuration files |
-| `/var/local-repo/logs/` | All system logs |
+| `/var/mirroret/` | Base directory |
+| `/var/mirroret/mirror/` | Downloaded packages (not for clients) |
+| `/var/mirroret/approved/` | Approved packages (served to clients) |
+| `/var/mirroret/scripts/` | All management scripts |
+| `/var/mirroret/config/` | Client configuration files |
+| `/var/mirroret/logs/` | All system logs |
 
 ## 🔧 Essential Commands
 
@@ -30,55 +30,55 @@ sudo systemctl restart nginx
 sudo netstat -tlnp | grep 8080
 
 # Check disk usage
-df -h /var/local-repo
+df -h /var/mirroret
 ```
 
 ### Package Operations
 ```bash
 # Manual sync packages
-/var/local-repo/scripts/sync-mirror.sh
+/var/mirroret/scripts/sync-mirror.sh
 
 # Check available updates
-/var/local-repo/scripts/check-updates.sh
+/var/mirroret/scripts/check-updates.sh
 
 # Show update comparison
-/var/local-repo/scripts/show-updates.sh
+/var/mirroret/scripts/show-updates.sh
 
 # Auto-approve all packages
-/var/local-repo/scripts/approve-packages.sh --auto-approve
+/var/mirroret/scripts/approve-packages.sh --auto-approve
 
 # Manual approval (review first)
-/var/local-repo/scripts/approve-packages.sh
+/var/mirroret/scripts/approve-packages.sh
 
 # List all packages
-/var/local-repo/scripts/list-packages.sh
+/var/mirroret/scripts/list-packages.sh
 
 # Get package details
-/var/local-repo/scripts/package-info.sh <package-name>
+/var/mirroret/scripts/package-info.sh <package-name>
 ```
 
 ### Security Operations
 ```bash
 # Detect security updates
-/var/local-repo/scripts/detect-security-updates.sh
+/var/mirroret/scripts/detect-security-updates.sh
 
 # Check CVEs for package
-/var/local-repo/scripts/check-cve.sh <package-name>
+/var/mirroret/scripts/check-cve.sh <package-name>
 
 # Exclude unwanted package
-/var/local-repo/scripts/exclude-package.sh <package-name>
+/var/mirroret/scripts/exclude-package.sh <package-name>
 ```
 
 ### Maintenance
 ```bash
 # View sync logs
-tail -f /var/local-repo/logs/sync-*.log
+tail -f /var/mirroret/logs/sync-*.log
 
 # View nginx access logs
-tail -f /var/log/nginx/local-repo-access.log
+tail -f /var/log/nginx/mirroret-access.log
 
 # Clean old logs (older than 30 days)
-find /var/local-repo/logs -mtime +30 -delete
+find /var/mirroret/logs -mtime +30 -delete
 
 # Check cron schedule
 crontab -l | grep sync-mirror
@@ -144,31 +144,31 @@ sudo firewall-cmd --reload
 ### Daily Routine (5 min)
 ```bash
 # 1. Check last night's sync
-tail -50 /var/local-repo/logs/sync-$(date +%Y%m%d)*.log
+tail -50 /var/mirroret/logs/sync-$(date +%Y%m%d)*.log
 
 # 2. Security check
-/var/local-repo/scripts/detect-security-updates.sh
+/var/mirroret/scripts/detect-security-updates.sh
 
 # 3. Approve if safe
-/var/local-repo/scripts/approve-packages.sh
+/var/mirroret/scripts/approve-packages.sh
 ```
 
 ### Emergency Rollback
 ```bash
 # Find package in archive
-ls /var/local-repo/archive/
+ls /var/mirroret/archive/
 
 # Rollback to specific version
-/var/local-repo/scripts/rollback-package.sh <package> <version>
+/var/mirroret/scripts/rollback-package.sh <package> <version>
 
 # Example:
-/var/local-repo/scripts/rollback-package.sh nginx 1.18.0
+/var/mirroret/scripts/rollback-package.sh nginx 1.18.0
 ```
 
 ### Add New Client
 ```bash
 # Copy config to client
-scp /var/local-repo/config/localrepo.list user@client:/tmp/
+scp /var/mirroret/config/localrepo.list user@client:/tmp/
 
 # Or download directly on client
 wget http://SERVER_IP:8080/config/localrepo.list
@@ -187,13 +187,13 @@ sudo journalctl -u nginx -f      # View logs
 ### Sync Failed
 ```bash
 # Check logs
-tail -100 /var/local-repo/logs/sync-*.log
+tail -100 /var/mirroret/logs/sync-*.log
 
 # Test connectivity
 wget -O /dev/null http://archive.ubuntu.com/ubuntu/README
 
 # Run manual sync
-/var/local-repo/scripts/sync-mirror.sh
+/var/mirroret/scripts/sync-mirror.sh
 ```
 
 ### Clients Can't Connect
@@ -212,26 +212,26 @@ curl -v http://SERVER_IP:8080/
 ### Out of Space
 ```bash
 # Check usage
-du -sh /var/local-repo/*
+du -sh /var/mirroret/*
 
 # Clean old logs
-find /var/local-repo/logs -mtime +30 -delete
+find /var/mirroret/logs -mtime +30 -delete
 
 # Run cleanup (Debian/Ubuntu)
-/var/local-repo/mirror/var/clean.sh
+/var/mirroret/mirror/var/clean.sh
 
 # Archive old packages
-mv /var/local-repo/archive/* /backup/
+mv /var/mirroret/archive/* /backup/
 ```
 
 ### Packages Not Updating
 ```bash
 # Debian/Ubuntu - regenerate metadata
-cd /var/local-repo/approved/mirror
+cd /var/mirroret/approved/mirror
 dpkg-scanpackages . /dev/null | gzip -9c > Packages.gz
 
 # RHEL/CentOS - regenerate metadata
-createrepo --update /var/local-repo/approved/centos/9/baseos
+createrepo --update /var/mirroret/approved/centos/9/baseos
 
 # Restart nginx
 sudo systemctl restart nginx
@@ -241,12 +241,12 @@ sudo systemctl restart nginx
 
 | File | Purpose |
 |------|---------|
-| `/etc/nginx/sites-available/local-repo` | Nginx config (Debian/Ubuntu) |
-| `/etc/nginx/conf.d/local-repo.conf` | Nginx config (RHEL/CentOS) |
+| `/etc/nginx/sites-available/mirroret` | Nginx config (Debian/Ubuntu) |
+| `/etc/nginx/conf.d/mirroret.conf` | Nginx config (RHEL/CentOS) |
 | `/etc/apt/mirror.list` | apt-mirror config (Debian/Ubuntu) |
-| `/var/local-repo/config/blacklist-packages.txt` | Package blacklist |
-| `/var/local-repo/config/approved-packages.txt` | Package whitelist |
-| `/var/local-repo/config/approval-rules.conf` | Auto-approval rules |
+| `/var/mirroret/config/blacklist-packages.txt` | Package blacklist |
+| `/var/mirroret/config/approved-packages.txt` | Package whitelist |
+| `/var/mirroret/config/approval-rules.conf` | Auto-approval rules |
 
 ## ⚡ Performance Tuning
 
@@ -308,7 +308,7 @@ deny all;
 crontab -l
 
 # Default schedule:
-# 0 2 * * * /var/local-repo/scripts/sync-mirror.sh
+# 0 2 * * * /var/mirroret/scripts/sync-mirror.sh
 # (Daily at 2:00 AM)
 ```
 
@@ -322,32 +322,32 @@ crontab -e
 
 | Item | Value |
 |------|-------|
-| Installation Log | `/var/log/local-repo-setup.log` |
-| Sync Logs | `/var/local-repo/logs/sync-*.log` |
-| Nginx Access | `/var/log/nginx/local-repo-access.log` |
-| Nginx Errors | `/var/log/nginx/local-repo-error.log` |
-| Documentation | `/var/local-repo/README.md` |
+| Installation Log | `/var/log/mirroret-setup.log` |
+| Sync Logs | `/var/mirroret/logs/sync-*.log` |
+| Nginx Access | `/var/log/nginx/mirroret-access.log` |
+| Nginx Errors | `/var/log/nginx/mirroret-error.log` |
+| Documentation | `/var/mirroret/README.md` |
 
 ## 🎯 One-Liners for Common Tasks
 
 ```bash
 # Quick status check
-echo "Nginx: $(systemctl is-active nginx) | Disk: $(df -h /var/local-repo | awk 'NR==2 {print $5}') | Last sync: $(ls -lt /var/local-repo/logs/sync-*.log | head -1 | awk '{print $6,$7,$8}')"
+echo "Nginx: $(systemctl is-active nginx) | Disk: $(df -h /var/mirroret | awk 'NR==2 {print $5}') | Last sync: $(ls -lt /var/mirroret/logs/sync-*.log | head -1 | awk '{print $6,$7,$8}')"
 
 # Count packages
-echo "Mirror: $(find /var/local-repo/mirror -name '*.deb' -o -name '*.rpm' 2>/dev/null | wc -l) | Approved: $(find /var/local-repo/approved -name '*.deb' -o -name '*.rpm' 2>/dev/null | wc -l)"
+echo "Mirror: $(find /var/mirroret/mirror -name '*.deb' -o -name '*.rpm' 2>/dev/null | wc -l) | Approved: $(find /var/mirroret/approved -name '*.deb' -o -name '*.rpm' 2>/dev/null | wc -l)"
 
 # Recent client IPs
-tail -1000 /var/log/nginx/local-repo-access.log | awk '{print $1}' | sort -u
+tail -1000 /var/log/nginx/mirroret-access.log | awk '{print $1}' | sort -u
 
 # Top accessed packages
-tail -1000 /var/log/nginx/local-repo-access.log | grep -oP '/[^/]+\.(deb|rpm)' | sort | uniq -c | sort -rn | head -10
+tail -1000 /var/log/nginx/mirroret-access.log | grep -oP '/[^/]+\.(deb|rpm)' | sort | uniq -c | sort -rn | head -10
 ```
 
 ## 🆘 Getting Help
 
-1. Check logs first: `tail -f /var/local-repo/logs/*.log`
-2. Review documentation: `cat /var/local-repo/README.md`
+1. Check logs first: `tail -f /var/mirroret/logs/*.log`
+2. Review documentation: `cat /var/mirroret/README.md`
 3. Test connectivity: `curl http://localhost:8080/`
 4. Check processes: `ps aux | grep nginx`
 

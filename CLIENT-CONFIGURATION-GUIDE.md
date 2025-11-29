@@ -45,7 +45,7 @@ sudo mv /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/backup/ 2>/dev/nu
 sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
 
 # Add local repository
-sudo tee /etc/apt/sources.list.d/local-repo.list << EOF
+sudo tee /etc/apt/sources.list.d/mirroret.list << EOF
 # Unified Local Repository
 deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy main restricted universe multiverse
 deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy-updates main restricted universe multiverse
@@ -67,7 +67,7 @@ sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
 
 # 2. Download repository configuration
 wget http://REPO_SERVER:8080/config/debian-client.list
-sudo mv debian-client.list /etc/apt/sources.list.d/local-repo.list
+sudo mv debian-client.list /etc/apt/sources.list.d/mirroret.list
 
 # 3. Disable official repos (optional but recommended)
 sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
@@ -83,7 +83,7 @@ apt-cache policy
 ```bash
 # If you need to revert
 sudo mv /etc/apt/sources.list.backup /etc/apt/sources.list
-sudo rm /etc/apt/sources.list.d/local-repo.list
+sudo rm /etc/apt/sources.list.d/mirroret.list
 sudo apt update
 ```
 
@@ -109,7 +109,7 @@ sudo cp /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
 sudo mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
 
 # Add local repository
-sudo tee /etc/yum.repos.d/local-repo.repo << EOF
+sudo tee /etc/yum.repos.d/mirroret.repo << EOF
 # Unified Local Repository
 
 [localrepo-baseos]
@@ -157,7 +157,7 @@ sudo cp /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/
 
 # 2. Download repository configuration
 wget http://REPO_SERVER:8080/config/redhat-client.repo
-sudo mv redhat-client.repo /etc/yum.repos.d/local-repo.repo
+sudo mv redhat-client.repo /etc/yum.repos.d/mirroret.repo
 
 # 3. Disable official repos
 sudo mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/backup/disabled/
@@ -173,7 +173,7 @@ sudo dnf repolist
 ```bash
 # If you need to revert
 sudo mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/
-sudo rm /etc/yum.repos.d/local-repo.repo
+sudo rm /etc/yum.repos.d/mirroret.repo
 sudo dnf clean all && sudo dnf makecache
 ```
 
@@ -440,7 +440,7 @@ if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
     echo -e "${BLUE}[1/5] Configuring APT...${NC}"
     sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup 2>/dev/null || true
     sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
-    sudo tee /etc/apt/sources.list.d/local-repo.list << EOF
+    sudo tee /etc/apt/sources.list.d/mirroret.list << EOF
 deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy main restricted universe multiverse
 deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy-updates main restricted universe multiverse
 deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy-security main restricted universe multiverse
@@ -454,7 +454,7 @@ if [[ "$OS" == "centos" || "$OS" == "rhel" || "$OS" == "fedora" || "$OS" == "roc
     echo -e "${BLUE}[1/5] Configuring YUM/DNF...${NC}"
     sudo mkdir -p /etc/yum.repos.d/backup
     sudo mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
-    sudo tee /etc/yum.repos.d/local-repo.repo << EOF
+    sudo tee /etc/yum.repos.d/mirroret.repo << EOF
 [localrepo-baseos]
 name=Local Repository - BaseOS
 baseurl=http://${REPO_SERVER}:${WEB_PORT}/redhat/approved/rocky/9/baseos
@@ -600,14 +600,14 @@ npm view express
 ### APT (Debian/Ubuntu)
 ```bash
 sudo mv /etc/apt/sources.list.backup /etc/apt/sources.list
-sudo rm /etc/apt/sources.list.d/local-repo.list
+sudo rm /etc/apt/sources.list.d/mirroret.list
 sudo apt update
 ```
 
 ### YUM/DNF (RHEL/CentOS)
 ```bash
 sudo mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/
-sudo rm /etc/yum.repos.d/local-repo.repo
+sudo rm /etc/yum.repos.d/mirroret.repo
 sudo dnf clean all && sudo dnf makecache
 ```
 

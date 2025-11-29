@@ -26,14 +26,14 @@
 ## Installation Phase
 
 ### Step 1: Download Installation Script
-- [ ] Script downloaded: `local-repo-server-install.sh`
-- [ ] Script permissions set: `chmod +x local-repo-server-install.sh`
-- [ ] Script integrity verified (optional): `sha256sum local-repo-server-install.sh`
+- [ ] Script downloaded: `mirroret-server-install.sh`
+- [ ] Script permissions set: `chmod +x mirroret-server-install.sh`
+- [ ] Script integrity verified (optional): `sha256sum mirroret-server-install.sh`
 
 ### Step 2: Run Installation
-- [ ] Installation started: `sudo ./local-repo-server-install.sh`
+- [ ] Installation started: `sudo ./mirroret-server-install.sh`
 - [ ] Installation completed without errors
-- [ ] Installation log reviewed: `/var/log/local-repo-setup.log`
+- [ ] Installation log reviewed: `/var/log/mirroret-setup.log`
 - [ ] All directories created successfully
 - [ ] Nginx installed and running
 - [ ] Cron job configured
@@ -41,8 +41,8 @@
 ### Step 3: Verify Installation
 - [ ] Nginx status: `systemctl status nginx` → active (running)
 - [ ] Port 8080 listening: `netstat -tlnp | grep 8080`
-- [ ] Directory structure exists: `ls -la /var/local-repo/`
-- [ ] Scripts executable: `ls -lah /var/local-repo/scripts/`
+- [ ] Directory structure exists: `ls -la /var/mirroret/`
+- [ ] Scripts executable: `ls -lah /var/mirroret/scripts/`
 - [ ] Web interface accessible: `curl http://localhost:8080/`
 
 ## Initial Configuration
@@ -71,20 +71,20 @@
 ## First Sync
 
 ### Step 7: Initial Repository Sync
-- [ ] Sync started: `/var/local-repo/scripts/sync-mirror.sh`
-- [ ] Sync progress monitored: `tail -f /var/local-repo/logs/sync-*.log`
-- [ ] Disk space monitored during sync: `watch df -h /var/local-repo`
+- [ ] Sync started: `/var/mirroret/scripts/sync-mirror.sh`
+- [ ] Sync progress monitored: `tail -f /var/mirroret/logs/sync-*.log`
+- [ ] Disk space monitored during sync: `watch df -h /var/mirroret`
 - [ ] Sync completed successfully
 - [ ] Sync duration recorded: ________ hours
 - [ ] Final disk usage: ________ GB
 
 ### Step 8: Package Approval
-- [ ] New packages reviewed: `/var/local-repo/scripts/show-updates.sh`
+- [ ] New packages reviewed: `/var/mirroret/scripts/show-updates.sh`
 - [ ] Approval method decided:
   - [ ] Auto-approve all (initial setup)
   - [ ] Manual selective approval
   - [ ] Whitelist-based approval
-- [ ] Packages approved: `/var/local-repo/scripts/approve-packages.sh`
+- [ ] Packages approved: `/var/mirroret/scripts/approve-packages.sh`
 - [ ] Repository metadata generated
 - [ ] Approved packages count: ________
 
@@ -270,7 +270,7 @@
 #### Issue: Installation Script Fails
 **Symptoms**: Script exits with error  
 **Solution**:
-- [ ] Check `/var/log/local-repo-setup.log`
+- [ ] Check `/var/log/mirroret-setup.log`
 - [ ] Verify internet connectivity
 - [ ] Ensure sufficient disk space
 - [ ] Check for conflicting services on port 8080
@@ -282,7 +282,7 @@
 - [ ] Run `nginx -t` to test configuration
 - [ ] Check port 8080 not in use: `netstat -tlnp | grep 8080`
 - [ ] Review nginx error log: `/var/log/nginx/error.log`
-- [ ] Verify file permissions on /var/local-repo
+- [ ] Verify file permissions on /var/mirroret
 
 #### Issue: Sync Takes Too Long
 **Symptoms**: Initial sync exceeds 12 hours  
