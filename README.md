@@ -1,284 +1,196 @@
+# mirroret
+
+Local package repository server for Linux environments. Mirrors APT, RPM, pip, Docker, and npm packages so air-gapped or bandwidth-constrained machines can install packages from a local server.
+
+**Status: functional, suitable for lab use after review. Production deployments require GPG signing configuration. See [docs/SECURITY.md](docs/SECURITY.md).**
 
 ---
 
-# 🪞 **MIRRORET**
+## Quick start
 
-### *Enterprise-Grade Local Repository & Package Control System*
+### Requirements
 
-> **Take full control over every package in your infrastructure.**
-> MIRRORET gives you a **secure, auditable, and centralized package repository** for all major Linux distributions.
+- Linux (Ubuntu 20.04+, Debian 11+, RHEL/CentOS/Rocky 8+)
+- Root access
+- Sufficient disk space (50 GB minimum, 200–500 GB recommended for full APT mirror)
 
----
-
-## 🚀 **Overview**
-
-**MIRRORET** is a **production-ready Local Repository Server** that gives you **100% manual control** over package deployments across your Linux infrastructure.
-
-✔ Supports **Debian / Ubuntu / RHEL / CentOS / Fedora**
-
-✔ Prevents unauthorized package installations
-
-✔ Fully auditable **approval workflow**
-
-✔ Designed for **security, compliance & forensics**
-
-✔ Built for **enterprise-grade DevOps** and **air-gapped environments**
-
----
-
-## 🔥 **Key Features**
-
-| Feature                          | Description                             |
-| -------------------------------- | --------------------------------------- |
-| 🔐 **Total Manual Control**      | Approve every package before deployment |
-| 🌍 **Multi-Distro Support**      | Debian, Ubuntu, RHEL, CentOS, Fedora    |
-| 🛡 **Security-First Design**     | CVE checks, audits, rollback support    |
-| 🔄 **Automated Syncing**         | Daily sync from official repositories   |
-| 🌐 **Web Interface (Port 8080)** | Nginx-based package access              |
-| 📦 **Approval Workflow**         | Mirror → Review → Approve → Deploy      |
-| 📛 **Blacklist/Whitelist**       | Block or restrict unwanted packages     |
-| ↩ **Rollback Support**           | Restore previous versions instantly     |
-| 🧪 **Testing Environment**       | Isolated testing before approval        |
-
----
-
-## 📁 **Included Files**
-
-| File                           | Purpose                                   |
-| ------------------------------ | ----------------------------------------- |
-| `mirroret.sh` | Main installation script (run first)      |
-| `NETWORK-ARCHITECTURE.md`      | Ports, topology & client setup            |
-| `PACKAGE-CONTROL.md`           | Security, approvals & rollback procedures |
-| `DIRECTORY-STRUCTURE.md`       | Repo layout & quick setup                 |
-| `README.md`                    | Overview and documentation (this file)    |
-
----
-
-## ⚡ **Quick Start – 5 Steps**
-
-### 1️⃣ Install MIRRORET Server
+### Installation
 
 ```bash
 git clone https://github.com/sarat1kyan/mirroret.git
-chmod +x mirroret.sh
-sudo ./mirroret.sh   # Run as root
+cd mirroret
+
+# Standard install (secure defaults — requires GPG setup before clients work):
+sudo ./install.sh
+
+# Lab / air-gapped install (insecure mode — no GPG, no TLS):
+sudo ./install.sh --insecure
+
+# Preview what will happen without making changes:
+sudo ./install.sh --dry-run
+
+# Install only APT mirror, restrict to specific subnet:
+sudo MIRRORET_FIREWALL_SOURCE=10.0.0.0/8 ./install.sh --no-pip --no-docker --no-npm
 ```
 
-### 2️⃣ First Sync (2–8 hours)
+### After installation
 
 ```bash
-sudo /var/mirroret/scripts/sync-mirror.sh
-tail -f /var/mirroret/logs/sync-*.log
-```
+# 1. Run initial sync (takes minutes to hours depending on what you mirror):
+sudo /srv/mirroret/scripts/sync-all.sh
 
-### 3️⃣ Approve Packages
+# 2. Validate the installation:
+sudo ./install.sh --check
 
-```bash
-sudo /var/mirroret/scripts/approve-packages.sh --auto-approve
-# OR
-sudo /var/mirroret/scripts/show-updates.sh
-```
-
-### 4️⃣ Configure Clients
-
-**Ubuntu/Debian**
-
-```bash
-REPO_SERVER="192.168.1.100"
-wget http://${REPO_SERVER}:8080/config/localrepo.list
-sudo mv localrepo.list /etc/apt/sources.list.d/
-sudo apt update
-```
-
-**RHEL/CentOS/Fedora**
-
-```bash
-REPO_SERVER="192.168.1.100"
-wget http://${REPO_SERVER}:8080/config/localrepo.repo
-sudo mv localrepo.repo /etc/yum.repos.d/
-sudo dnf clean all && sudo dnf makecache
-```
-
-### 5️⃣ Test Access
-
-```bash
-sudo apt install htop    # Debian/Ubuntu
-sudo dnf install htop    # RHEL/CentOS
+# 3. Distribute client configs:
+ls /srv/mirroret/config/
 ```
 
 ---
 
-## 🧠 **System Architecture**
+## Supported package types
 
-```text
-                      MIRRORET SERVER
+| Type | Service | Port | Client config |
+|------|---------|------|---------------|
+| APT (Debian/Ubuntu) | nginx | 8080 | `config/debian-client.list` |
+| RPM (RHEL/CentOS/Rocky) | nginx | 8080 | `config/redhat-client.repo` |
+| pip (Python) | pypiserver | 8081 | `config/pip.conf` |
+| Docker images | registry:2 | 5000 | `config/docker-daemon.json` |
+| npm | Verdaccio | 4873 | `config/.npmrc` |
 
-┌─────────────────────────────────────────────────────────┐
-│  Nginx Web Server (Port 8080)                           │
-│  ├─ /mirror/     - Downloaded from official repos       │
-│  └─ /approved/   - Approved packages for clients        │
-└─────────────────────────────────────────────────────────┘
-                          │
-                    HTTP (Port 8080)
-                          │
-        ┌─────────────────┼─────────────────┐
-        │                 │                 │
-    ┌────────┐        ┌────────┐        ┌────────┐
-    │ Ubuntu │        │ CentOS │        │ Debian │
-    └────────┘        └────────┘        └────────┘
+All ports are configurable. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+
+---
+
+## Supported distributions
+
+**Server:** Ubuntu 20.04/22.04/24.04, Debian 11/12, RHEL/CentOS/Rocky/AlmaLinux 8/9
+
+**Clients:** Any Linux distribution that uses APT, yum/dnf, pip, Docker, or npm.
+
+---
+
+## Configuration
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for full variable reference.
+
+```bash
+# Copy the example config:
+sudo mkdir -p /etc/mirroret
+sudo cp config/mirroret.conf.example /etc/mirroret/mirroret.conf
+sudo ./install.sh --config /etc/mirroret/mirroret.conf
+```
+
+Key settings:
+
+```bash
+MIRRORET_SERVER_IP=192.168.1.10       # IP for client configs
+MIRRORET_FIREWALL_SOURCE=10.0.0.0/8  # Restrict access by subnet
+MIRRORET_APT_KEYRING=/etc/apt/keyrings/mirroret.gpg  # GPG keyring
 ```
 
 ---
 
-## 🛠 **Management Commands**
+## Security
 
-### 🗓 Daily Operations
+**Default behaviour (secure):** Client configs are generated with GPG verification enabled. APT clients will not work until you configure a GPG keyring. RPM clients will not work until you set `MIRRORET_RPM_GPGKEY_URL`.
 
-```bash
-/var/mirroret/scripts/check-updates.sh
-/var/mirroret/scripts/approve-packages.sh
-/var/mirroret/scripts/list-packages.sh
-/var/mirroret/scripts/sync-mirror.sh
-```
+**Lab/insecure mode:** Use `--insecure` to disable GPG and TLS checks. A loud warning is printed. Only use this in isolated environments.
 
-### 🔍 Package Control
+See [docs/SECURITY.md](docs/SECURITY.md) for:
+- GPG signing setup for APT and RPM
+- TLS configuration for Docker and pip
+- nginx authentication
+- Firewall scoping
 
-```bash
-/var/mirroret/scripts/package-info.sh nginx
-/var/mirroret/scripts/exclude-package.sh telnet
-/var/mirroret/scripts/detect-security-updates.sh
-/var/mirroret/scripts/rollback-package.sh nginx 1.18.0
-```
+---
 
-### 📊 Monitoring
+## Commands
 
 ```bash
-sudo systemctl status nginx
-tail -f /var/mirroret/logs/sync-*.log
-df -h /var/mirroret
-tail -f /var/log/nginx/mirroret-access.log
+# Installation and modes:
+sudo ./install.sh                    # full install
+sudo ./install.sh --dry-run          # preview changes
+sudo ./install.sh --check            # validate installation
+sudo ./install.sh --status           # service status
+sudo ./install.sh --backup-only      # backup current state
+
+# Rollback:
+sudo ./install.sh --list-backups
+sudo ./install.sh --rollback <backup-id>
+
+# Development:
+make lint                            # shellcheck all scripts
+make test                            # run bats tests
+make format                          # auto-format with shfmt
+make check-deps                      # check tool availability
 ```
 
 ---
 
-## 📂 **Directory Structure**
+## Documentation
 
-```text
-/var/mirroret/
-├── mirror/          # Raw mirrored packages
-├── approved/        # Client-accessible packages
-├── staging/         # Testing area
-├── archive/         # Historical versions
-├── logs/            # Sync & system logs
-├── scripts/         # Management scripts
-└── config/          # Config files
+| Document | Contents |
+|----------|---------|
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | All config variables |
+| [docs/SECURITY.md](docs/SECURITY.md) | GPG signing, TLS, auth, privilege |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Daily operations, sync, disk management |
+| [docs/ROLLBACK.md](docs/ROLLBACK.md) | Backup and rollback procedures |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Diagnostic steps for common failures |
+| [docs/DEEP_REVIEW.md](docs/DEEP_REVIEW.md) | Technical security review |
+| [docs/IMPLEMENTATION_REPORT.md](docs/IMPLEMENTATION_REPORT.md) | What was changed and why |
+
+---
+
+## Structure
+
+```
+mirroret/
+├── install.sh                  Main entry point
+├── mirroret.sh                 Original basic installer (APT/RPM only)
+├── mirroret-unified.sh         Original unified installer (all types)
+├── config/
+│   └── mirroret.conf.example   Config file template
+├── lib/
+│   ├── logging.sh              Logging functions
+│   ├── common.sh               DRY_RUN, run(), helpers
+│   ├── distro.sh               Distribution detection
+│   ├── preflight.sh            Pre-install checks
+│   ├── backup.sh               Backup and rollback
+│   ├── nginx.sh                nginx config management
+│   ├── systemd.sh              systemd unit management
+│   ├── firewall.sh             Firewall rule management
+│   ├── apt.sh                  APT mirror configuration
+│   ├── rpm.sh                  RPM mirror configuration
+│   ├── docker_registry.sh      Docker registry setup
+│   ├── pip.sh                  pypiserver setup
+│   ├── npm.sh                  Verdaccio setup
+│   └── validation.sh           Status and validation checks
+├── tests/
+│   ├── test_distro.bats        Distro detection tests
+│   ├── test_config.bats        Config and backup tests
+│   ├── test_security.bats      Security defaults tests
+│   ├── test_dryrun.bats        Dry-run behaviour tests
+│   └── test_helpers.bash       BATS helper functions
+├── docs/
+│   ├── DEEP_REVIEW.md          Technical security review
+│   ├── SECURITY.md             Security configuration guide
+│   ├── CONFIGURATION.md        Config variable reference
+│   ├── OPERATIONS.md           Daily operations guide
+│   ├── ROLLBACK.md             Backup and rollback guide
+│   ├── TROUBLESHOOTING.md      Troubleshooting guide
+│   └── IMPLEMENTATION_REPORT.md Change summary
+└── Makefile                    lint/test/format targets
 ```
 
 ---
 
-## 🔐 **Security Features**
+## Known limitations
 
-### 📌 Approval Pipeline
+- No built-in TLS termination (use a reverse proxy for production)
+- Docker registry does not include TLS by default (configure TLS before production use)
+- Full APT mirror requires 200–500 GB and several hours on first sync
+- The original `mirroret.sh` and `mirroret-unified.sh` are preserved as-is for reference
+- SELinux context changes are best-effort on RHEL-based systems
 
-```
-Official Repo → Mirror → Manual Review → Approved → Clients
-```
-
-### ⚠ Detect Security Updates
-
-```bash
-/var/mirroret/scripts/detect-security-updates.sh
-/var/mirroret/scripts/check-cve.sh package-name
-```
-
-### 🧱 Blacklist / Whitelist Control
-
-```bash
-echo "nginx curl wget git" > /var/mirroret/config/approved-packages.txt
-echo "telnet rsh-server" > /var/mirroret/config/blacklist-packages.txt
-```
-
-### 🧪 Test in Docker
-
-```bash
-/var/mirroret/scripts/test-package-docker.sh package-name
-```
-
----
-
-## 🌐 **Network Configuration**
-
-| Port | Service | Purpose            |
-| ---- | ------- | ------------------ |
-| 8080 | Nginx   | Client repo access |
-| 22   | SSH     | Server management  |
-
-#### 🔥 Firewall Rules
-
-```bash
-# Debian/Ubuntu
-sudo ufw allow from 192.168.1.0/24 to any port 8080
-
-# RHEL/CentOS
-sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.1.0/24" port port="8080" protocol="tcp" accept'
-sudo firewall-cmd --reload
-```
-
----
-
-## 🔄 **Automatic Sync Schedule**
-
-```bash
-crontab -l | grep sync-mirror
-crontab -e      # Change sync time
-```
-
----
-
-## 🧰 **Typical Workflows**
-
-### ☀ Daily Approval (5 min)
-
-```bash
-tail -50 /var/mirroret/logs/sync-*.log
-/var/mirroret/scripts/detect-security-updates.sh
-/var/mirroret/scripts/approve-packages.sh
-```
-
-### 🆕 New Client Setup
-
-```bash
-wget http://REPO_IP:8080/config/localrepo.list
-sudo mv localrepo.list /etc/apt/sources.list.d/
-sudo apt update && sudo apt install htop
-```
-
-### 🚨 Emergency Rollback
-
-```bash
-/var/mirroret/scripts/rollback-package.sh nginx 1.18.0
-```
-
----
-
-## 📜 **License & Credits**
-
-**MIRRORET** — A professional DevOps solution for secure enterprise package management.
-
-| Field            | Info                            |
-| ---------------- | ------------------------------- |
-| **Author**       | Mher Saratikyan                 |
-| **Version**      | 1.5.2                           |
-| **Last Updated** | 2025                            |
-| **License**      | MIT                             |
-
----
-
-## 🙏 Acknowledgments
-
-**⭐ Star this repo if you found it helpful!**
-[![BuyMeACoffee](https://raw.githubusercontent.com/pachadotdev/buymeacoffee-badges/main/bmc-donate-yellow.svg)](https://www.buymeacoffee.com/saratikyan)
-[![Report Bug](https://img.shields.io/badge/Report-Bug-red.svg)](https://github.com/sarat1kyan/mirroret/issues)
-
-> **Note**: Always test management commands in staging before production use.
-
+See [docs/DEEP_REVIEW.md](docs/DEEP_REVIEW.md) for the full list of known issues.
