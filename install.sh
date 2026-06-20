@@ -142,7 +142,7 @@ parse_args() {
                 warn_insecure "Use only in isolated lab/air-gapped environments."
                 ;;
             --debug)
-                LOG_LEVEL=DEBUG
+                export LOG_LEVEL=DEBUG
                 ;;
             --help|-h)
                 usage
@@ -266,11 +266,30 @@ install_system_packages() {
 
     if [[ "${DISTRO_TYPE}" == "debian" ]]; then
         xrun apt-get update -qq
-        xrun ${PKG_MGR_INSTALL} \
-            apt-mirror dpkg-dev nginx gnupg wget curl rsync cron
+        # python3-venv is a separate package on Debian/Ubuntu; required for the
+        # pypiserver virtualenv fallback when python3-pypiserver is not in repos.
+        local debian_pkgs=(dpkg-dev nginx gnupg wget curl rsync cron python3-venv python3-pip)
+        # apt-mirror was removed from Debian 12 (bookworm). Try to install it;
+        # warn and continue if unavailable (debmirror is the manual alternative).
+        if [[ "${MIRRORET_ENABLE_APT}" == "1" ]]; then
+            if apt-cache show apt-mirror &>/dev/null 2>&1; then
+                debian_pkgs+=(apt-mirror)
+            else
+                warn "apt-mirror is not available in this distro's repos (Debian 12+)."
+                warn "APT mirror will not be configured automatically."
+                warn "Alternatives: install apt-mirror2 manually, or use debmirror."
+                warn "See: https://github.com/apt-mirror/apt-mirror"
+                MIRRORET_ENABLE_APT=0
+            fi
+        fi
+        # nodejs and npm are required for the Verdaccio npm registry.
+        [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && debian_pkgs+=(nodejs npm)
+        xrun ${PKG_MGR_INSTALL} "${debian_pkgs[@]}"
     else
-        xrun ${PKG_MGR_INSTALL} \
-            createrepo_c yum-utils nginx wget curl rsync cronie
+        local rhel_pkgs=(createrepo_c yum-utils nginx wget curl rsync cronie python3 python3-pip)
+        # nodejs and npm for Verdaccio; available in AppStream on RHEL 8/9.
+        [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && rhel_pkgs+=(nodejs npm)
+        xrun ${PKG_MGR_INSTALL} "${rhel_pkgs[@]}"
         xrun systemctl enable --now crond || xrun systemctl enable --now cron || true
     fi
 

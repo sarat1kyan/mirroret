@@ -109,7 +109,11 @@ _write_pip_sync_script() {
 
     mkdir -p "${base_dir}/scripts"
 
-    cat > "$sync_script" <<'SYNC_EOF'
+    # Write with literal placeholders, then substitute using bash expansion
+    # (safe for any path — avoids sed delimiter collision).
+    local tmp
+    tmp="$(mktemp_file)"
+    cat > "$tmp" <<'SYNC_EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
@@ -117,8 +121,8 @@ set -Eeuo pipefail
 # Downloads packages from PyPI into the approved directory for pypiserver to serve.
 # Edit PACKAGES to control what is mirrored.
 
-APPROVED_DIR="BASE_DIR/pip/approved"
-LOG_DIR="BASE_DIR/logs"
+APPROVED_DIR="__BASE_DIR__/pip/approved"
+LOG_DIR="__BASE_DIR__/logs"
 LOG_FILE="${LOG_DIR}/sync-pip-$(date +%Y%m%d-%H%M%S).log"
 mkdir -p "$LOG_DIR" "$APPROVED_DIR"
 
@@ -142,7 +146,8 @@ PACKAGES=(
 failed=0
 for package in "${PACKAGES[@]}"; do
     echo "Downloading ${package}..." | tee -a "$LOG_FILE"
-    if pip download "$package" -d "$APPROVED_DIR" 2>&1 | tee -a "$LOG_FILE"; then
+    # Use pip3 explicitly to avoid ambiguity on systems with Python 2.
+    if pip3 download "$package" -d "$APPROVED_DIR" 2>&1 | tee -a "$LOG_FILE"; then
         echo "  OK: ${package}" | tee -a "$LOG_FILE"
     else
         echo "  FAILED: ${package}" | tee -a "$LOG_FILE"
@@ -154,7 +159,11 @@ echo "pip sync completed: $(date) (${failed} failures)" | tee -a "$LOG_FILE"
 exit "${failed}"
 SYNC_EOF
 
-    sed -i "s|BASE_DIR|${base_dir}|g" "$sync_script"
+    local content
+    content="$(cat "$tmp")"
+    content="${content//__BASE_DIR__/${base_dir}}"
+    printf '%s\n' "$content" > "$sync_script"
+    rm -f "$tmp"
     chmod +x "$sync_script"
     success "pip sync script written: ${sync_script}"
 }
@@ -182,11 +191,15 @@ trusted-host = ${server_ip}
 PIP_EOF
 
     else
+        # pypiserver serves plain HTTP by default. Use http:// unless TLS is
+        # explicitly configured on the server via a reverse proxy.
+        # Set MIRRORET_PIP_INSECURE=1 to suppress this note in lab mode.
         cat > "$output_file" <<PIP_EOF
 [global]
-index-url = https://${server_ip}:${pip_port}/simple/
+index-url = http://${server_ip}:${pip_port}/simple/
 PIP_EOF
-        info "pip client config: TLS mode. Configure a certificate on the server first."
+        info "pip client config written (http). For TLS, front pypiserver with an nginx TLS proxy."
+        info "See docs/SECURITY.md for TLS setup."
     fi
 
     success "pip client config written: ${output_file}"

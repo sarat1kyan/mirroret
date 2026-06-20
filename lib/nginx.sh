@@ -47,13 +47,17 @@ configure_nginx_unified() {
     _write_nginx_config "$backup_id" "$base_dir" "$web_port" \
         "$(cat <<NGINX_EOF
 
-    location /debian {
-        alias ${base_dir}/debian/approved;
+    # APT mirror — apt-mirror writes to mirror/mirror/archive.ubuntu.com/ubuntu/
+    # Clients use: deb http://server:PORT/ubuntu codename main
+    location /ubuntu {
+        alias ${base_dir}/debian/mirror/mirror/archive.ubuntu.com/ubuntu;
         autoindex on;
     }
 
+    # RPM mirror — reposync writes to redhat/mirror/rocky/VER/REPO/
+    # Clients use: baseurl=http://server:PORT/redhat/rocky/VER/baseos
     location /redhat {
-        alias ${base_dir}/redhat/approved;
+        alias ${base_dir}/redhat/mirror;
         autoindex on;
     }
 
@@ -182,16 +186,19 @@ NGINX_CONF
 
 _validate_nginx_tmpconfig() {
     local tmpfile="$1"
-    # nginx -t doesn't accept arbitrary file paths; use a temp include approach.
-    # The simplest safe check is to run nginx -t with the actual config after writing
-    # to a non-active location. We approximate with a syntax check using nginx -T.
-    # If nginx isn't installed yet, skip.
     if ! check_command nginx; then
         debug "nginx not installed yet; skipping pre-write validation."
         return 0
     fi
-    # Minimal check: ensure required keywords are present.
-    grep -q "listen" "$tmpfile" && grep -q "server" "$tmpfile"
+    # nginx -t -c requires a full nginx.conf, not just a server block.
+    # Wrap the server block in minimal http{} boilerplate so nginx can parse it.
+    local wrapper
+    wrapper="$(mktemp_file)"
+    printf 'events {}\nhttp { include %s; }\n' "$tmpfile" > "$wrapper"
+    local rc=0
+    nginx -t -c "$wrapper" 2>/dev/null || rc=$?
+    rm -f "$wrapper"
+    return $rc
 }
 
 _remove_default_site() {
