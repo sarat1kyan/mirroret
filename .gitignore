@@ -1,0 +1,12 @@
+# Private session context — never commit
+HANDOFF.md
+
+# Temp files
+*.tmp
+/tmp/
+tests/tmp/
+
+# Editor swap
+*.swp
+*.swo
+.DS_Store
