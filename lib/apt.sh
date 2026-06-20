@@ -53,7 +53,8 @@ generate_apt_client_config() {
     local web_port="${MIRRORET_WEB_PORT:-8080}"
     local codename
     codename="${MIRRORET_UBUNTU_CODENAME:-$(ubuntu_codename)}"
-    local base_path="/debian/mirror"
+    # Path must match the nginx location defined in nginx.sh (/ubuntu).
+    local base_path="/ubuntu"
     local insecure="${MIRRORET_APT_INSECURE:-0}"
 
     section "Generating APT client config"
