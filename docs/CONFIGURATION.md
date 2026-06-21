@@ -49,6 +49,64 @@ Variables in the config file are plain shell assignments. Environment variables 
 | `MIRRORET_APT_ARCH` | `amd64` | APT mirror architecture |
 | `MIRRORET_APT_THREADS` | `10` | apt-mirror download threads |
 
+### TLS
+
+| Variable | Default | Description |
+|---|---|---|
+| `MIRRORET_TLS_SELF_SIGNED` | `0` | Generate a self-signed cert during install |
+| `MIRRORET_TLS_CERT` | *(empty)* | Path to an existing PEM certificate |
+| `MIRRORET_TLS_KEY` | *(empty)* | Path to the matching private key |
+| `MIRRORET_TLS_PORT` | `8443` | nginx HTTPS listener port |
+| `MIRRORET_TLS_DIR` | `/etc/mirroret/tls` | Directory for generated cert/key files |
+
+### GPG signing
+
+| Variable | Default | Description |
+|---|---|---|
+| `MIRRORET_GPG_AUTO` | `0` | Auto-generate a GPG key if none exists |
+| `MIRRORET_GPG_NAME` | `mirroret` | Real Name field for the generated key |
+| `MIRRORET_GPG_EMAIL` | `mirroret@localhost` | Email field for the generated key |
+| `MIRRORET_GPG_HOMEDIR` | `/etc/mirroret/gnupg` | GPG home directory (isolated keyring) |
+| `MIRRORET_GPG_KEYID` | *(empty)* | Fingerprint of an existing key to use |
+
+### Package approval workflow
+
+| Variable | Default | Description |
+|---|---|---|
+| `MIRRORET_APPROVAL_ENABLED` | `0` | Enable staging→approved workflow for pip/npm |
+
+When enabled, sync scripts download to `BASE_DIR/staging/{pip,npm}/`. Use
+`--approve-all-pip`, `--approve-all-npm`, `--approve-package`, `--exclude-pip`,
+or `--exclude-npm` to manage the queue.
+
+### Docker registry backend
+
+| Variable | Default | Description |
+|---|---|---|
+| `MIRRORET_DOCKER_BACKEND` | `auto` | `auto`, `native`, or `container` |
+| `MIRRORET_DOCKER_IMAGES_FILE` | *(empty)* | Path to image list file (one per line) |
+
+`auto`: use OS package if available, fall back to container.
+`native`: `docker-distribution` (RHEL) or `docker-registry` (Debian).
+`container`: `registry:2` via Docker or Podman.
+
+### APT mirror tool
+
+| Variable | Default | Description |
+|---|---|---|
+| `MIRRORET_APT_MIRROR_TOOL` | `auto` | `auto`, `apt-mirror`, or `debmirror` |
+
+`auto`: tries apt-mirror, then apt-mirror2 (pip), then debmirror.
+Debian 12 removed apt-mirror from its repos; use `debmirror` or `apt-mirror` with apt-mirror2.
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for debmirror GPG issues.
+
+### npm extras
+
+| Variable | Default | Description |
+|---|---|---|
+| `MIRRORET_NPM_PACKAGES_FILE` | *(empty)* | Path to npm package list (one per line) |
+| `MIRRORET_NPM_ALLOW_ANON_PUBLISH` | `0` | Allow unauthenticated publish to Verdaccio |
+
 ### Security
 
 | Variable | Default | Description |
