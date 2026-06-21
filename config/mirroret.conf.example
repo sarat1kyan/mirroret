@@ -96,6 +96,83 @@
 # Default: 0 (off)
 #MIRRORET_PIP_INSECURE=0
 
+# ── TLS ───────────────────────────────────────────────────────────────────────
+
+# Set to 1 to generate a self-signed certificate during install.
+# The cert is stored in MIRRORET_TLS_DIR and used for the nginx HTTPS listener.
+# Clients will see an untrusted-CA warning. See docs/SECURITY.md for CA import.
+#MIRRORET_TLS_SELF_SIGNED=0
+
+# Alternatively, supply paths to your own cert and key:
+#MIRRORET_TLS_CERT=/etc/ssl/certs/mirroret.crt
+#MIRRORET_TLS_KEY=/etc/ssl/private/mirroret.key
+
+# HTTPS port for the nginx TLS listener.
+# Default: 8443
+#MIRRORET_TLS_PORT=8443
+
+# Directory where generated TLS files are stored.
+# Default: /etc/mirroret/tls
+#MIRRORET_TLS_DIR=/etc/mirroret/tls
+
+# ── GPG signing ───────────────────────────────────────────────────────────────
+
+# Set to 1 to auto-generate a GPG key for APT/RPM signing if none exists.
+# The key is stored in MIRRORET_GPG_HOMEDIR.
+# Default: 0 (off)
+#MIRRORET_GPG_AUTO=0
+
+# Real Name and Email for the generated GPG key (cosmetic only).
+#MIRRORET_GPG_NAME=mirroret
+#MIRRORET_GPG_EMAIL=mirroret@localhost
+
+# GPG home directory (isolated from the system keyring).
+# Default: /etc/mirroret/gnupg
+#MIRRORET_GPG_HOMEDIR=/etc/mirroret/gnupg
+
+# Fingerprint of an existing GPG key to use instead of auto-generating.
+# Leave empty to auto-detect or auto-generate.
+#MIRRORET_GPG_KEYID=
+
+# ── Package approval workflow ─────────────────────────────────────────────────
+
+# Set to 1 to enable the staging → approved workflow for pip and npm.
+# Sync scripts download to staging/; an admin promotes packages to approved/.
+# nginx serves only packages in approved/.
+# Use --list-staging / --approve-all-pip / --approve-all-npm to manage.
+# Default: 0 (off)
+#MIRRORET_APPROVAL_ENABLED=0
+
+# ── Docker registry backend ───────────────────────────────────────────────────
+
+# How to run the Docker registry.
+#   auto      — use OS package if available, fall back to container (default)
+#   native    — OS package: docker-distribution (RHEL) or docker-registry (Debian)
+#   container — registry:2 container via Docker or Podman
+#MIRRORET_DOCKER_BACKEND=auto
+
+# Path to a file listing images to pre-seed (one per line, # for comments).
+# When unset, a built-in default list is used (ubuntu, debian, nginx, etc.).
+#MIRRORET_DOCKER_IMAGES_FILE=/etc/mirroret/docker-images.txt
+
+# ── APT mirror tool ───────────────────────────────────────────────────────────
+
+# Which tool to use for mirroring Ubuntu/Debian APT repositories.
+#   auto       — try apt-mirror, then apt-mirror2 (pip), then debmirror (default)
+#   apt-mirror — use apt-mirror (classic)
+#   debmirror  — use debmirror (required on Debian 12+ where apt-mirror is gone)
+#MIRRORET_APT_MIRROR_TOOL=auto
+
+# ── npm extras ────────────────────────────────────────────────────────────────
+
+# Path to a file listing npm packages to sync (one per line, # for comments).
+# When unset, a built-in default list is used.
+#MIRRORET_NPM_PACKAGES_FILE=
+
+# Set to 1 to allow unauthenticated publish to Verdaccio (isolated networks).
+# When 0 (default), npm login is required before publishing.
+#MIRRORET_NPM_ALLOW_ANON_PUBLISH=0
+
 # ── Components ────────────────────────────────────────────────────────────────
 
 # Set to 0 to disable a component entirely.
