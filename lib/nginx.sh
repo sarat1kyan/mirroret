@@ -44,13 +44,27 @@ configure_nginx_unified() {
 
     section "Configuring nginx (unified)"
 
+    # MIRRORET_APT_DATA_PATH is exported by apt.sh; fall back to the classic path.
+    local apt_data_path="${MIRRORET_APT_DATA_PATH:-${base_dir}/debian/mirror/mirror/archive.ubuntu.com/ubuntu}"
+
+    # Approval-aware pip/npm paths: serve approved/ when enabled.
+    local pip_serve_dir
+    local npm_serve_dir
+    if [[ "${MIRRORET_APPROVAL_ENABLED:-0}" == "1" ]]; then
+        pip_serve_dir="${base_dir}/approved/pip"
+        npm_serve_dir="${base_dir}/approved/npm"
+    else
+        pip_serve_dir="${base_dir}/pip/approved"
+        npm_serve_dir=""
+    fi
+
     _write_nginx_config "$backup_id" "$base_dir" "$web_port" \
         "$(cat <<NGINX_EOF
 
-    # APT mirror — apt-mirror writes to mirror/mirror/archive.ubuntu.com/ubuntu/
+    # APT mirror — path set by MIRRORET_APT_DATA_PATH (tool-agnostic)
     # Clients use: deb http://server:PORT/ubuntu codename main
     location /ubuntu {
-        alias ${base_dir}/debian/mirror/mirror/archive.ubuntu.com/ubuntu;
+        alias ${apt_data_path};
         autoindex on;
     }
 
@@ -93,8 +107,35 @@ configure_nginx_unified() {
         chunked_transfer_encoding on;
         proxy_read_timeout 900s;
     }
+
+    # Approved pip packages (static files when approval workflow is active)
+    location /pip-packages/ {
+        alias ${pip_serve_dir}/;
+        autoindex on;
+    }
+
+    # Approved npm packages (static files when approval workflow is active)
+    location /npm-packages/ {
+        alias ${npm_serve_dir:-${base_dir}/approved/npm}/;
+        autoindex on;
+    }
 NGINX_EOF
     )" "mirroret-unified"
+
+    # Append TLS server block when TLS is ready.
+    if declare -f is_tls_ready >/dev/null 2>&1 && is_tls_ready; then
+        local conf_file
+        if [[ -d /etc/nginx/sites-available ]]; then
+            conf_file="/etc/nginx/sites-available/mirroret-unified"
+        else
+            conf_file="/etc/nginx/conf.d/mirroret-unified.conf"
+        fi
+        if [[ "${DRY_RUN}" != "1" ]] && [[ -f "${conf_file}" ]]; then
+            tls_nginx_server_block "" "mirroret-unified" >> "${conf_file}"
+            info "TLS server block appended to ${conf_file}"
+            nginx -t 2>/dev/null || warn "nginx config test failed after TLS block insertion."
+        fi
+    fi
 }
 
 # ── Internal helpers ─────────────────────────────────────────────────────────
