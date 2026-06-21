@@ -62,20 +62,35 @@ sudo /srv/mirroret/scripts/sync-npm-packages.sh
 
 ### Modify the package list
 
-Edit the appropriate sync script to add or remove packages:
+**Option A: edit the generated sync script directly.**
 
 ```bash
-# pip packages to mirror:
 sudo nano /srv/mirroret/scripts/sync-pip-packages.sh
 # Edit the PACKAGES array.
 
-# Docker images to mirror:
 sudo nano /srv/mirroret/scripts/sync-docker-images.sh
 # Edit the IMAGES array.
 
-# npm packages to mirror:
 sudo nano /srv/mirroret/scripts/sync-npm-packages.sh
 # Edit the PACKAGES array.
+```
+
+**Option B: supply a package list file (persists across reinstalls).**
+
+```bash
+# Docker images:
+cat > /etc/mirroret/docker-images.txt <<'EOF'
+ubuntu:22.04
+debian:12
+nginx:stable
+# my org images:
+myregistry.example/app:latest
+EOF
+MIRRORET_DOCKER_IMAGES_FILE=/etc/mirroret/docker-images.txt sudo ./install.sh
+
+# npm packages:
+echo "express\nlodash\ntypescript" > /etc/mirroret/npm-packages.txt
+MIRRORET_NPM_PACKAGES_FILE=/etc/mirroret/npm-packages.txt sudo ./install.sh
 ```
 
 ---
@@ -228,13 +243,87 @@ sudo make validate
 
 ---
 
+## Package approval workflow
+
+When `MIRRORET_APPROVAL_ENABLED=1` is set, sync scripts download to
+`BASE_DIR/staging/{pip,npm}/` and nothing is served until an admin promotes
+packages to `BASE_DIR/approved/{pip,npm}/`.
+
+```bash
+# See what is waiting:
+sudo ./install.sh --list-staging
+
+# Approve everything:
+sudo ./install.sh --approve-all-pip
+sudo ./install.sh --approve-all-npm
+
+# Approve a specific package (name fragment):
+sudo ./install.sh --approve-package requests
+
+# Decline (remove) a specific package:
+sudo ./install.sh --exclude-pip badpkg
+sudo ./install.sh --exclude-npm oldlib
+```
+
+nginx serves packages from `approved/` when approval mode is on.
+When approval mode is off, sync scripts write directly to the served directory.
+
+---
+
+## APT sync tool selection
+
+On Debian 12+ where `apt-mirror` is no longer in the repos, mirroret
+automatically falls back to `apt-mirror2` (pip) or `debmirror`.
+
+To force a specific tool:
+
+```bash
+MIRRORET_APT_MIRROR_TOOL=debmirror sudo ./install.sh
+```
+
+When using `debmirror`, the generated sync script is at:
+`/srv/mirroret/scripts/sync-apt-debmirror.sh`
+
+Run it manually after install to populate the mirror:
+
+```bash
+sudo /srv/mirroret/scripts/sync-apt-debmirror.sh
+```
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for debmirror GPG key issues.
+
+---
+
+## Docker registry backend
+
+```bash
+# Native OS package (no Docker daemon needed):
+MIRRORET_DOCKER_BACKEND=native sudo ./install.sh
+
+# Container via Docker or Podman:
+MIRRORET_DOCKER_BACKEND=container sudo ./install.sh
+
+# Auto (default): native if available, else container:
+MIRRORET_DOCKER_BACKEND=auto sudo ./install.sh
+```
+
+The native backend uses:
+- RHEL/Rocky/Alma: `docker-distribution` package, service `docker-distribution`
+- Debian/Ubuntu: `docker-registry` package, service `docker-registry`
+
+For the container backend, Podman on RHEL is detected automatically.
+A systemd unit is generated when Podman is used (`podman generate systemd`).
+
+---
+
 ## Port reference
 
 | Port | Service | Protocol |
 |------|---------|----------|
-| 8080 | nginx (APT/RPM browser) | TCP |
+| 8080 | nginx HTTP (APT/RPM browser) | TCP |
+| 8443 | nginx HTTPS (when TLS enabled) | TCP |
 | 8081 | pypiserver (pip) | TCP |
 | 5000 | Docker registry | TCP |
 | 4873 | Verdaccio (npm) | TCP |
 
-All ports are configurable. See docs/CONFIGURATION.md.
+All ports are configurable. See [CONFIGURATION.md](CONFIGURATION.md).

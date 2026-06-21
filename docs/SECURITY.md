@@ -8,60 +8,46 @@ By default, mirroret generates client configurations that **require** package si
 
 ## APT / Debian-Ubuntu
 
-### Secure mode (default)
+### Secure mode (default) — with GPG auto-provision
 
-Client packages are verified against a GPG keyring. You must sign your repository.
-
-**Step 1: Generate a signing key pair**
+The simplest path: let mirroret generate and manage the GPG key.
 
 ```bash
-gpg --batch --gen-key <<EOF
-%no-protection
-Key-Type: RSA
-Key-Length: 4096
-Subkey-Type: RSA
-Subkey-Length: 4096
-Name-Real: Mirroret Repository
-Name-Email: mirroret@$(hostname -f)
-Expire-Date: 2y
-EOF
+sudo ./install.sh --gpg-auto
 ```
 
-**Step 2: Export the public key**
+This generates a key, exports the public key, and sets `MIRRORET_APT_KEYRING` automatically.
+Client configs will use `signed-by=<keyring>`. Distribute the key with the generated script.
+
+### Secure mode — manual GPG key
+
+If you already have a key:
 
 ```bash
-gpg --export --armor 'Mirroret Repository' > /srv/mirroret/config/mirroret.gpg.asc
-# Also export in binary for apt
-gpg --export 'Mirroret Repository' > /srv/mirroret/config/mirroret.gpg
+# Export it into the mirroret gnupg homedir:
+gpg --export-secret-keys <FINGERPRINT> \
+    | gpg --homedir /etc/mirroret/gnupg --import
+
+MIRRORET_GPG_KEYID=<FINGERPRINT> sudo ./install.sh
 ```
 
-**Step 3: Sign the repository**
+Manual repository signing (if serving custom packages via apt-ftparchive):
 
 ```bash
-# Re-generate APT metadata with signing.
-# After dpkg-scanpackages, sign the Release file:
-apt-ftparchive release /srv/mirroret/debian/approved > /srv/mirroret/debian/approved/Release
-gpg --default-key 'Mirroret Repository' \
-    -abs -o /srv/mirroret/debian/approved/Release.gpg \
+GPG="gpg --homedir /etc/mirroret/gnupg"
+${GPG} -abs -o /srv/mirroret/debian/approved/Release.gpg \
     /srv/mirroret/debian/approved/Release
-gpg --default-key 'Mirroret Repository' \
-    --clearsign -o /srv/mirroret/debian/approved/InRelease \
+${GPG} --clearsign -o /srv/mirroret/debian/approved/InRelease \
     /srv/mirroret/debian/approved/Release
 ```
 
-**Step 4: Configure mirroret**
-
-```bash
-# In /etc/mirroret/mirroret.conf or as environment variable:
-MIRRORET_APT_KEYRING=/etc/apt/keyrings/mirroret.gpg
-```
-
-**Step 5: Distribute the keyring to clients**
+**Distribute the keyring to clients:**
 
 ```bash
 # On each client:
 sudo mkdir -p /etc/apt/keyrings
-sudo wget http://<mirror-ip>:8080/config/mirroret.gpg -O /etc/apt/keyrings/mirroret.gpg
+sudo wget http://<mirror-ip>:8080/config/mirroret.gpg \
+    -O /etc/apt/keyrings/mirroret.gpg
 sudo chmod 644 /etc/apt/keyrings/mirroret.gpg
 ```
 
@@ -70,9 +56,7 @@ sudo chmod 644 /etc/apt/keyrings/mirroret.gpg
 Only for air-gapped/isolated environments with no external network access.
 
 ```bash
-# Install with insecure APT mode:
 sudo ./install.sh --insecure
-
 # Or selectively:
 MIRRORET_APT_INSECURE=1 sudo ./install.sh
 ```
@@ -113,35 +97,115 @@ Generates `gpgcheck=0`. A security warning is printed.
 
 ---
 
-## Docker Registry
+## TLS (nginx HTTPS listener)
 
-### TLS mode (default)
+mirroret can configure nginx with an HTTPS listener in addition to the HTTP one.
 
-The Docker registry does not include TLS by default — you must configure it.
-
-**Using a self-signed certificate:**
+### Option A: auto-generated self-signed certificate
 
 ```bash
-mkdir -p /etc/docker/registry/certs
-openssl req -newkey rsa:4096 -nodes -sha256 \
-    -keyout /etc/docker/registry/certs/domain.key \
-    -x509 -days 365 \
-    -out /etc/docker/registry/certs/domain.crt \
-    -subj "/CN=<mirror-ip>"
-
-# Update /etc/docker/registry/config.yml:
-# http:
-#   tls:
-#     certificate: /etc/docker/registry/certs/domain.crt
-#     key: /etc/docker/registry/certs/domain.key
+sudo ./install.sh --tls-self-signed
+# or:
+MIRRORET_TLS_SELF_SIGNED=1 sudo ./install.sh
 ```
+
+- Generates a 4096-bit RSA cert valid for 10 years in `/etc/mirroret/tls/`.
+- HTTPS listens on port 8443 by default (`MIRRORET_TLS_PORT=8443`).
+- Clients will see an untrusted-CA warning until they import the cert.
 
 **Distribute the cert to clients:**
 
 ```bash
+# Copy cert to each client:
+sudo mkdir -p /etc/ssl/certs/
+sudo wget -q http://<mirror-ip>:8080/config/cert.pem -O /etc/ssl/certs/mirroret.crt
+# Or via SCP from the server:
+sudo scp root@<mirror-ip>:/etc/mirroret/tls/cert.pem /usr/local/share/ca-certificates/mirroret.crt
+sudo update-ca-certificates   # Debian/Ubuntu
+sudo update-ca-trust extract  # RHEL/Rocky
+```
+
+### Option B: bring-your-own certificate (internal CA or public cert)
+
+```bash
+MIRRORET_TLS_CERT=/etc/ssl/certs/server.crt
+MIRRORET_TLS_KEY=/etc/ssl/private/server.key
+sudo ./install.sh
+```
+
+The cert must be PEM-encoded. `MIRRORET_TLS_CERT` and `MIRRORET_TLS_KEY` are validated at install time.
+
+### Option C: no TLS (lab default)
+
+By default mirroret uses HTTP only. TLS is opt-in.
+
+---
+
+## GPG automation
+
+### Auto-generate a signing key
+
+```bash
+sudo ./install.sh --gpg-auto
+# or:
+MIRRORET_GPG_AUTO=1 sudo ./install.sh
+```
+
+- Generates a 4096-bit RSA GPG key stored in `/etc/mirroret/gnupg/` (isolated from the system keyring).
+- Exports the public key to `BASE_DIR/config/GPG-KEY.asc` (armored) and `BASE_DIR/config/mirroret.gpg` (binary).
+- Writes `BASE_DIR/config/import-mirroret-gpg-key.sh` — a client-side script for importing the key.
+
+### Use an existing key
+
+```bash
+MIRRORET_GPG_KEYID=FINGERPRINT sudo ./install.sh
+```
+
+The key must exist in `MIRRORET_GPG_HOMEDIR` (default `/etc/mirroret/gnupg`).
+
+### Customise key identity
+
+```bash
+MIRRORET_GPG_NAME="My Org Mirror"
+MIRRORET_GPG_EMAIL="mirror@myorg.example"
+MIRRORET_GPG_AUTO=1 sudo ./install.sh
+```
+
+### Distribute the key to clients
+
+A convenience script is generated at `BASE_DIR/config/import-mirroret-gpg-key.sh`.
+Clients can run it directly (requires `curl`):
+
+```bash
 # On each client:
+bash <(curl -fsSL http://<mirror-ip>:8080/config/import-mirroret-gpg-key.sh)
+```
+
+Or manually:
+
+```bash
+# APT clients:
+curl -fsSL http://<mirror-ip>:8080/config/GPG-KEY.asc \
+    | sudo gpg --dearmor -o /etc/apt/keyrings/mirroret.gpg
+# RPM clients:
+sudo rpm --import http://<mirror-ip>:8080/config/GPG-KEY.asc
+```
+
+---
+
+## Docker Registry
+
+### TLS mode
+
+Use the mirroret nginx TLS listener (`--tls-self-signed` or `MIRRORET_TLS_CERT`) to terminate TLS. The Docker registry itself listens on localhost:5000 and is fronted by nginx.
+
+**Distribute the cert to Docker clients:**
+
+```bash
+# On each Docker client:
 sudo mkdir -p /etc/docker/certs.d/<mirror-ip>:5000
-sudo cp domain.crt /etc/docker/certs.d/<mirror-ip>:5000/ca.crt
+sudo wget -q http://<mirror-ip>:8080/config/cert.pem \
+    -O /etc/docker/certs.d/<mirror-ip>:5000/ca.crt
 sudo systemctl restart docker
 ```
 

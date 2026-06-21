@@ -108,9 +108,13 @@ These are contacted only during initial setup to install system dependencies.
 These are the ports clients need to reach on the mirror server itself.
 All are configurable via environment variables.
 
-| Default port | Variable | Service |
-|---|---|---|
-| 8080 | `MIRRORET_WEB_PORT` | nginx (APT + RPM HTTP) |
-| 8081 | `MIRRORET_PIP_PORT` | pypiserver (pip) |
-| 5000 | `MIRRORET_DOCKER_REGISTRY_PORT` | Docker registry |
-| 4873 | `MIRRORET_NPM_PORT` | Verdaccio (npm) |
+| Default port | Variable | Service | Notes |
+|---|---|---|---|
+| 8080 | `MIRRORET_WEB_PORT` | nginx HTTP (APT + RPM + static) | Always open |
+| 8443 | `MIRRORET_TLS_PORT` | nginx HTTPS (TLS listener) | Only when TLS enabled |
+| 8081 | `MIRRORET_PIP_PORT` | pypiserver (pip) | |
+| 5000 | `MIRRORET_DOCKER_REGISTRY_PORT` | Docker registry | |
+| 4873 | `MIRRORET_NPM_PORT` | Verdaccio (npm) | |
+
+The TLS port (8443) is only opened in the firewall when `--tls-self-signed`
+or `MIRRORET_TLS_CERT`/`MIRRORET_TLS_KEY` are configured.
