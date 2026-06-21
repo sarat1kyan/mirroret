@@ -239,20 +239,29 @@ set -Eeuo pipefail
 # to Verdaccio. Edit PACKAGES or supply MIRRORET_NPM_PACKAGES_FILE.
 
 VERDACCIO_URL="http://localhost:${npm_port}/"
-STAGING_DIR="${base_dir}/npm/staging"
+# When approval mode is on, download to staging/npm (approval.sh promotes to approved/npm).
+# When off, download to npm/staging as a temp area before publishing.
+STAGING_DIR="${base_dir}/staging/npm"
+WORK_DIR_DEFAULT="${base_dir}/npm/staging"
 APPROVED_DIR="${base_dir}/npm/approved"
 LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-npm-\$(date +%Y%m%d-%H%M%S).log"
 APPROVAL_MODE="${approval}"
 
-mkdir -p "\$LOG_DIR" "\$STAGING_DIR" "\$APPROVED_DIR"
+mkdir -p "\$LOG_DIR" "\$STAGING_DIR" "\$WORK_DIR_DEFAULT" "\$APPROVED_DIR"
 echo "Starting npm package sync: \$(date)" | tee -a "\$LOG_FILE"
 
 PACKAGES=(
 ${packages_block}
 )
 
-WORK_DIR="\${STAGING_DIR}"
+# In approval mode: drop tarballs in staging/npm for admin review.
+# Otherwise: use a temp work dir and publish directly.
+if [[ "\${APPROVAL_MODE}" == "1" ]]; then
+    WORK_DIR="\${STAGING_DIR}"
+else
+    WORK_DIR="\${WORK_DIR_DEFAULT}"
+fi
 failed=0
 
 for package in "\${PACKAGES[@]}"; do
