@@ -56,6 +56,12 @@ source "${SCRIPT_DIR}/lib/pip.sh"
 source "${SCRIPT_DIR}/lib/npm.sh"
 # shellcheck source=lib/validation.sh
 source "${SCRIPT_DIR}/lib/validation.sh"
+# shellcheck source=lib/tls.sh
+source "${SCRIPT_DIR}/lib/tls.sh"
+# shellcheck source=lib/gpg.sh
+source "${SCRIPT_DIR}/lib/gpg.sh"
+# shellcheck source=lib/approval.sh
+source "${SCRIPT_DIR}/lib/approval.sh"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
@@ -76,6 +82,34 @@ MIRRORET_RPM_INSECURE="${MIRRORET_RPM_INSECURE:-0}"
 MIRRORET_DOCKER_INSECURE="${MIRRORET_DOCKER_INSECURE:-0}"
 MIRRORET_PIP_INSECURE="${MIRRORET_PIP_INSECURE:-0}"
 
+# Docker backend.
+MIRRORET_DOCKER_BACKEND="${MIRRORET_DOCKER_BACKEND:-auto}"
+MIRRORET_DOCKER_IMAGES_FILE="${MIRRORET_DOCKER_IMAGES_FILE:-}"
+
+# APT mirror tool.
+MIRRORET_APT_MIRROR_TOOL="${MIRRORET_APT_MIRROR_TOOL:-auto}"
+
+# Approval workflow.
+MIRRORET_APPROVAL_ENABLED="${MIRRORET_APPROVAL_ENABLED:-0}"
+
+# TLS.
+MIRRORET_TLS_SELF_SIGNED="${MIRRORET_TLS_SELF_SIGNED:-0}"
+MIRRORET_TLS_CERT="${MIRRORET_TLS_CERT:-}"
+MIRRORET_TLS_KEY="${MIRRORET_TLS_KEY:-}"
+MIRRORET_TLS_PORT="${MIRRORET_TLS_PORT:-8443}"
+MIRRORET_TLS_DIR="${MIRRORET_TLS_DIR:-/etc/mirroret/tls}"
+
+# GPG signing.
+MIRRORET_GPG_AUTO="${MIRRORET_GPG_AUTO:-0}"
+MIRRORET_GPG_NAME="${MIRRORET_GPG_NAME:-mirroret}"
+MIRRORET_GPG_EMAIL="${MIRRORET_GPG_EMAIL:-mirroret@localhost}"
+MIRRORET_GPG_HOMEDIR="${MIRRORET_GPG_HOMEDIR:-/etc/mirroret/gnupg}"
+MIRRORET_GPG_KEYID="${MIRRORET_GPG_KEYID:-}"
+
+# npm extras.
+MIRRORET_NPM_PACKAGES_FILE="${MIRRORET_NPM_PACKAGES_FILE:-}"
+MIRRORET_NPM_ALLOW_ANON_PUBLISH="${MIRRORET_NPM_ALLOW_ANON_PUBLISH:-0}"
+
 # Mode flags.
 MODE_CHECK=0
 MODE_STATUS=0
@@ -83,6 +117,12 @@ MODE_BACKUP_ONLY=0
 MODE_ROLLBACK=""
 MODE_LIST_BACKUPS=0
 MODE_NO_FIREWALL=0
+MODE_LIST_STAGING=0
+MODE_APPROVE_ALL_PIP=0
+MODE_APPROVE_ALL_NPM=0
+MODE_APPROVE_PACKAGE=""
+MODE_EXCLUDE_PIP=""
+MODE_EXCLUDE_NPM=""
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parse_args() {
@@ -141,6 +181,36 @@ parse_args() {
                 warn_insecure "--insecure flag set: ALL insecure modes enabled."
                 warn_insecure "Use only in isolated lab/air-gapped environments."
                 ;;
+            --tls-self-signed)
+                MIRRORET_TLS_SELF_SIGNED=1
+                ;;
+            --gpg-auto)
+                MIRRORET_GPG_AUTO=1
+                ;;
+            --approval-mode)
+                MIRRORET_APPROVAL_ENABLED=1
+                ;;
+            --list-staging)
+                MODE_LIST_STAGING=1
+                ;;
+            --approve-all-pip)
+                MODE_APPROVE_ALL_PIP=1
+                ;;
+            --approve-all-npm)
+                MODE_APPROVE_ALL_NPM=1
+                ;;
+            --approve-package)
+                shift
+                MODE_APPROVE_PACKAGE="$1"
+                ;;
+            --exclude-pip)
+                shift
+                MODE_EXCLUDE_PIP="$1"
+                ;;
+            --exclude-npm)
+                shift
+                MODE_EXCLUDE_NPM="$1"
+                ;;
             --debug)
                 export LOG_LEVEL=DEBUG
                 ;;
@@ -190,6 +260,15 @@ Options:
   --no-npm               Skip npm/Verdaccio setup
   --no-firewall          Skip firewall configuration
   --insecure             Enable all insecure modes (LAB ONLY)
+  --tls-self-signed      Generate a self-signed TLS certificate during install
+  --gpg-auto             Auto-generate a GPG signing key if none exists
+  --approval-mode        Enable staging/approved workflow for pip and npm
+  --list-staging         List packages awaiting approval and exit
+  --approve-all-pip      Promote all staged pip packages to approved
+  --approve-all-npm      Promote all staged npm packages to approved
+  --approve-package <n>  Promote a specific staged pip package by name fragment
+  --exclude-pip <n>      Remove a staged pip package (decline it)
+  --exclude-npm <n>      Remove a staged npm package (decline it)
   --debug                Enable debug logging
   --help                 Show this help
 
@@ -269,17 +348,30 @@ install_system_packages() {
         # python3-venv is a separate package on Debian/Ubuntu; required for the
         # pypiserver virtualenv fallback when python3-pypiserver is not in repos.
         local debian_pkgs=(dpkg-dev nginx gnupg wget curl rsync cron python3-venv python3-pip)
-        # apt-mirror was removed from Debian 12 (bookworm). Try to install it;
-        # warn and continue if unavailable (debmirror is the manual alternative).
+        # apt-mirror was removed from Debian 12 (bookworm).
+        # MIRRORET_APT_MIRROR_TOOL controls which tool is used (auto/apt-mirror/debmirror).
+        # When auto or apt-mirror, attempt to install; if missing, apt.sh will fall back.
         if [[ "${MIRRORET_ENABLE_APT}" == "1" ]]; then
             if apt-cache show apt-mirror &>/dev/null 2>&1; then
                 debian_pkgs+=(apt-mirror)
             else
-                warn "apt-mirror is not available in this distro's repos (Debian 12+)."
-                warn "APT mirror will not be configured automatically."
-                warn "Alternatives: install apt-mirror2 manually, or use debmirror."
-                warn "See: https://github.com/apt-mirror/apt-mirror"
-                MIRRORET_ENABLE_APT=0
+                warn "apt-mirror not in repos. apt.sh will fall back per MIRRORET_APT_MIRROR_TOOL."
+                warn "Possible alternatives: apt-mirror2 (pip) or debmirror."
+                warn "See docs/CONFIGURATION.md for MIRRORET_APT_MIRROR_TOOL."
+            fi
+        fi
+        # Native Docker registry for Debian.
+        if [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && \
+           [[ "${MIRRORET_DOCKER_BACKEND}" == "native" || "${MIRRORET_DOCKER_BACKEND}" == "auto" ]]; then
+            if apt-cache show docker-registry &>/dev/null 2>&1; then
+                debian_pkgs+=(docker-registry)
+            fi
+        fi
+        # debmirror optional install when selected.
+        if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && \
+           [[ "${MIRRORET_APT_MIRROR_TOOL}" == "debmirror" || "${MIRRORET_APT_MIRROR_TOOL}" == "auto" ]]; then
+            if apt-cache show debmirror &>/dev/null 2>&1; then
+                debian_pkgs+=(debmirror)
             fi
         fi
         # nodejs and npm are required for the Verdaccio npm registry.
@@ -289,6 +381,11 @@ install_system_packages() {
         local rhel_pkgs=(createrepo_c yum-utils nginx wget curl rsync cronie python3 python3-pip)
         # nodejs and npm for Verdaccio; available in AppStream on RHEL 8/9.
         [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && rhel_pkgs+=(nodejs npm)
+        # Native Docker registry for RHEL.
+        if [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && \
+           [[ "${MIRRORET_DOCKER_BACKEND}" == "native" || "${MIRRORET_DOCKER_BACKEND}" == "auto" ]]; then
+            rhel_pkgs+=(docker-distribution)
+        fi
         xrun ${PKG_MGR_INSTALL} "${rhel_pkgs[@]}"
         xrun systemctl enable --now crond || xrun systemctl enable --now cron || true
     fi
@@ -390,10 +487,13 @@ print_summary() {
     section "Installation Complete"
 
     echo ""
-    echo "Server:          http://${server_ip}:${MIRRORET_WEB_PORT}/"
+    echo "Server (HTTP):   http://${server_ip}:${MIRRORET_WEB_PORT}/"
+    is_tls_ready && echo "Server (HTTPS):  https://${server_ip}:${MIRRORET_TLS_PORT}/"
     [[ "${MIRRORET_ENABLE_PIP}"    == "1" ]] && echo "pip index:       http://${server_ip}:${MIRRORET_PIP_PORT}/simple/"
     [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && echo "Docker registry: ${server_ip}:${MIRRORET_DOCKER_REGISTRY_PORT}"
     [[ "${MIRRORET_ENABLE_NPM}"    == "1" ]] && echo "npm registry:    http://${server_ip}:${MIRRORET_NPM_PORT}/"
+    [[ "${MIRRORET_APPROVAL_ENABLED}" == "1" ]] && echo "Approval mode:   ON  (use --list-staging / --approve-all-pip etc.)"
+    [[ -n "${MIRRORET_GPG_KEYID:-}" ]] && echo "GPG key:         ${MIRRORET_GPG_KEYID}"
     echo ""
     echo "Base directory:  ${MIRRORET_BASE_DIR}"
     echo "Client configs:  ${MIRRORET_BASE_DIR}/config/"
@@ -415,6 +515,11 @@ main() {
     # Handle info-only modes first (no root required).
     if [[ "${MODE_LIST_BACKUPS}" == "1" ]]; then
         list_backups
+        exit 0
+    fi
+
+    if [[ "${MODE_LIST_STAGING}" == "1" ]]; then
+        list_staging
         exit 0
     fi
 
@@ -442,6 +547,33 @@ main() {
 
     if [[ -n "${MODE_ROLLBACK}" ]]; then
         rollback "${MODE_ROLLBACK}"
+        exit 0
+    fi
+
+    # Approval-workflow operations (require root for dir access).
+    if [[ "${MODE_APPROVE_ALL_PIP}" == "1" ]]; then
+        require_root
+        approve_all_pip
+        exit 0
+    fi
+    if [[ "${MODE_APPROVE_ALL_NPM}" == "1" ]]; then
+        require_root
+        approve_all_npm
+        exit 0
+    fi
+    if [[ -n "${MODE_APPROVE_PACKAGE}" ]]; then
+        require_root
+        approve_pip_package "${MODE_APPROVE_PACKAGE}"
+        exit 0
+    fi
+    if [[ -n "${MODE_EXCLUDE_PIP}" ]]; then
+        require_root
+        exclude_pip_package "${MODE_EXCLUDE_PIP}"
+        exit 0
+    fi
+    if [[ -n "${MODE_EXCLUDE_NPM}" ]]; then
+        require_root
+        exclude_npm_package "${MODE_EXCLUDE_NPM}"
         exit 0
     fi
 
@@ -474,6 +606,26 @@ main() {
     # Create directory structure.
     create_directory_structure
 
+    # Ensure approval dirs exist when workflow is enabled.
+    ensure_approval_dirs
+
+    # TLS setup (before nginx so the TLS block can be appended).
+    local tls_needs_setup=0
+    [[ "${MIRRORET_TLS_SELF_SIGNED}" == "1" ]] && tls_needs_setup=1
+    [[ -n "${MIRRORET_TLS_CERT}" && -n "${MIRRORET_TLS_KEY}" ]] && tls_needs_setup=1
+    if [[ "${tls_needs_setup}" == "1" ]]; then
+        setup_tls
+    fi
+
+    # GPG key provisioning.
+    if [[ "${MIRRORET_GPG_AUTO}" == "1" ]] || [[ -n "${MIRRORET_GPG_KEYID}" ]]; then
+        setup_gpg
+        if [[ -n "${MIRRORET_APT_KEYRING:-}" ]]; then
+            write_gpg_client_instructions \
+                "${MIRRORET_BASE_DIR}/config/import-mirroret-gpg-key.sh"
+        fi
+    fi
+
     # Configure distro-specific APT/RPM mirror.
     if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
         configure_apt_mirror "$backup_id"
@@ -505,6 +657,7 @@ main() {
     # Configure firewall.
     if [[ "${MODE_NO_FIREWALL}" == "0" ]]; then
         local ports=("${MIRRORET_WEB_PORT}")
+        is_tls_ready && ports+=("${MIRRORET_TLS_PORT}")
         [[ "${MIRRORET_ENABLE_PIP}"    == "1" ]] && ports+=("${MIRRORET_PIP_PORT}")
         [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && ports+=("${MIRRORET_DOCKER_REGISTRY_PORT}")
         [[ "${MIRRORET_ENABLE_NPM}"    == "1" ]] && ports+=("${MIRRORET_NPM_PORT}")
