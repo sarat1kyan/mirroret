@@ -1,0 +1,204 @@
+# mirroret configuration file
+# Copy to /etc/mirroret/mirroret.conf or pass via --config <path>
+# All values can also be set as environment variables with the same name.
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+
+# Base directory for all repository data.
+# Default: /srv/mirroret
+#MIRRORET_BASE_DIR=/srv/mirroret
+
+# Backup directory.
+# Default: /var/backups/mirroret
+#MIRRORET_BACKUP_BASE=/var/backups/mirroret
+
+# ── Network ───────────────────────────────────────────────────────────────────
+
+# IP address to use in generated client configs.
+# Default: auto-detected via 'ip route get 1.1.1.1'
+# Set explicitly if the server has multiple interfaces or if auto-detection
+# returns the wrong address.
+#MIRRORET_SERVER_IP=192.168.1.10
+
+# Port for the nginx HTTP server (APT/RPM repository browser).
+# Default: 8080
+#MIRRORET_WEB_PORT=8080
+
+# Port for pypiserver (pip index).
+# Default: 8081
+#MIRRORET_PIP_PORT=8081
+
+# Port for the Docker registry.
+# Default: 5000
+#MIRRORET_DOCKER_REGISTRY_PORT=5000
+
+# Port for Verdaccio (npm registry).
+# Default: 4873
+#MIRRORET_NPM_PORT=4873
+
+# ── Firewall ──────────────────────────────────────────────────────────────────
+
+# Source CIDR to restrict all repository ports to a specific subnet.
+# Leave empty to allow from any source (not recommended for production).
+# Example: 10.0.0.0/8  or  192.168.1.0/24
+#MIRRORET_FIREWALL_SOURCE=
+
+# ── Distribution / distro-specific ───────────────────────────────────────────
+
+# Ubuntu codename to mirror (e.g. focal, jammy, noble).
+# Default: auto-detected from the running system.
+#MIRRORET_UBUNTU_CODENAME=jammy
+
+# RHEL/Rocky major version to sync (e.g. 8, 9).
+# Default: auto-detected from the running system.
+#MIRRORET_RHEL_VERSION=9
+
+# APT mirror architecture.
+# Default: amd64
+#MIRRORET_APT_ARCH=amd64
+
+# Number of apt-mirror download threads.
+# Default: 10
+#MIRRORET_APT_THREADS=10
+
+# ── Security ─────────────────────────────────────────────────────────────────
+
+# APT client config: path to GPG keyring for package signing.
+# When set, generated client configs use 'signed-by=<path>'.
+# See docs/SECURITY.md for how to create and distribute a keyring.
+#MIRRORET_APT_KEYRING=/etc/apt/keyrings/mirroret.gpg
+
+# APT insecure mode: set to 1 to use trusted=yes in client configs.
+# WARNING: This disables GPG signature verification for all APT clients.
+# ONLY use this in isolated lab/air-gapped environments.
+# Default: 0 (off)
+#MIRRORET_APT_INSECURE=0
+
+# RPM client config: URL to GPG key for package verification.
+# When set, generated client configs use 'gpgcheck=1' and 'gpgkey=<url>'.
+#MIRRORET_RPM_GPGKEY_URL=http://192.168.1.10:8080/RPM-GPG-KEY-mirroret
+
+# RPM insecure mode: set to 1 to use gpgcheck=0 in client configs.
+# WARNING: This disables GPG verification for all RPM clients.
+# ONLY use this in isolated lab/air-gapped environments.
+# Default: 0 (off)
+#MIRRORET_RPM_INSECURE=0
+
+# Docker insecure mode: set to 1 to configure insecure-registries.
+# WARNING: This disables TLS verification for Docker image pulls.
+# ONLY use this in isolated lab/air-gapped environments.
+# Default: 0 (off)
+#MIRRORET_DOCKER_INSECURE=0
+
+# pip insecure mode: set to 1 to set trusted-host in pip.conf.
+# WARNING: This disables certificate verification for pip.
+# ONLY use this in isolated lab/air-gapped environments.
+# Default: 0 (off)
+#MIRRORET_PIP_INSECURE=0
+
+# ── TLS ───────────────────────────────────────────────────────────────────────
+
+# Set to 1 to generate a self-signed certificate during install.
+# The cert is stored in MIRRORET_TLS_DIR and used for the nginx HTTPS listener.
+# Clients will see an untrusted-CA warning. See docs/SECURITY.md for CA import.
+#MIRRORET_TLS_SELF_SIGNED=0
+
+# Alternatively, supply paths to your own cert and key:
+#MIRRORET_TLS_CERT=/etc/ssl/certs/mirroret.crt
+#MIRRORET_TLS_KEY=/etc/ssl/private/mirroret.key
+
+# HTTPS port for the nginx TLS listener.
+# Default: 8443
+#MIRRORET_TLS_PORT=8443
+
+# Directory where generated TLS files are stored.
+# Default: /etc/mirroret/tls
+#MIRRORET_TLS_DIR=/etc/mirroret/tls
+
+# ── GPG signing ───────────────────────────────────────────────────────────────
+
+# Set to 1 to auto-generate a GPG key for APT/RPM signing if none exists.
+# The key is stored in MIRRORET_GPG_HOMEDIR.
+# Default: 0 (off)
+#MIRRORET_GPG_AUTO=0
+
+# Real Name and Email for the generated GPG key (cosmetic only).
+#MIRRORET_GPG_NAME=mirroret
+#MIRRORET_GPG_EMAIL=mirroret@localhost
+
+# GPG home directory (isolated from the system keyring).
+# Default: /etc/mirroret/gnupg
+#MIRRORET_GPG_HOMEDIR=/etc/mirroret/gnupg
+
+# Fingerprint of an existing GPG key to use instead of auto-generating.
+# Leave empty to auto-detect or auto-generate.
+#MIRRORET_GPG_KEYID=
+
+# ── Package approval workflow ─────────────────────────────────────────────────
+
+# Set to 1 to enable the staging → approved workflow for pip and npm.
+# Sync scripts download to staging/; an admin promotes packages to approved/.
+# nginx serves only packages in approved/.
+# Use --list-staging / --approve-all-pip / --approve-all-npm to manage.
+# Default: 0 (off)
+#MIRRORET_APPROVAL_ENABLED=0
+
+# ── Docker registry backend ───────────────────────────────────────────────────
+
+# How to run the Docker registry.
+#   auto      — use OS package if available, fall back to container (default)
+#   native    — OS package: docker-distribution (RHEL) or docker-registry (Debian)
+#   container — registry:2 container via Docker or Podman
+#MIRRORET_DOCKER_BACKEND=auto
+
+# Path to a file listing images to pre-seed (one per line, # for comments).
+# When unset, a built-in default list is used (ubuntu, debian, nginx, etc.).
+#MIRRORET_DOCKER_IMAGES_FILE=/etc/mirroret/docker-images.txt
+
+# ── APT mirror tool ───────────────────────────────────────────────────────────
+
+# Which tool to use for mirroring Ubuntu/Debian APT repositories.
+#   auto       — try apt-mirror, then apt-mirror2 (pip), then debmirror (default)
+#   apt-mirror — use apt-mirror (classic)
+#   debmirror  — use debmirror (required on Debian 12+ where apt-mirror is gone)
+#MIRRORET_APT_MIRROR_TOOL=auto
+
+# ── npm extras ────────────────────────────────────────────────────────────────
+
+# Path to a file listing npm packages to sync (one per line, # for comments).
+# When unset, a built-in default list is used.
+#MIRRORET_NPM_PACKAGES_FILE=
+
+# Set to 1 to allow unauthenticated publish to Verdaccio (isolated networks).
+# When 0 (default), npm login is required before publishing.
+#MIRRORET_NPM_ALLOW_ANON_PUBLISH=0
+
+# ── Components ────────────────────────────────────────────────────────────────
+
+# Set to 0 to disable a component entirely.
+# Default: 1 (enabled)
+#MIRRORET_ENABLE_APT=1
+#MIRRORET_ENABLE_RPM=1
+#MIRRORET_ENABLE_PIP=1
+#MIRRORET_ENABLE_DOCKER=1
+#MIRRORET_ENABLE_NPM=1
+
+# ── Behaviour ─────────────────────────────────────────────────────────────────
+
+# Minimum free disk space (GB) required before installation proceeds.
+# Set to 0 to skip the check.
+# Default: 50
+#MIRRORET_MIN_DISK_GB=50
+
+# Non-interactive mode: set to 1 to suppress prompts.
+# Confirmations default to no unless confirm_yes() is used.
+# Default: 0
+#MIRRORET_NON_INTERACTIVE=0
+
+# Log level: DEBUG or INFO.
+# Default: INFO
+#LOG_LEVEL=INFO
+
+# Daily sync hour (0-23, cron).
+# Default: 2
+#MIRRORET_SYNC_HOUR=2
