@@ -67,11 +67,13 @@ teardown() {
 
 @test "tls: dry-run self-signed sets MIRRORET_TLS_CERT without writing files" {
     MIRRORET_TLS_SELF_SIGNED=1
+    MIRRORET_TLS_DIR="$(mktemp -d)"
     DRY_RUN=1
     run setup_tls
     [[ "${status}" -eq 0 ]]
-    # No real file should be created.
-    [[ ! -f "${MIRRORET_TLS_DIR:-/etc/mirroret/tls}/cert.pem" ]]
+    # Dry-run must not create the cert file.
+    [[ ! -f "${MIRRORET_TLS_DIR}/cert.pem" ]]
+    rm -rf "${MIRRORET_TLS_DIR}"
 }
 
 @test "tls: tls_nginx_server_block contains ssl_certificate directive" {

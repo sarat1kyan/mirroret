@@ -23,6 +23,16 @@ configure_createrepo() {
 
     mkdir -p "${base_dir}/scripts"
 
+    # Detect the correct createrepo binary at script-generation time.
+    local createrepo_cmd
+    if command -v createrepo_c &>/dev/null; then
+        createrepo_cmd="createrepo_c"
+    elif command -v createrepo &>/dev/null; then
+        createrepo_cmd="createrepo"
+    else
+        createrepo_cmd="createrepo_c"  # let it fail with a clear error if missing
+    fi
+
     cat > "$sync_script" <<SYNC_EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -48,7 +58,7 @@ done
 for repo in "\${REPOS[@]}"; do
     local_path="\${REPO_BASE}/rocky/\${RHEL_VER}/\${repo}"
     if [ -d "\$local_path" ]; then
-        createrepo --update "\$local_path" 2>&1 | tee -a "\$LOG_FILE"
+        ${createrepo_cmd} --update "\$local_path" 2>&1 | tee -a "\$LOG_FILE"
     fi
 done
 
