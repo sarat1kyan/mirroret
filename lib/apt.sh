@@ -13,6 +13,7 @@
 
 MIRRORET_APT_MIRROR_TOOL="${MIRRORET_APT_MIRROR_TOOL:-auto}"
 MIRRORET_APT_DATA_PATH="${MIRRORET_APT_DATA_PATH:-}"
+MIRRORET_APT_RESOLVED_TOOL="${MIRRORET_APT_RESOLVED_TOOL:-}"
 
 # configure_apt_mirror <backup_id> — write APT mirror configuration.
 configure_apt_mirror() {
@@ -30,6 +31,7 @@ configure_apt_mirror() {
     resolved_tool="$(_apt_resolve_tool "${tool}")"
 
     info "Using APT mirror tool: ${resolved_tool}"
+    MIRRORET_APT_RESOLVED_TOOL="${resolved_tool}"
 
     case "${resolved_tool}" in
         apt-mirror)  _configure_apt_mirror_classic "${backup_id}" "${base_dir}" "${codename}" ;;
@@ -38,7 +40,7 @@ configure_apt_mirror() {
         *)           die "Unknown APT mirror tool: ${resolved_tool}" ;;
     esac
 
-    export MIRRORET_APT_DATA_PATH
+    export MIRRORET_APT_DATA_PATH MIRRORET_APT_RESOLVED_TOOL
 }
 
 # _apt_resolve_tool <requested> — print the tool name that will actually be used.
