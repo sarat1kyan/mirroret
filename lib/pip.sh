@@ -78,6 +78,9 @@ _write_pypiserver_unit() {
         serve_dir="${base_dir}/approved/pip"
         mkdir -p "${base_dir}/staging/pip" "${base_dir}/approved/pip"
     fi
+    # Always create staging/approved roots — ReadWritePaths requires them to exist
+    # even when approval mode is off (ProtectSystem=strict mount namespace check).
+    mkdir -p "${base_dir}/staging" "${base_dir}/approved"
 
     local unit_content="[Unit]
 Description=PyPI Server (mirroret)

@@ -133,7 +133,11 @@ NGINX_EOF
         if [[ "${DRY_RUN}" != "1" ]] && [[ -f "${conf_file}" ]]; then
             tls_nginx_server_block "" "mirroret-unified" >> "${conf_file}"
             info "TLS server block appended to ${conf_file}"
-            nginx -t 2>/dev/null || warn "nginx config test failed after TLS block insertion."
+            if nginx -t 2>/dev/null; then
+                systemctl reload nginx 2>/dev/null || systemctl restart nginx
+            else
+                warn "nginx config test failed after TLS block insertion."
+            fi
         fi
     fi
 }

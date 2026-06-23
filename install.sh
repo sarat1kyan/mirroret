@@ -406,7 +406,10 @@ setup_cron() {
     fi
 
     # Idempotent: remove any existing mirroret sync entry, then add fresh.
-    (crontab -l 2>/dev/null | grep -v "mirroret\|sync-all\.sh"; echo "$cron_entry") | crontab -
+    # crontab -l exits 1 when no crontab exists; guard with || true to avoid
+    # tripping set -e / pipefail inside the subshell.
+    local _existing; _existing=$(crontab -l 2>/dev/null || true)
+    (echo "${_existing}" | grep -v "mirroret\|sync-all\.sh" || true; echo "$cron_entry") | crontab -
     success "Cron job: daily sync at ${MIRRORET_SYNC_HOUR}:00 AM."
 }
 
