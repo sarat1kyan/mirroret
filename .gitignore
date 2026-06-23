@@ -1,5 +1,6 @@
 # Private session context — never commit
 HANDOFF.md
+TESTING.md
 
 # Temp files
 *.tmp
