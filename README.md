@@ -184,7 +184,14 @@ make dry-run                         # run install.sh --dry-run
 | [docs/NATIVE_MODE.md](docs/NATIVE_MODE.md) | Running without Docker: native Linux services on RHEL and Debian |
 | [docs/ROLLBACK.md](docs/ROLLBACK.md) | Backup and rollback procedures |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Diagnostic steps for all components |
-| [docs/DEEP_REVIEW.md](docs/DEEP_REVIEW.md) | Technical security review |
+| [docs/QUICK-REFERENCE.md](docs/QUICK-REFERENCE.md) | One-page cheat sheet of all common commands |
+| [docs/CLIENT-CONFIGURATION-GUIDE.md](docs/CLIENT-CONFIGURATION-GUIDE.md) | Complete client setup for APT, RPM, pip, npm, Docker |
+| [docs/ARCHITECTURE-MANAGEMENT.md](docs/ARCHITECTURE-MANAGEMENT.md) | System architecture, workflows, management operations |
+| [docs/DEPLOYMENT-CHECKLIST.md](docs/DEPLOYMENT-CHECKLIST.md) | Step-by-step deployment verification checklist |
+| [docs/NETWORK-ARCHITECTURE.md](docs/NETWORK-ARCHITECTURE.md) | Network topology and advanced configurations |
+| [docs/PACKAGE-CONTROL.md](docs/PACKAGE-CONTROL.md) | Advanced approval workflows and security |
+| [docs/DIRECTORY-STRUCTURE.md](docs/DIRECTORY-STRUCTURE.md) | Complete directory layout and operations reference |
+| [docs/TROUBLESHOOTING-GUIDE.md](docs/TROUBLESHOOTING-GUIDE.md) | Comprehensive troubleshooting for all services |
 
 ---
 
