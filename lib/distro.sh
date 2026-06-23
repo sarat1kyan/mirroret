@@ -21,7 +21,7 @@ detect_distro() {
         ubuntu|debian|linuxmint|pop)
             DISTRO_TYPE="debian"
             PKG_MGR="apt-get"
-            PKG_MGR_INSTALL="apt-get install -y --no-install-recommends"
+            PKG_MGR_INSTALL="apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confold"
             export DEBIAN_FRONTEND=noninteractive
             success "Detected: ${OS_ID} ${OS_VER} (Debian-based)"
             ;;
