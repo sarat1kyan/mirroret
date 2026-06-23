@@ -344,6 +344,8 @@ install_system_packages() {
     section "Installing System Packages"
 
     if [[ "${DISTRO_TYPE}" == "debian" ]]; then
+        # Repair any interrupted dpkg transactions from a previous broken install.
+        DEBIAN_FRONTEND=noninteractive dpkg --configure -a 2>/dev/null || true
         xrun apt-get update -qq
         # python3-venv is a separate package on Debian/Ubuntu; required for the
         # pypiserver virtualenv fallback when python3-pypiserver is not in repos.
