@@ -45,6 +45,9 @@ enable_and_start() {
 
     xrun systemctl enable "$svc"
 
+    # Clear failed state so start works cleanly on a broken previous install.
+    systemctl reset-failed "$svc" 2>/dev/null || true
+
     if service_is_active "$svc"; then
         xrun systemctl restart "$svc"
     else

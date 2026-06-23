@@ -131,8 +131,12 @@ NGINX_EOF
             conf_file="/etc/nginx/conf.d/mirroret-unified.conf"
         fi
         if [[ "${DRY_RUN}" != "1" ]] && [[ -f "${conf_file}" ]]; then
-            tls_nginx_server_block "" "mirroret-unified" >> "${conf_file}"
-            info "TLS server block appended to ${conf_file}"
+            if grep -qF '# ── TLS listener' "${conf_file}"; then
+                info "TLS server block already present in ${conf_file} — skipping append."
+            else
+                tls_nginx_server_block "" "mirroret-unified" >> "${conf_file}"
+                info "TLS server block appended to ${conf_file}"
+            fi
             if nginx -t 2>/dev/null; then
                 systemctl reload nginx 2>/dev/null || systemctl restart nginx
             else
