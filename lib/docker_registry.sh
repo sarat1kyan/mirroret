@@ -34,7 +34,16 @@ _detect_container_runtime() {
         info "Docker not found; using Podman directly."
         CONTAINER_CMD="podman"
     else
-        die "No container runtime found. Install Docker CE or Podman."
+        # No runtime found — attempt to auto-install Podman (available in RHEL/Rocky/Alma BaseOS
+        # and in Ubuntu universe).
+        info "No container runtime found — attempting to install podman..."
+        ${PKG_MGR_INSTALL} podman 2>/dev/null || true
+        if check_command podman; then
+            info "Podman installed successfully."
+            CONTAINER_CMD="podman"
+        else
+            die "No container runtime found. Install Docker CE or Podman and re-run install.sh."
+        fi
     fi
     export CONTAINER_CMD
 }

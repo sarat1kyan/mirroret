@@ -56,6 +56,17 @@ _install_pypiserver() {
         info "[DRY-RUN] would install pypiserver into venv: ${venv_dir}"
         return 0
     fi
+    # Ensure python3 and venv support are available.
+    if ! check_command python3; then
+        info "python3 not found — attempting to install..."
+        xrun ${PKG_MGR_INSTALL} python3 python3-pip \
+            || die "python3 installation failed. Install python3 manually and re-run."
+    fi
+    # On Debian/Ubuntu, python3 -m venv needs the python3-venv package.
+    if [[ "${DISTRO_TYPE}" == "debian" ]] && ! python3 -m venv --help &>/dev/null 2>&1; then
+        info "python3-venv not available — installing..."
+        xrun ${PKG_MGR_INSTALL} python3-venv python3-pip || true
+    fi
     xrun python3 -m venv "$venv_dir"
     xrun "${venv_dir}/bin/pip" install --quiet pypiserver passlib
     # Create a wrapper in PATH.
