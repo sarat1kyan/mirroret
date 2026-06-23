@@ -128,12 +128,7 @@ _setup_native_registry() {
     _native_registry_info
 
     info "Installing native registry package: ${NATIVE_PKG}"
-    if [[ "${DISTRO_TYPE}" == "rhel" ]]; then
-        xrun dnf install -y "${NATIVE_PKG}" 2>/dev/null \
-            || xrun yum install -y "${NATIVE_PKG}"
-    else
-        xrun apt-get install -y "${NATIVE_PKG}"
-    fi
+    xrun ${PKG_MGR_INSTALL} "${NATIVE_PKG}"
 
     backup_file "$backup_id" "${NATIVE_CONF_FILE}"
 
