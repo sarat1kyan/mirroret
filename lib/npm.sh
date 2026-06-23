@@ -58,7 +58,17 @@ _install_verdaccio() {
         return 0
     fi
 
-    require_command npm
+    # Ensure npm is available; attempt auto-install if it is not.
+    if ! check_command npm; then
+        info "npm not found — attempting to install nodejs and npm..."
+        if [[ "${DISTRO_TYPE}" == "rhel" ]]; then
+            # RHEL 8 requires the AppStream module to be enabled first.
+            dnf module enable nodejs -y 2>/dev/null || true
+        fi
+        xrun ${PKG_MGR_INSTALL} nodejs npm \
+            || die "npm installation failed. Install nodejs and npm manually, then re-run install.sh."
+    fi
+
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would run: npm install -g verdaccio"
         return 0

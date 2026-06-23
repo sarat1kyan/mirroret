@@ -94,21 +94,68 @@ sudo service iptables save                            # RHEL/Rocky
 These hosts are contacted **only during installation** to install OS packages and
 tools. After installation they are not needed unless you reinstall.
 
+#### Debian / Ubuntu
+
 | Destination | Port | Protocol | Purpose |
 |---|---|---|---|
-| `archive.ubuntu.com` | 80 | HTTP | `apt-get install nginx, python3, nodejs…` (Debian/Ubuntu) |
+| `archive.ubuntu.com` | 80 | HTTP | `apt-get install nginx, python3, nodejs…` |
 | `security.ubuntu.com` | 80 | HTTP | Ubuntu security package index update |
-| `dl.rockylinux.org` | 443 | HTTPS | `dnf install nginx, createrepo_c, nodejs…` (RHEL/Rocky) |
-| `mirrors.rockylinux.org` | 443 | HTTPS | Rocky Linux mirror list resolution |
-| `registry-1.docker.io` | 443 | HTTPS | `docker pull registry:2` (container backend only) |
-| `auth.docker.io` | 443 | HTTPS | Docker Hub authentication for the pull above |
+| `deb.debian.org` | 80 | HTTP | Same role on Debian (replaces archive.ubuntu.com) |
+
+#### RHEL / Rocky Linux / AlmaLinux / CentOS Stream
+
+The exact hostnames depend on which distribution you run. All use HTTPS/443.
+
+**Rocky Linux 8 / 9:**
+
+| Destination | Port | Protocol | Purpose |
+|---|---|---|---|
+| `dl.rockylinux.org` | 443 | HTTPS | `dnf install nginx, createrepo_c, nodejs, podman…` |
+| `mirrors.rockylinux.org` | 443 | HTTPS | Mirror-list resolution (dnf uses this to find the fastest mirror) |
+
+**AlmaLinux 8 / 9:**
+
+| Destination | Port | Protocol | Purpose |
+|---|---|---|---|
+| `repo.almalinux.org` | 443 | HTTPS | AlmaLinux BaseOS, AppStream, Extras packages |
+| `mirrors.almalinux.org` | 443 | HTTPS | Mirror-list resolution |
+
+**RHEL 8 / 9 (Red Hat subscription):**
+
+| Destination | Port | Protocol | Purpose |
+|---|---|---|---|
+| `cdn.redhat.com` | 443 | HTTPS | All Red Hat package downloads (subscription-based CDN) |
+| `subscription.rhsm.redhat.com` | 443 | HTTPS | Subscription Manager registration and entitlement |
+
+> If the RHEL system is already registered (`subscription-manager status` shows `Current`),
+> only `cdn.redhat.com` is needed during the install.
+
+**CentOS Stream 8 / 9:**
+
+| Destination | Port | Protocol | Purpose |
+|---|---|---|---|
+| `mirror.stream.centos.org` | 443 | HTTPS | CentOS Stream package downloads |
+| `mirrors.centos.org` | 443 | HTTPS | Mirror-list resolution |
+
+#### All distributions — tools installed from the internet
+
+| Destination | Port | Protocol | Purpose |
+|---|---|---|---|
+| `registry-1.docker.io` | 443 | HTTPS | `docker/podman pull registry:2` (container backend) |
+| `auth.docker.io` | 443 | HTTPS | Docker Hub token authentication for the pull above |
 | `registry.npmjs.org` | 443 | HTTPS | `npm install -g verdaccio` |
 | `pypi.org` | 443 | HTTPS | `pip install pypiserver passlib` (venv fallback) |
-| `files.pythonhosted.org` | 443 | HTTPS | pip package downloads for pypiserver install |
+| `files.pythonhosted.org` | 443 | HTTPS | pip package tarballs for pypiserver install |
 
-> If the mirror server is fully air-gapped and you pre-install all OS packages
-> manually (`nginx`, `python3-venv`, `nodejs`, `npm`, etc.), none of the above
-> are needed during installation.
+> **When is the container pull needed?**
+> Only when the Docker registry backend resolves to `container` mode.
+> On RHEL/Rocky 8 with `docker-distribution` available: native mode — no Docker Hub pull.
+> On RHEL/Rocky 9 where `docker-distribution` is absent: Podman pulls `registry:2` from Docker Hub.
+> On Debian/Ubuntu with `docker-registry` package available: native mode — no Docker Hub pull.
+
+> **Air-gapped install:** If you pre-install all OS packages manually (`nginx`, `python3`,
+> `nodejs`, `npm`, `podman` or `docker-distribution`, etc.) none of the above are needed.
+> See section 5 for full offline instructions.
 
 ### 2b. During sync (recurring — runs via cron daily)
 
@@ -208,14 +255,16 @@ sudo firewall-cmd --reload
 
 | Port | Proto | Direction | Destination | When |
 |---|---|---|---|---|
-| 80 | TCP | OUT | `archive.ubuntu.com`, `security.ubuntu.com`, `deb.debian.org` | APT sync |
-| 80/443 | TCP | OUT | `mirror.centos.org` | RPM CentOS sync |
-| 443 | TCP | OUT | `dl.rockylinux.org`, `mirrors.rockylinux.org` | RPM Rocky sync |
+| 80 | TCP | OUT | `archive.ubuntu.com`, `security.ubuntu.com`, `deb.debian.org` | APT sync + Debian install |
+| 80/443 | TCP | OUT | `mirror.stream.centos.org`, `mirrors.centos.org` | RPM CentOS Stream sync/install |
+| 443 | TCP | OUT | `dl.rockylinux.org`, `mirrors.rockylinux.org` | RPM Rocky sync + Rocky install |
+| 443 | TCP | OUT | `repo.almalinux.org`, `mirrors.almalinux.org` | AlmaLinux sync + AlmaLinux install |
+| 443 | TCP | OUT | `cdn.redhat.com` | RHEL subscription sync + install |
 | 443 | TCP | OUT | `dl.fedoraproject.org` | RPM Fedora/EPEL sync |
 | 443 | TCP | OUT | `registry-1.docker.io`, `auth.docker.io`, `index.docker.io`, `production.cloudflare.docker.com` | Docker sync |
 | 443 | TCP | OUT | `pypi.org`, `files.pythonhosted.org` | pip sync |
 | 443 | TCP | OUT | `registry.npmjs.org` | npm sync |
-| 443 | TCP | OUT | `registry-1.docker.io`, `auth.docker.io` | Install: `docker pull registry:2` |
+| 443 | TCP | OUT | `registry-1.docker.io`, `auth.docker.io` | Install: `docker/podman pull registry:2` (container backend) |
 | 443 | TCP | OUT | `registry.npmjs.org` | Install: `npm install -g verdaccio` |
 | 443 | TCP | OUT | `pypi.org`, `files.pythonhosted.org` | Install: `pip install pypiserver` |
 | 53 | UDP | OUT | DNS server | All hostname resolution |
@@ -234,8 +283,10 @@ If the mirror server has no internet access at all:
    # Then on the air-gapped server: dpkg -i *.deb
 
    # RHEL/Rocky (on a connected machine):
-   dnf download --resolve nginx createrepo_c nodejs npm python3 python3-pip wget curl rsync
+   dnf download --resolve nginx createrepo_c yum-utils python3 python3-pip wget curl rsync cronie \
+       policycoreutils-python-utils nodejs npm podman docker-distribution
    # Then on the air-gapped server: dnf localinstall *.rpm
+   # Note: docker-distribution may not exist on RHEL 9 — skip it; podman will be the container backend.
    ```
 
 2. Install `verdaccio`, `pypiserver`, and `registry:2` from offline sources:

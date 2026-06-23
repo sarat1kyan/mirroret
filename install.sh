@@ -380,9 +380,15 @@ install_system_packages() {
     else
         # policycoreutils-python-utils provides semanage for SELinux context labelling.
         local rhel_pkgs=(createrepo_c yum-utils nginx wget curl rsync cronie python3 python3-pip policycoreutils-python-utils)
-        # nodejs and npm for Verdaccio; available in AppStream on RHEL 8/9.
-        [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && rhel_pkgs+=(nodejs npm)
         xrun ${PKG_MGR_INSTALL} "${rhel_pkgs[@]}"
+        # nodejs and npm: in AppStream on RHEL 8/9. RHEL 8 may need the module stream enabled first.
+        if [[ "${MIRRORET_ENABLE_NPM}" == "1" ]]; then
+            if ! ${PKG_MGR_INSTALL} nodejs npm 2>/dev/null; then
+                info "nodejs install failed — trying AppStream module enable..."
+                dnf module enable nodejs -y 2>/dev/null || true
+                xrun ${PKG_MGR_INSTALL} nodejs npm
+            fi
+        fi
         if [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]]; then
             # docker-distribution (native registry) is in RHEL 8/Rocky 8 extras.
             # On RHEL 9/Rocky 9 it may not be available — fall back to container backend.

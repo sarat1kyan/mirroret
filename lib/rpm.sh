@@ -42,6 +42,14 @@ LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-redhat-\$(date +%Y%m%d-%H%M%S).log"
 mkdir -p "\$LOG_DIR"
 
+# Verify required tools are present before starting.
+for _cmd in reposync ${createrepo_cmd}; do
+    if ! command -v "\$_cmd" &>/dev/null; then
+        echo "ERROR: \$_cmd not found. Install yum-utils and createrepo_c, then re-run." | tee -a "\$LOG_FILE"
+        exit 1
+    fi
+done
+
 echo "Starting RHEL repository sync: \$(date)" | tee -a "\$LOG_FILE"
 
 RHEL_VER="${rhel_ver}"
