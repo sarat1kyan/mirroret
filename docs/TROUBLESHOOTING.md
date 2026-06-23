@@ -12,10 +12,13 @@ sudo ./install.sh --status
 # nginx config test:
 sudo nginx -t
 
-# Check service logs:
+# Recent logs:
 journalctl -u nginx -n 50 --no-pager
 journalctl -u pypiserver -n 50 --no-pager
 journalctl -u verdaccio -n 50 --no-pager
+
+# Sync logs:
+ls -lth /srv/mirroret/logs/
 ```
 
 ---
@@ -25,32 +28,43 @@ journalctl -u verdaccio -n 50 --no-pager
 ### nginx fails to start
 
 ```bash
-sudo nginx -t          # check config syntax
+sudo nginx -t           # check config syntax
 sudo journalctl -u nginx -n 100 --no-pager
 ```
 
 Common causes:
-- Port conflict: another process is using port 8080
+
+- **Port conflict:** another process is already using port 8080.
   ```bash
   ss -tlnp | grep 8080
+  kill -9 $(ss -tlnp | grep :8080 | awk '{print $6}' | cut -d= -f2 | cut -d, -f1)
   ```
-- Config syntax error: check the output of `nginx -t`
-- Missing directory: the `root` or `alias` path doesn't exist
+- **Config syntax error:** check `nginx -t` output.
+- **Missing directory:** the `root` or `alias` path doesn't exist yet (run the sync first).
   ```bash
-  ls -la /srv/mirroret/debian/approved
+  ls -la /srv/mirroret/debian/
   ```
 
-### nginx returns 403
+### nginx returns 403 Forbidden
 
-Check directory permissions and SELinux (RHEL):
 ```bash
 ls -la /srv/mirroret/
-# Fix permissions:
-chmod 755 /srv/mirroret /srv/mirroret/debian /srv/mirroret/debian/approved
+chmod 755 /srv/mirroret /srv/mirroret/debian /srv/mirroret/debian/mirror
 
 # SELinux (RHEL only):
 semanage fcontext -a -t httpd_sys_content_t '/srv/mirroret(/.*)?'
 restorecon -Rv /srv/mirroret
+```
+
+### nginx returns 502 Bad Gateway for /pip/ or /npm/
+
+The backend service (pypiserver on 8081 or Verdaccio on 4873) is not running.
+
+```bash
+systemctl status pypiserver
+systemctl status verdaccio
+systemctl restart pypiserver
+systemctl restart verdaccio
 ```
 
 ---
@@ -60,44 +74,48 @@ restorecon -Rv /srv/mirroret
 ### apt-mirror sync fails
 
 ```bash
-# Check the log:
+# Check the sync log:
 ls -lt /srv/mirroret/logs/
-tail -100 /srv/mirroret/logs/sync-debian-*.log
+tail -100 /srv/mirroret/logs/sync-apt-*.log
 
-# Common causes:
-# - No internet access from the mirror server
+# Test internet connectivity from the mirror server:
 curl -I http://archive.ubuntu.com/ubuntu/
 
-# - Insufficient disk space
+# Insufficient disk space:
 df -h /srv/mirroret
 
-# - Wrong base_path in mirror.list
+# Wrong base_path in mirror.list:
 cat /etc/apt/mirror.list
 ```
 
 ### Clients get "NO_PUBKEY" errors
 
-The repository is not signed or the keyring is not distributed to clients.
+The repository is not signed or the keyring has not been distributed to clients.
 
 ```bash
-# Option 1: configure GPG signing (production)
-# See docs/SECURITY.md
+# Option 1: configure GPG signing (production):
+sudo ./install.sh --gpg-auto
+# Then distribute the key — see docs/SECURITY.md.
 
-# Option 2: use insecure mode (lab only)
-MIRRORET_APT_INSECURE=1 sudo ./install.sh
+# Option 2: insecure mode (lab only):
+sudo MIRRORET_APT_INSECURE=1 ./install.sh
 ```
 
 ### apt update fails on clients
 
 ```bash
-# On the client:
-sudo apt update 2>&1 | head -20
+# On the client, check the error:
+sudo apt update 2>&1 | head -30
 
-# Check the mirror is accessible:
-curl http://<mirror-ip>:8080/debian/mirror/dists/jammy/Release
+# Verify the mirror is reachable from the client:
+curl http://<mirror-ip>:8080/ubuntu/dists/jammy/Release
 
-# Verify the client sources.list:
+# Check the sources.list entry:
 cat /etc/apt/sources.list.d/mirroret.list
+
+# The path must match the nginx /ubuntu alias.
+# If the path is wrong, regenerate client configs:
+sudo ./install.sh --check
 ```
 
 ---
@@ -107,25 +125,25 @@ cat /etc/apt/sources.list.d/mirroret.list
 ### reposync fails
 
 ```bash
-# Check log:
+# Check the sync log:
 tail -100 /srv/mirroret/logs/sync-redhat-*.log
 
 # Verify reposync is installed:
-which reposync || dnf install yum-utils
+which reposync || dnf install -y yum-utils
 
-# Check repo configuration:
-dnf repolist
+# Check what repos are configured:
+dnf repolist -v
 ```
 
 ### Clients report GPG key errors
 
 ```bash
-# Option 1: configure gpgkey URL (production)
-MIRRORET_RPM_GPGKEY_URL=http://<mirror-ip>:8080/config/RPM-GPG-KEY-mirroret \
-    sudo ./install.sh
+# Option 1: set the key URL in the repo config:
+sudo MIRRORET_RPM_GPGKEY_URL=http://<mirror-ip>:8080/config/GPG-KEY.asc \
+    ./install.sh --gpg-auto
 
-# Option 2: insecure mode (lab only)
-MIRRORET_RPM_INSECURE=1 sudo ./install.sh
+# Option 2: insecure mode (lab only):
+sudo MIRRORET_RPM_INSECURE=1 ./install.sh
 ```
 
 ---
@@ -135,46 +153,51 @@ MIRRORET_RPM_INSECURE=1 sudo ./install.sh
 ### pypiserver fails to start
 
 ```bash
-journalctl -u pypiserver -n 50 --no-pager
+journalctl -u pypiserver -n 100 --no-pager
 
-# Check if port is in use:
+# Port in use:
 ss -tlnp | grep 8081
 
-# Check the mirroret-pip user exists:
+# User does not exist:
 id mirroret-pip
 
-# Check permissions on pip directory:
+# Permissions on pip directory:
 ls -la /srv/mirroret/pip/
+
+# Check the ExecStart path points to a valid binary:
+systemctl cat pypiserver | grep ExecStart
+which pypi-server
 ```
 
 ### pip install fails on clients
 
 ```bash
-# Test the index directly:
+# Test the index endpoint:
 curl http://<mirror-ip>:8081/simple/
 
-# Verify pip.conf on client:
+# Check pip config on client:
 cat ~/.pip/pip.conf
-# or
+# or:
 cat /etc/pip.conf
 
-# Test with explicit index:
-pip install requests --index-url http://<mirror-ip>:8081/simple/ --trusted-host <mirror-ip>
+# Test with explicit flags:
+pip install requests \
+    --index-url http://<mirror-ip>:8081/simple/ \
+    --trusted-host <mirror-ip>
 ```
 
 ---
 
 ## Docker registry
 
-### Registry container not starting
+### Container-based registry not starting
 
 ```bash
 docker ps -a --filter name=mirroret-registry
 docker logs mirroret-registry
 
-# Recreate if necessary:
+# Recreate if needed:
 docker rm mirroret-registry
-# Then re-run install.sh or manually:
 docker run -d \
     --name mirroret-registry \
     --restart=always \
@@ -184,17 +207,35 @@ docker run -d \
     registry:2
 ```
 
-### Clients get TLS errors when pulling images
+### Native registry (docker-distribution) fails on RHEL
 
 ```bash
-# Option 1: configure TLS (production)
-# See docs/SECURITY.md for TLS certificate setup.
+journalctl -u docker-distribution -n 100 --no-pager
+cat /etc/docker-distribution/registry/config.yml
+ls -la /srv/mirroret/docker/registry/
+systemctl restart docker-distribution
+```
 
-# Option 2: insecure mode (lab only)
-MIRRORET_DOCKER_INSECURE=1 sudo ./install.sh
-# Then on clients, add to /etc/docker/daemon.json:
-# {"insecure-registries": ["<mirror-ip>:5000"]}
-# sudo systemctl restart docker
+### Native registry (docker-registry) fails on Debian
+
+```bash
+journalctl -u docker-registry -n 100 --no-pager
+cat /etc/docker/registry/config.yml
+systemctl restart docker-registry
+```
+
+### Clients get TLS errors pulling images
+
+```bash
+# Option 1: configure TLS on nginx (preferred):
+sudo ./install.sh --tls-self-signed
+# Then distribute the cert — see docs/SECURITY.md.
+
+# Option 2: insecure registry (lab only):
+sudo MIRRORET_DOCKER_INSECURE=1 ./install.sh
+# On each client, add to /etc/docker/daemon.json:
+#   {"insecure-registries": ["<mirror-ip>:5000"]}
+# Then: sudo systemctl restart docker
 ```
 
 ### Image push to registry fails
@@ -206,8 +247,14 @@ curl http://localhost:5000/v2/
 # Check storage permissions:
 ls -la /srv/mirroret/docker/registry/
 
-# View detailed registry logs:
+# Container logs:
 docker logs -f mirroret-registry
+
+# Native RHEL logs:
+journalctl -u docker-distribution -f
+
+# Native Debian logs:
+journalctl -u docker-registry -f
 ```
 
 ---
@@ -217,16 +264,22 @@ docker logs -f mirroret-registry
 ### Verdaccio fails to start
 
 ```bash
-journalctl -u verdaccio -n 50 --no-pager
+journalctl -u verdaccio -n 100 --no-pager
 
-# Check if the mirroret-npm user exists:
+# User does not exist:
 id mirroret-npm
 
-# Check the htpasswd file exists (must be present even if empty):
+# htpasswd file must exist (even if empty):
 ls -la /etc/verdaccio/htpasswd
+touch /etc/verdaccio/htpasswd
+chown mirroret-npm: /etc/verdaccio/htpasswd
 
-# Check config:
-verdaccio --config /etc/verdaccio/config.yaml --dry-run 2>&1 || true
+# Config syntax check:
+verdaccio --config /etc/verdaccio/config.yaml 2>&1 | head -20
+
+# Check the ExecStart binary:
+systemctl cat verdaccio | grep ExecStart
+which verdaccio
 ```
 
 ### npm install fails on clients
@@ -244,49 +297,33 @@ npm install express --registry http://<mirror-ip>:4873/
 
 ---
 
-## Installation rollback
-
-If the installation left the system in a bad state:
-
-```bash
-# List available backups:
-sudo ./install.sh --list-backups
-
-# Roll back:
-sudo ./install.sh --rollback <backup-id>
-
-# After rollback, verify:
-sudo nginx -t
-sudo systemctl status nginx pypiserver verdaccio
-```
-
----
-
 ## TLS
 
-### nginx HTTPS listener returns SSL handshake error
+### nginx HTTPS listener: SSL handshake error
 
 ```bash
-# Verify the cert and key match:
+# Verify the cert and key are a matched pair:
 openssl x509 -noout -modulus -in /etc/mirroret/tls/cert.pem | md5sum
 openssl rsa  -noout -modulus -in /etc/mirroret/tls/key.pem  | md5sum
-# Both hashes must be identical.
+# Both hashes must match.
 
-# Check the nginx TLS block was appended:
+# Check the TLS server block was appended to the nginx config:
 grep -n "ssl_certificate" /etc/nginx/sites-available/mirroret-unified \
-  || grep -n "ssl_certificate" /etc/nginx/conf.d/mirroret-unified.conf
+  2>/dev/null || \
+grep -n "ssl_certificate" /etc/nginx/conf.d/mirroret-unified.conf
 
 # Verify the port is open:
 ss -tlnp | grep 8443
 ```
 
-### Clients show "certificate verify failed" for self-signed cert
+### Clients show "certificate verify failed" for a self-signed cert
 
-The self-signed CA must be imported on clients. See [SECURITY.md](SECURITY.md).
+The cert's CA must be imported on the client. See [SECURITY.md](SECURITY.md).
 
 ```bash
-# Check cert details:
-openssl x509 -text -noout -in /etc/mirroret/tls/cert.pem | grep -E "Subject|SAN|Not"
+# Check what the cert says:
+openssl x509 -text -noout -in /etc/mirroret/tls/cert.pem \
+    | grep -E "Subject|DNS:|IP:|Not "
 ```
 
 ---
@@ -296,14 +333,14 @@ openssl x509 -text -noout -in /etc/mirroret/tls/cert.pem | grep -E "Subject|SAN|
 ### GPG key generation fails
 
 ```bash
-# Ensure gpg is installed:
+# Check gpg is installed:
 gpg --version
 
-# Check the GPG homedir is accessible:
-ls -la /etc/mirroret/gnupg
+# Check the homedir is accessible:
+ls -la /etc/mirroret/gnupg/
 
 # Run with DEBUG for detailed output:
-LOG_LEVEL=DEBUG MIRRORET_GPG_AUTO=1 sudo ./install.sh
+LOG_LEVEL=DEBUG MIRRORET_GPG_AUTO=1 sudo ./install.sh --dry-run
 ```
 
 ### APT clients get "NO_PUBKEY" after GPG auto-provision
@@ -314,115 +351,124 @@ The key was generated but not distributed to clients.
 # Run the distribution script on each client:
 bash <(curl -fsSL http://<mirror-ip>:8080/config/import-mirroret-gpg-key.sh)
 
-# Or manually copy the binary keyring:
-sudo wget http://<mirror-ip>:8080/config/mirroret.gpg \
-    -O /etc/apt/keyrings/mirroret.gpg
+# Or manually:
+sudo curl -fsSL http://<mirror-ip>:8080/config/mirroret.gpg \
+    -o /etc/apt/keyrings/mirroret.gpg
+sudo chmod 644 /etc/apt/keyrings/mirroret.gpg
 ```
 
 ---
 
 ## Approval workflow
 
-### `--list-staging` shows nothing but sync ran
+### `--list-staging` shows nothing but the sync ran
 
-Check the staging directory for the correct location:
+Check the staging directory:
 
 ```bash
 ls /srv/mirroret/staging/pip/
 ls /srv/mirroret/staging/npm/
 ```
 
-If empty, verify the sync script was regenerated with approval mode enabled:
+If both are empty, verify the sync script targets staging:
 
 ```bash
 grep -i "staging" /srv/mirroret/scripts/sync-pip-packages.sh
+# Should see: DEST_DIR=".../staging/pip"
 ```
 
-If the script points to `pip/approved` instead of `staging/pip`, re-run install with `MIRRORET_APPROVAL_ENABLED=1`.
+If the script targets `pip/approved` instead of `staging/pip`, the install was
+run without approval mode. Re-run:
+
+```bash
+sudo MIRRORET_APPROVAL_ENABLED=1 ./install.sh
+```
 
 ### Packages approved but pypiserver returns 404
 
-pypiserver serves from `approved/pip/` when approval is enabled. Verify the
-unit file points to the correct directory:
+pypiserver serves from `approved/pip/` when approval is enabled.
+Verify the unit file:
 
 ```bash
 systemctl cat pypiserver | grep ExecStart
 # Should contain: .../approved/pip
 ```
 
+If it points to the wrong path, re-run install with `MIRRORET_APPROVAL_ENABLED=1`.
+
 ---
 
-## APT mirror / debmirror
+## <a name="debmirror-gpg"></a>APT / debmirror
 
-### <a name="debmirror-gpg"></a>debmirror fails with GPG errors
+### debmirror fails with GPG errors
 
 ```
 GPG error: ... NO_PUBKEY ...
 ```
 
-debmirror requires the Ubuntu archive keyring to verify downloaded packages.
+debmirror requires the Ubuntu archive keyring to verify packages.
 
 ```bash
 # Install the keyring:
 sudo apt-get install -y ubuntu-keyring
 
-# Verify the keyring file exists:
+# Verify the file exists:
 ls /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
-# Re-run the debmirror sync script:
+# Re-run the sync:
 sudo /srv/mirroret/scripts/sync-apt-debmirror.sh
 ```
 
-If the keyring file is in a different path on your system, update the
-`KEYRING_FILE` variable in the generated sync script.
+If the keyring is at a different path, edit the `KEYRING_FILE` variable in the sync script.
 
 ### apt-mirror not available on Debian 12
 
-Debian 12 (Bookworm) removed `apt-mirror` from its repos. mirroret will
-automatically fall back to `apt-mirror2` (pip) or `debmirror`.
-
+Debian 12 removed `apt-mirror` from its repos. mirroret falls back automatically.
 Force a specific tool if needed:
 
 ```bash
 MIRRORET_APT_MIRROR_TOOL=debmirror sudo ./install.sh
 ```
 
----
-
-## Native Docker registry
-
-### docker-distribution service fails on RHEL
+### Unsure which APT tool is in use
 
 ```bash
-# Check service logs:
-journalctl -u docker-distribution -n 50 --no-pager
-
-# Check the config file:
-cat /etc/docker-distribution/registry/config.yml
-
-# Verify storage directory:
-ls -la /srv/mirroret/docker/registry/
+grep "_run_step.*apt" /srv/mirroret/scripts/sync-all.sh
 ```
 
-### docker-registry service fails on Debian
-
-```bash
-journalctl -u docker-registry -n 50 --no-pager
-cat /etc/docker/registry/config.yml
-```
+The second argument is the tool or script that will be called.
 
 ---
 
-## Common errors
+## Installation rollback
+
+```bash
+# List available backups:
+sudo ./install.sh --list-backups
+
+# Roll back:
+sudo ./install.sh --rollback <backup-id>
+
+# Verify after rollback:
+sudo nginx -t
+sudo systemctl status nginx pypiserver verdaccio
+sudo ./install.sh --check
+```
+
+---
+
+## Common error table
 
 | Error | Likely cause | Fix |
-|-------|-------------|-----|
+|---|---|---|
 | `Permission denied` | Not running as root | `sudo ./install.sh` |
-| `nginx: [emerg] bind() failed` | Port in use | `ss -tlnp \| grep <port>` |
-| `NO_PUBKEY` on clients | Missing GPG key | See SECURITY.md |
-| `No space left on device` | Disk full | Free space or expand volume |
+| `nginx: [emerg] bind() failed` | Port already in use | `ss -tlnp \| grep <port>` |
+| `NO_PUBKEY` on APT clients | Missing GPG key distribution | See [SECURITY.md](SECURITY.md) |
+| `No space left on device` | Disk full | `df -h /srv/mirroret` — free space or expand volume |
 | `Could not connect to server` | nginx not running | `systemctl start nginx` |
 | `Container already exists` | Re-run after partial failure | `docker rm mirroret-registry` |
-| `SSL handshake failed` | Missing/wrong cert | See TLS section above |
+| `SSL: CERTIFICATE_VERIFY_FAILED` | Self-signed cert not imported | See TLS section above |
 | `debmirror: GPG error` | Missing Ubuntu keyring | `apt-get install ubuntu-keyring` |
-| Staging shows packages but approval says none | Wrong path in sync script | Reinstall with `MIRRORET_APPROVAL_ENABLED=1` |
+| `pypiserver 404` after approval | Wrong serve dir in unit | Reinstall with `MIRRORET_APPROVAL_ENABLED=1` |
+| `npm: E401 Unauthorized` | Verdaccio auth required | `npm login --registry http://<ip>:4873/` or set `MIRRORET_NPM_ALLOW_ANON_PUBLISH=1` |
+| `docker-distribution: failed to start` | Config or permissions issue | `journalctl -u docker-distribution -n 50` |
