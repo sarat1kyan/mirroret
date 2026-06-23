@@ -383,3 +383,36 @@ teardown() {
 @test "config example: MIRRORET_APT_MIRROR_TOOL is documented" {
     grep -q "MIRRORET_APT_MIRROR_TOOL" "${SCRIPT_DIR}/config/mirroret.conf.example"
 }
+
+# ── ensure_approval_dirs DRY_RUN ──────────────────────────────────────────────
+
+@test "approval: ensure_approval_dirs dry-run does not create dirs" {
+    MIRRORET_APPROVAL_ENABLED=1
+    DRY_RUN=1
+    ensure_approval_dirs
+    [[ ! -d "${MIRRORET_BASE_DIR}/staging/pip" ]]
+}
+
+# ── APT resolved tool export ──────────────────────────────────────────────────
+
+@test "apt: configure_apt_mirror exports MIRRORET_APT_RESOLVED_TOOL (debmirror)" {
+    MIRRORET_APT_MIRROR_TOOL=debmirror
+    DISTRO_TYPE=debian
+    MIRRORET_UBUNTU_CODENAME=jammy
+    DRY_RUN=1
+    configure_apt_mirror "dryrun-backup-id"
+    [[ "${MIRRORET_APT_RESOLVED_TOOL}" == "debmirror" ]]
+}
+
+# ── APT_RESOLVED_TOOL drives correct sync command ─────────────────────────────
+
+@test "apt: MIRRORET_APT_RESOLVED_TOOL defaults to empty" {
+    [[ -z "${MIRRORET_APT_RESOLVED_TOOL:-}" ]]
+}
+
+@test "apt: _apt_resolve_tool apt-mirror returns apt-mirror or fallback" {
+    # Returns apt-mirror if installed, otherwise debmirror/apt-mirror2 fallback.
+    run _apt_resolve_tool "apt-mirror"
+    [[ "${status}" -eq 0 ]]
+    [[ "${output}" == "apt-mirror" || "${output}" == "apt-mirror2" || "${output}" == "debmirror" ]]
+}

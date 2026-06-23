@@ -419,6 +419,15 @@ write_master_sync_script() {
         return 0
     fi
 
+    # Choose the APT sync command based on whichever tool was resolved.
+    # MIRRORET_APT_RESOLVED_TOOL is exported by configure_apt_mirror().
+    local apt_sync_cmd
+    case "${MIRRORET_APT_RESOLVED_TOOL:-apt-mirror}" in
+        debmirror)   apt_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-apt-debmirror.sh" ;;
+        apt-mirror2) apt_sync_cmd="/usr/local/bin/apt-mirror2" ;;
+        *)           apt_sync_cmd="/usr/bin/apt-mirror" ;;
+    esac
+
     cat > "$sync_script" <<SYNC_EOF
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -442,7 +451,7 @@ _run_step() {
     fi
 }
 
-_run_step "apt-mirror"  "/usr/bin/apt-mirror"
+_run_step "apt"         "${apt_sync_cmd}"
 _run_step "RHEL repos"  "\${BASE_DIR}/scripts/sync-redhat-repos.sh"
 _run_step "pip"         "\${BASE_DIR}/scripts/sync-pip-packages.sh"
 _run_step "Docker"      "\${BASE_DIR}/scripts/sync-docker-images.sh"

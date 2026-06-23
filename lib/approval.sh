@@ -188,6 +188,10 @@ exclude_npm_package() {
 ensure_approval_dirs() {
     [[ "${MIRRORET_APPROVAL_ENABLED}" == "1" ]] || return 0
     local base_dir="${MIRRORET_BASE_DIR}"
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would create approval dirs under ${base_dir}/{staging,approved}"
+        return 0
+    fi
     for d in \
         "${base_dir}/staging/pip" \
         "${base_dir}/staging/npm" \
