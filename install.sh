@@ -378,15 +378,21 @@ install_system_packages() {
         [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && debian_pkgs+=(nodejs npm)
         xrun ${PKG_MGR_INSTALL} "${debian_pkgs[@]}"
     else
-        local rhel_pkgs=(createrepo_c yum-utils nginx wget curl rsync cronie python3 python3-pip)
+        # policycoreutils-python-utils provides semanage for SELinux context labelling.
+        local rhel_pkgs=(createrepo_c yum-utils nginx wget curl rsync cronie python3 python3-pip policycoreutils-python-utils)
         # nodejs and npm for Verdaccio; available in AppStream on RHEL 8/9.
         [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && rhel_pkgs+=(nodejs npm)
-        # Native Docker registry for RHEL.
-        if [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && \
-           [[ "${MIRRORET_DOCKER_BACKEND}" == "native" || "${MIRRORET_DOCKER_BACKEND}" == "auto" ]]; then
-            rhel_pkgs+=(docker-distribution)
-        fi
         xrun ${PKG_MGR_INSTALL} "${rhel_pkgs[@]}"
+        if [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]]; then
+            # docker-distribution (native registry) is in RHEL 8/Rocky 8 extras.
+            # On RHEL 9/Rocky 9 it may not be available — fall back to container backend.
+            ${PKG_MGR_INSTALL} docker-distribution 2>/dev/null \
+                || warn "docker-distribution not in repos; container backend will be used."
+            # Podman is the RHEL-native container runtime (BaseOS on RHEL 8/9).
+            # Install as the container backend fallback when docker-distribution is unavailable.
+            # This is a no-op on systems that already have Docker or Podman installed.
+            ${PKG_MGR_INSTALL} podman 2>/dev/null || true
+        fi
         xrun systemctl enable --now crond || xrun systemctl enable --now cron || true
     fi
 
