@@ -404,15 +404,26 @@ check_outbound_https() {
         warning "curl missing — cannot probe."
         return
     fi
-    local hosts=()
-    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && hosts+=(pypi.org files.pythonhosted.org)
-    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && hosts+=(registry.npmjs.org)
-    [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && hosts+=(registry-1.docker.io auth.docker.io)
-    for h in "${hosts[@]}"; do
-        if curl --max-time 8 -fsS -o /dev/null "https://${h}/" 2>/dev/null; then
-            pass "HTTPS reachable: ${h}"
+    # host|path|expected_codes — many upstreams legitimately return 401 or
+    # 404 at /, so we treat ANY HTTP response (not just 2xx) as success.
+    # 000 = TLS/network failure, which is what we actually want to flag.
+    local targets=()
+    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && targets+=("pypi.org|/" "files.pythonhosted.org|/")
+    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && targets+=("registry.npmjs.org|/")
+    # Docker Hub registry returns 401 at /v2/ and 404 at /. Both prove it's
+    # reachable. Auth service returns 404 at / but 400 at /token (no args).
+    [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && targets+=("registry-1.docker.io|/v2/" "auth.docker.io|/token")
+
+    local t host path code
+    for t in "${targets[@]}"; do
+        host="${t%%|*}"
+        path="${t#*|}"
+        code="$(curl --max-time 8 -sS -o /dev/null -w '%{http_code}' \
+            "https://${host}${path}" 2>/dev/null)"
+        if [[ -n "$code" && "$code" != "000" ]]; then
+            pass "HTTPS reachable: ${host}${path} (HTTP ${code})"
         else
-            failure "HTTPS unreachable: ${h}"
+            failure "HTTPS unreachable: ${host}${path} (no response)"
             hint "Check proxy, DNS, and CA trust. docs/PROXY_AND_CA.md has per-tool config."
         fi
     done
