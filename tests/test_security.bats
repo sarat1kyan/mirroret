@@ -72,12 +72,29 @@ teardown() {
     [[ "$output" == *"SECURITY WARNING"* ]]
 }
 
-@test "APT client config: keyring mode uses signed-by" {
+@test "APT client config: resign+keyring mode uses signed-by" {
+    # signed-by= is now only emitted when MIRRORET_APT_RESIGN=1 AND a
+    # keyring path is set. Without resign, the upstream signature is
+    # what the client validates, so signed-by is intentionally absent.
     MIRRORET_APT_INSECURE=0
+    MIRRORET_APT_RESIGN=1
     MIRRORET_APT_KEYRING="/etc/apt/keyrings/test.gpg"
     generate_apt_client_config "${TMPDIR}/signed.list"
     grep -q "signed-by=/etc/apt/keyrings/test.gpg" "${TMPDIR}/signed.list"
-    unset MIRRORET_APT_KEYRING
+    unset MIRRORET_APT_KEYRING MIRRORET_APT_RESIGN
+}
+
+@test "APT client config: default (no resign) does NOT emit signed-by=mirroret.gpg" {
+    # Regression: mirroret used to emit signed-by pointing at its own key
+    # for upstream-mirrored repos, which made apt update fail because the
+    # Release file is signed by the upstream archive, not by mirroret.
+    MIRRORET_APT_INSECURE=0
+    MIRRORET_APT_RESIGN=0
+    MIRRORET_APT_KEYRING="/etc/apt/keyrings/mirroret.gpg"
+    generate_apt_client_config "${TMPDIR}/default.list"
+    run grep -c "signed-by=/etc/apt/keyrings/mirroret.gpg" "${TMPDIR}/default.list"
+    [ "$output" = "0" ]
+    unset MIRRORET_APT_KEYRING MIRRORET_APT_RESIGN
 }
 
 # ── RPM ───────────────────────────────────────────────────────────────────────

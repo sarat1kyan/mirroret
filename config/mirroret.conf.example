@@ -143,25 +143,74 @@
 # Default: 0 (off)
 #MIRRORET_APPROVAL_ENABLED=0
 
-# ── Docker registry backend ───────────────────────────────────────────────────
+# ── Docker registry backend / mode ────────────────────────────────────────────
 
-# How to run the Docker registry.
+# How to RUN the registry.
 #   auto      — use OS package if available, fall back to container (default)
 #   native    — OS package: docker-distribution (RHEL) or docker-registry (Debian)
 #   container — registry:2 container via Docker or Podman
 #MIRRORET_DOCKER_BACKEND=auto
 
-# Path to a file listing images to pre-seed (one per line, # for comments).
-# When unset, a built-in default list is used (ubuntu, debian, nginx, etc.).
+# Operating mode for the registry.
+#   cache  — pull-through proxy (default). The registry transparently
+#            forwards and caches every layer pulled by a client. The
+#            registry REJECTS pushes in this mode; no pre-seed sync
+#            script is generated.
+#   hosted — local registry. Accepts docker push from operators and
+#            sync-docker-images.sh. No upstream proxy.
+#MIRRORET_DOCKER_MODE=cache
+
+# Upstream registry for cache mode.
+# Default: https://registry-1.docker.io (Docker Hub).
+#MIRRORET_DOCKER_UPSTREAM_URL=https://registry-1.docker.io
+
+# Path to a file listing images to pre-seed in hosted mode
+# (one per line, # for comments).
+# When unset, a small built-in default list is used.
 #MIRRORET_DOCKER_IMAGES_FILE=/etc/mirroret/docker-images.txt
 
-# ── APT mirror tool ───────────────────────────────────────────────────────────
+# ── APT mirror tool / flavor / upstream ──────────────────────────────────────
 
-# Which tool to use for mirroring Ubuntu/Debian APT repositories.
-#   auto       — try apt-mirror, then apt-mirror2 (pip), then debmirror (default)
+# Which tool to use for mirroring APT repositories.
+#   auto       — try apt-mirror, then apt-mirror2 (pip), then debmirror
 #   apt-mirror — use apt-mirror (classic)
-#   debmirror  — use debmirror (required on Debian 12+ where apt-mirror is gone)
+#   debmirror  — use debmirror (required on Debian 12+)
 #MIRRORET_APT_MIRROR_TOOL=auto
+
+# Which APT family to mirror.
+#   auto    — derive from /etc/os-release on the mirror server (default)
+#   ubuntu  — force Ubuntu upstream (archive.ubuntu.com)
+#   debian  — force Debian upstream (deb.debian.org + security.debian.org)
+#MIRRORET_APT_FLAVOR=auto
+
+# Override the upstream archive host. Useful for regional mirrors or
+# internal redistributors.
+#MIRRORET_APT_UPSTREAM_HOST=archive.ubuntu.com
+#MIRRORET_APT_SECURITY_HOST=security.debian.org
+
+# Override the components list. Defaults to:
+#   Ubuntu: "main restricted universe multiverse"
+#   Debian: "main contrib non-free non-free-firmware"
+#MIRRORET_APT_COMPONENTS="main contrib non-free non-free-firmware"
+
+# Mirroret re-signs the mirrored Release files with its own GPG key.
+# DEFAULT: 0 (no re-sign — client configs do NOT emit signed-by=mirroret.gpg).
+# Set to 1 ONLY if you have set up a re-sign workflow yourself.
+#MIRRORET_APT_RESIGN=0
+
+# ── RPM flavor / repos ───────────────────────────────────────────────────────
+
+# Directory name under redhat/mirror/ — defaults to OS_ID, so AlmaLinux
+# servers store under almalinux/, Rocky under rocky/, etc.
+#MIRRORET_RPM_FLAVOR=
+
+# Repository list to sync. Defaults vary by flavor.
+# Rocky/Alma 8:   "baseos appstream extras"
+# Rocky/Alma 9:   "baseos appstream"
+# RHEL:           "rhel-9-for-x86_64-baseos-rpms rhel-9-for-x86_64-appstream-rpms"
+# Oracle Linux 9: "ol9_baseos_latest ol9_appstream"
+# Fedora:         "fedora updates"
+#MIRRORET_RPM_REPOS="baseos appstream"
 
 # ── npm extras ────────────────────────────────────────────────────────────────
 
@@ -202,3 +251,13 @@
 # Daily sync hour (0-23, cron).
 # Default: 2
 #MIRRORET_SYNC_HOUR=2
+
+# ── Preflight ────────────────────────────────────────────────────────────────
+
+# Run an optional outbound HTTPS probe during preflight. Off by default
+# to keep `--check` fast and to avoid blocking offline installs.
+#MIRRORET_PREFLIGHT_NETWORK=0
+
+# Optional per-language sync sources.
+#MIRRORET_PIP_PACKAGES_FILE=/etc/mirroret/pip-packages.txt
+#MIRRORET_NPM_PACKAGES_FILE=/etc/mirroret/npm-packages.txt

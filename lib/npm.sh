@@ -224,9 +224,12 @@ _write_npm_sync_script() {
     elif [[ "${allow_anon}" == "1" ]]; then
         publish_block='    tarball=$(ls -t "${WORK_DIR}/"*.tgz 2>/dev/null | head -1)
     if [[ -n "${tarball}" ]]; then
-        npm publish "${tarball}" --registry "${VERDACCIO_URL}" 2>&1 | tee -a "${LOG_FILE}" && \
-            echo "  PUBLISHED: ${package}" | tee -a "${LOG_FILE}" || \
-            echo "  PUBLISH FAILED: ${package}" | tee -a "${LOG_FILE}"
+        if npm publish "${tarball}" --registry "${VERDACCIO_URL}"; then
+            echo "  PUBLISHED: ${package}"
+        else
+            echo "  PUBLISH FAILED: ${package}"
+            failed=$(( failed + 1 ))
+        fi
     fi'
     else
         publish_block='    # Verdaccio requires authentication by default.
@@ -234,9 +237,12 @@ _write_npm_sync_script() {
     # or run: npm login --registry="${VERDACCIO_URL}" before syncing.
     tarball=$(ls -t "${WORK_DIR}/"*.tgz 2>/dev/null | head -1)
     if [[ -n "${tarball}" ]]; then
-        npm publish "${tarball}" --registry "${VERDACCIO_URL}" 2>&1 | tee -a "${LOG_FILE}" && \
-            echo "  PUBLISHED: ${package}" | tee -a "${LOG_FILE}" || \
-            echo "  PUBLISH FAILED (auth required?): ${package}" | tee -a "${LOG_FILE}"
+        if npm publish "${tarball}" --registry "${VERDACCIO_URL}"; then
+            echo "  PUBLISHED: ${package}"
+        else
+            echo "  PUBLISH FAILED (auth required?): ${package}"
+            failed=$(( failed + 1 ))
+        fi
     fi'
     fi
 
@@ -259,7 +265,14 @@ LOG_FILE="\${LOG_DIR}/sync-npm-\$(date +%Y%m%d-%H%M%S).log"
 APPROVAL_MODE="${approval}"
 
 mkdir -p "\$LOG_DIR" "\$STAGING_DIR" "\$WORK_DIR_DEFAULT" "\$APPROVED_DIR"
-echo "Starting npm package sync: \$(date)" | tee -a "\$LOG_FILE"
+exec > >(tee -a "\$LOG_FILE") 2>&1
+
+echo "Starting npm package sync: \$(date)"
+
+if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm not found on this host. Install nodejs + npm and re-run."
+    exit 2
+fi
 
 PACKAGES=(
 ${packages_block}
@@ -275,24 +288,26 @@ fi
 failed=0
 
 for package in "\${PACKAGES[@]}"; do
-    echo "Processing \${package}..." | tee -a "\$LOG_FILE"
+    echo "Processing \${package}..."
     pushd "\${WORK_DIR}" >/dev/null
-    if npm pack "\${package}" 2>&1 | tee -a "\$LOG_FILE"; then
-        echo "  DOWNLOADED: \${package}" | tee -a "\$LOG_FILE"
+    if npm pack "\${package}"; then
+        echo "  DOWNLOADED: \${package}"
 ${publish_block}
     else
-        echo "  DOWNLOAD FAILED: \${package}" | tee -a "\$LOG_FILE"
-        (( failed += 1 )) || true
+        echo "  DOWNLOAD FAILED: \${package}"
+        failed=\$(( failed + 1 ))
     fi
     popd >/dev/null
 done
 
-echo "npm sync completed: \$(date) (\${failed} failures)" | tee -a "\$LOG_FILE"
+echo "npm sync completed: \$(date) (\${failed} failures)"
 if [[ "\${APPROVAL_MODE}" == "1" ]]; then
-    echo "Tarballs in staging: \${STAGING_DIR}" | tee -a "\$LOG_FILE"
-    echo "Approve with: mirroret --approve-all-npm" | tee -a "\$LOG_FILE"
+    echo "Tarballs in staging: \${STAGING_DIR}"
+    echo "Approve with: install.sh --approve-all-npm"
 fi
-exit "\${failed}"
+if [[ "\${failed}" -gt 0 ]]; then
+    exit 1
+fi
 SYNC_SCRIPT
 
     chmod +x "${sync_script}"
