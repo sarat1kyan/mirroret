@@ -362,3 +362,36 @@ EOF
     write_docker_sync_script "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
     grep -q 'exit "${failed}"' "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
 }
+
+# ── Outbound HTTPS probes: don't false-flag healthy upstreams ─────────────────
+
+@test "preflight: outbound probe does NOT use curl -f (would 4xx-flag healthy upstreams)" {
+    # registry-1.docker.io legitimately returns 404 at / and 401 at /v2/,
+    # and auth.docker.io returns 404 at /. curl -f makes those look like
+    # failures. The fix is to read the HTTP code and treat any non-000
+    # response as reachable. Guard against future re-introduction of -f
+    # in the outbound probe.
+    source "${SCRIPT_DIR}/lib/preflight.sh"
+    # The probe helper must not contain ' -f' or '--fail' on the curl line.
+    run declare -f _pf_probe_https
+    [ "$status" -eq 0 ]
+    [[ "$output" != *' -f '* ]]
+    [[ "$output" != *'--fail'* ]]
+}
+
+@test "preflight: outbound probe targets Docker /v2/, not /" {
+    # If we ever probe registry-1.docker.io/ instead of /v2/, the probe
+    # has to treat 404 as success — otherwise the bug we just fixed
+    # comes back. Easier to just target /v2/.
+    source "${SCRIPT_DIR}/lib/preflight.sh"
+    run declare -f _pf_check_outbound_https
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"registry-1.docker.io|/v2/"* ]]
+}
+
+@test "debug script: outbound probe accepts any HTTP code as reachable" {
+    # mirroret-debug.sh check_outbound_https must do the same thing.
+    run grep -E 'curl .* -fsS' "${SCRIPT_DIR}/scripts/mirroret-debug.sh"
+    [ "$status" -ne 0 ]
+    grep -q "registry-1.docker.io|/v2/" "${SCRIPT_DIR}/scripts/mirroret-debug.sh"
+}

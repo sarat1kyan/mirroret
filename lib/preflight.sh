@@ -295,29 +295,52 @@ _pf_check_rhel_subscription() {
     esac
 }
 
+# _pf_probe_https <host> <path> — true if we get ANY HTTP response from the
+# host's TLS endpoint. 200/301/401/403/404 all count as "reachable" — only
+# a TLS handshake failure or connection refusal counts as "unreachable",
+# because some upstreams legitimately serve 401 or 404 at /  (Docker
+# registry returns 401 at /v2/, 404 at /; npm registry-side healthcheck is
+# also picky). We do NOT use curl -f for that reason.
+_pf_probe_https() {
+    local host="$1" path="${2:-/}"
+    local code
+    code="$(curl --max-time 8 -sS -o /dev/null \
+        -w '%{http_code}' "https://${host}${path}" 2>/dev/null)"
+    # 000 = no HTTP response at all (TLS / network failure)
+    [[ -n "$code" && "$code" != "000" ]]
+}
+
 _pf_check_outbound_https() {
-    local hosts=()
-    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && hosts+=(pypi.org)
-    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && hosts+=(registry.npmjs.org)
-    [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && hosts+=(registry-1.docker.io)
-    [[ ${#hosts[@]} -eq 0 ]] && return 0
+    # Each entry is "host|path". Path defaults to / but we override for
+    # endpoints that legitimately don't serve content at /.
+    local targets=()
+    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && targets+=("pypi.org|/")
+    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && targets+=("registry.npmjs.org|/")
+    [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && targets+=("registry-1.docker.io|/v2/")
+    [[ ${#targets[@]} -eq 0 ]] && return 0
 
     if ! check_command curl; then
         warn "curl not available — skipping outbound HTTPS probe."
         return 0
     fi
 
-    local failed=()
-    for h in "${hosts[@]}"; do
-        if ! curl --max-time 8 -fsS -o /dev/null "https://${h}/" 2>/dev/null; then
-            failed+=("$h")
+    local failed=() ok=()
+    local t host path
+    for t in "${targets[@]}"; do
+        host="${t%%|*}"
+        path="${t#*|}"
+        if _pf_probe_https "$host" "$path"; then
+            ok+=("$host")
+        else
+            failed+=("$host")
         fi
     done
     if [[ ${#failed[@]} -gt 0 ]]; then
         warn "Outbound HTTPS check failed for: ${failed[*]}"
         warn "If you are behind a proxy or TLS-inspecting MITM, see docs/PROXY_AND_CA.md."
-    else
-        success "Outbound HTTPS reachable for: ${hosts[*]}"
+    fi
+    if [[ ${#ok[@]} -gt 0 ]]; then
+        success "Outbound HTTPS reachable for: ${ok[*]}"
     fi
 }
 
