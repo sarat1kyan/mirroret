@@ -183,6 +183,12 @@ sudo ./install.sh --exclude-npm oldlib     # decline a staged npm package
 sudo ./install.sh --list-backups
 sudo ./install.sh --rollback <backup-id>
 
+# Uninstall (selective or full):
+sudo ./uninstall.sh --list                # preview, change nothing
+sudo ./uninstall.sh --docker              # remove only the Docker registry
+sudo ./uninstall.sh --pip --npm           # remove pip + npm only
+sudo ./uninstall.sh --all --purge --yes   # full wipe incl. data + GPG
+
 # Development and testing:
 make lint                            # shellcheck install.sh + lib/*.sh + scripts/*.sh
 make test                            # run every BATS file in tests/
@@ -204,6 +210,7 @@ make dry-run                         # run install.sh --dry-run
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Daily ops: sync, approval workflow, Docker backend, disk management |
 | [docs/NATIVE_MODE.md](docs/NATIVE_MODE.md) | Running without Docker: native Linux services on RHEL and Debian |
 | [docs/ROLLBACK.md](docs/ROLLBACK.md) | Backup and rollback procedures |
+| [docs/UNINSTALL.md](docs/UNINSTALL.md) | Selective and full uninstall (`./uninstall.sh`) |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Diagnostic steps for all components |
 | [docs/QUICK-REFERENCE.md](docs/QUICK-REFERENCE.md) | One-page cheat sheet of all common commands |
 | [docs/CLIENT-CONFIGURATION-GUIDE.md](docs/CLIENT-CONFIGURATION-GUIDE.md) | Complete client setup for APT, RPM, pip, npm, Docker |
@@ -290,8 +297,11 @@ mirroret/
 - TLS-inspecting middleboxes that re-sign upstream archive HTTPS will
   cause apt clients to reject the mirrored Release files. There is no
   fix short of an allow-list or manual re-sign. See `docs/PROXY_AND_CA.md`.
-- Clean uninstall is not implemented. `--rollback` restores files but
-  does not remove created users, data directories, or systemd units.
+- Clean uninstall: `./uninstall.sh` (or `./install.sh --uninstall`)
+  removes services, users, configs, and optionally data + GPG. It does
+  NOT remove OS packages like nginx/Docker/Podman that the operator may
+  use for other things — strip those by hand if desired. See
+  [docs/UNINSTALL.md](docs/UNINSTALL.md).
 - Mirroring more than one distro family on a single host concurrently
   (e.g. Rocky AND AlmaLinux) is possible but largely untested — set
   `MIRRORET_RPM_FLAVOR` explicitly per install.

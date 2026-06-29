@@ -62,6 +62,8 @@ source "${SCRIPT_DIR}/lib/tls.sh"
 source "${SCRIPT_DIR}/lib/gpg.sh"
 # shellcheck source=lib/approval.sh
 source "${SCRIPT_DIR}/lib/approval.sh"
+# shellcheck source=lib/uninstall.sh
+source "${SCRIPT_DIR}/lib/uninstall.sh"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
@@ -239,6 +241,17 @@ parse_args() {
             --debug)
                 export LOG_LEVEL=DEBUG
                 ;;
+            --uninstall)
+                # Hand off everything after --uninstall to the uninstaller.
+                shift
+                # --list / --dry-run are safe without root.
+                case " $* " in
+                    *" --list "*|*" --dry-run "*) : ;;
+                    *) require_root ;;
+                esac
+                uninstall_main "$@"
+                exit $?
+                ;;
             --help|-h)
                 usage
                 exit 0
@@ -299,6 +312,8 @@ Options:
   --exclude-pip <n>      Remove a staged pip package (decline it)
   --exclude-npm <n>      Remove a staged npm package (decline it)
   --debug                Enable debug logging
+  --uninstall [opts]     Run the uninstaller. Passes remaining args through
+                         to ./uninstall.sh (see ./uninstall.sh --help).
   --help                 Show this help
 
 Environment variables:
