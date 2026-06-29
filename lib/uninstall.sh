@@ -276,7 +276,10 @@ uninst_remove_file() {
         uninst_skip "${path} (not present)"
         return 0
     fi
-    uninst_do "rm ${path}" rm -f "$path"
+    # `|| true` because the uninstaller's idempotency claim requires that
+    # an immutable-bit / busy-mount / read-only-FS failure on one file
+    # does not abort the rest of the run under set -e.
+    uninst_do "rm ${path}" rm -f "$path" || true
 }
 
 uninst_remove_dir() {
@@ -285,7 +288,7 @@ uninst_remove_dir() {
         uninst_skip "${path} (not a directory)"
         return 0
     fi
-    uninst_do "rm -rf ${path}" rm -rf "$path"
+    uninst_do "rm -rf ${path}" rm -rf "$path" || true
 }
 
 # ── Component: pip / pypiserver ──────────────────────────────────────────────
@@ -414,6 +417,9 @@ uninstall_cron() {
     fi
     local existing
     existing="$(crontab -l 2>/dev/null || true)"
+    # Strip CR so a CRLF-terminated crontab (from a Windows editor or a
+    # round-trip through Outlook) still matches the sentinel via exact-eq.
+    existing="$(printf '%s' "${existing}" | tr -d '\r')"
     if ! printf '%s\n' "${existing}" | grep -qF "${UNINST_CRON_BEGIN}"; then
         uninst_skip "cron (no managed block found)"
         return 0
@@ -433,7 +439,11 @@ uninstall_cron() {
     if [[ -z "${stripped// /}" ]]; then
         crontab -r 2>/dev/null || true
     else
-        printf '%s\n' "${stripped}" | crontab -
+        if ! printf '%s\n' "${stripped}" | crontab -; then
+            warn "[fail] crontab update — managed block left in place. Run: crontab -e"
+            UNINST_FAILED=$(( UNINST_FAILED + 1 ))
+            return 0
+        fi
     fi
     info "[remove] cron managed block"
     UNINST_REMOVED=$(( UNINST_REMOVED + 1 ))
@@ -452,18 +462,42 @@ uninstall_firewall() {
     [[ "${UNINST_T_NPM}"    == "1" ]] && ports+=("${MIRRORET_NPM_PORT}")
     [[ ${#ports[@]} -eq 0 ]] && return 0
 
+    # The installer's lib/firewall.sh installs different RULE SHAPES based
+    # on whether MIRRORET_FIREWALL_SOURCE was set. To actually remove the
+    # rule, we have to delete the same shape — a "delete by port" call
+    # does not match a "rule from <CIDR>" entry, on any of the three
+    # supported firewalls.
+    #
+    # Strategy: try BOTH the source-restricted and the generic forms.
+    # Whichever one matches gets removed; the other is a silent no-op.
+    local source_cidr="${MIRRORET_FIREWALL_SOURCE:-}"
+
     if check_command ufw; then
         for p in "${ports[@]}"; do
-            uninst_do "ufw delete allow ${p}/tcp" ufw delete allow "${p}/tcp" 2>/dev/null || true
+            if [[ -n "$source_cidr" ]]; then
+                uninst_do "ufw delete allow from ${source_cidr} to any port ${p} proto tcp" \
+                    ufw delete allow from "$source_cidr" to any port "$p" proto tcp 2>/dev/null || true
+            fi
+            uninst_do "ufw delete allow ${p}/tcp" \
+                ufw delete allow "${p}/tcp" 2>/dev/null || true
         done
     elif check_command firewall-cmd; then
         for p in "${ports[@]}"; do
-            uninst_do "firewall-cmd remove ${p}/tcp" \
+            if [[ -n "$source_cidr" ]]; then
+                uninst_do "firewall-cmd remove-rich-rule for ${source_cidr}:${p}" \
+                    firewall-cmd --permanent --remove-rich-rule="rule family=ipv4 source address=${source_cidr} port port=${p} protocol=tcp accept" \
+                    2>/dev/null || true
+            fi
+            uninst_do "firewall-cmd remove-port ${p}/tcp" \
                 firewall-cmd --permanent --remove-port="${p}/tcp" 2>/dev/null || true
         done
         uninst_do "firewall-cmd --reload" firewall-cmd --reload 2>/dev/null || true
     elif check_command iptables; then
         for p in "${ports[@]}"; do
+            if [[ -n "$source_cidr" ]]; then
+                uninst_do "iptables -D INPUT -s ${source_cidr} -p tcp --dport ${p}" \
+                    iptables -D INPUT -s "$source_cidr" -p tcp --dport "${p}" -j ACCEPT 2>/dev/null || true
+            fi
             uninst_do "iptables -D INPUT -p tcp --dport ${p}" \
                 iptables -D INPUT -p tcp --dport "${p}" -j ACCEPT 2>/dev/null || true
         done
@@ -631,7 +665,10 @@ uninstall_main() {
             --list)         UNINST_LIST_ONLY=1 ;;
             --base-dir)     shift; MIRRORET_BASE_DIR="$1" ;;
             -h|--help)      _uninstall_usage; return 0 ;;
-            *)              die "Unknown uninstall flag: $1" ;;
+            --check|--validate|--status|--backup-only|--rollback|--list-backups|--no-apt|--no-rpm|--no-pip|--no-docker|--no-npm|--no-firewall|--insecure|--tls-self-signed|--gpg-auto|--approval-mode|--list-staging|--approve-all-pip|--approve-all-npm|--config)
+                die "Flag $1 is an install.sh flag, not an uninstall flag. See ./uninstall.sh --help."
+                ;;
+            *)              die "Unknown uninstall flag: $1. Run ./uninstall.sh --help for the flag list." ;;
         esac
         shift
     done
@@ -640,6 +677,14 @@ uninstall_main() {
         # No component named — default to everything.
         UNINST_T_APT=1; UNINST_T_RPM=1; UNINST_T_PIP=1
         UNINST_T_NPM=1; UNINST_T_DOCKER=1; UNINST_T_COMMON=1
+    fi
+
+    # --purge only takes effect inside the --common path (it's what owns
+    # the data tree, backups, TLS, and GPG). Warn rather than silently
+    # ignoring the flag — the operator clearly wanted data removed.
+    if [[ "${UNINST_PURGE}" == "1" ]] && [[ "${UNINST_T_COMMON}" != "1" ]]; then
+        warn "--purge has no effect without --common or --all (data lives outside per-component scope)."
+        warn "Add --common or --all if you actually want to delete ${MIRRORET_BASE_DIR}."
     fi
 
     section "Mirroret uninstaller"

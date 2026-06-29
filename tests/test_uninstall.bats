@@ -266,3 +266,115 @@ teardown() {
     PATH="${PATH_OLD}"
     rm -rf "$stub"
 }
+
+# ── audit fixes (round 2) ────────────────────────────────────────────────────
+
+@test "uninstall: cron strip handles CRLF line endings" {
+    # A crontab edited on Windows / pulled through Outlook has \r\n.
+    # The exact-match awk strip used to leave the managed block intact;
+    # we now pre-strip \r so it matches.
+    BEGIN="# >>> mirroret managed (do not edit between markers) >>>"
+    END="# <<< mirroret managed <<<"
+    crlf="$(printf 'operator-line\r\n%s\r\n0 2 * * * /srv/mirroret/scripts/sync-all.sh\r\n%s\r\nanother-line\r\n' "$BEGIN" "$END")"
+    cleaned="$(printf '%s' "$crlf" | tr -d '\r')"
+    stripped="$(printf '%s\n' "$cleaned" | awk -v b="$BEGIN" -v e="$END" '
+        $0 == b { skip = 1; next }
+        $0 == e { skip = 0; next }
+        !skip { print }
+    ')"
+    echo "$stripped" | grep -qF "operator-line"
+    echo "$stripped" | grep -qF "another-line"
+    echo "$stripped" | grep -qvF "/srv/mirroret/scripts/sync-all.sh"
+}
+
+@test "uninstall: firewall reversal command sequence honors MIRRORET_FIREWALL_SOURCE" {
+    # When MIRRORET_FIREWALL_SOURCE was set at install, the rule shape is
+    # different. The uninstaller's plan/source must include the matching
+    # delete shape for ufw / firewalld / iptables.
+    run grep -nE 'remove-rich-rule|ufw delete allow from|iptables -D INPUT -s' \
+        "${SCRIPT_DIR}/lib/uninstall.sh"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"remove-rich-rule"* ]]
+    [[ "$output" == *"ufw delete allow from"* ]]
+    [[ "$output" == *"iptables -D INPUT -s"* ]]
+}
+
+@test "uninstall: uninst_remove_file failure does NOT abort under set -e" {
+    # uninst_remove_file must tolerate rm failures — otherwise a single
+    # immutable-bit / busy-mount entry breaks idempotency for everything
+    # downstream.
+    DRY_RUN=0
+    # Force `rm` to fail by stubbing it.
+    stub="$(mktemp -d)"
+    cat > "${stub}/rm" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+    chmod +x "${stub}/rm"
+    PATH_OLD="$PATH"; PATH="${stub}:${PATH}"
+    target="${TMPDIR}/file-that-exists"
+    /usr/bin/touch "$target" || touch "$target"
+    set -e
+    uninst_remove_file "$target"   # must NOT abort the test
+    set +e
+    PATH="${PATH_OLD}"
+    rm -rf "$stub"
+    # The file is still here because our stubbed rm failed — that's fine.
+    # The point of the test is that the script kept going.
+    [ -f "$target" ]
+}
+
+@test "uninstall: uninst_remove_dir failure does NOT abort under set -e" {
+    DRY_RUN=0
+    stub="$(mktemp -d)"
+    cat > "${stub}/rm" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+    chmod +x "${stub}/rm"
+    PATH_OLD="$PATH"; PATH="${stub}:${PATH}"
+    target="${TMPDIR}/dir-that-exists"
+    /bin/mkdir -p "$target" || mkdir -p "$target"
+    set -e
+    uninst_remove_dir "$target"
+    set +e
+    PATH="${PATH_OLD}"
+    rm -rf "$stub"
+    [ -d "$target" ]
+}
+
+@test "uninstall: --purge without --common warns explicitly" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/distro.sh'
+        source '${SCRIPT_DIR}/lib/uninstall.sh'
+        uninstall_main --list --pip --purge
+    "
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--purge has no effect without --common"* ]]
+}
+
+@test "uninstall: install-only flag passed to uninstaller gives an actionable error" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/distro.sh'
+        source '${SCRIPT_DIR}/lib/uninstall.sh'
+        uninstall_main --list --check
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"install.sh flag"* ]]
+}
+
+@test "uninstall: install-only --backup-only also produces actionable error" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/distro.sh'
+        source '${SCRIPT_DIR}/lib/uninstall.sh'
+        uninstall_main --list --backup-only
+    "
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"install.sh flag"* ]]
+}
