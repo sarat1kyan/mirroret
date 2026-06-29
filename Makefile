@@ -5,10 +5,10 @@ SHELL := /bin/bash
 # Production scripts (linted strictly).
 # mirroret.sh and mirroret-unified.sh are legacy reference files — kept for
 # comparison, not actively maintained, so excluded from strict lint.
-SCRIPTS := install.sh $(wildcard lib/*.sh) $(wildcard scripts/*.sh)
+SCRIPTS := install.sh uninstall.sh $(wildcard lib/*.sh) $(wildcard scripts/*.sh)
 TEST_DIR := tests
 
-.PHONY: all lint format test test-integration test-all validate check-deps help dry-run clean
+.PHONY: all lint format test test-integration test-all validate check-deps help dry-run clean uninstall
 
 all: lint test
 
@@ -137,6 +137,11 @@ validate:
 dry-run:
 	@bash install.sh --dry-run --non-interactive
 
+# ── Uninstall preview ────────────────────────────────────────────────────────
+
+uninstall:
+	@bash uninstall.sh --list
+
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 
 clean:
@@ -159,6 +164,7 @@ help:
 	@echo "  make test-verbose      Run all tests with verbose output"
 	@echo "  make validate      Validate existing installation (requires root)"
 	@echo "  make dry-run       Preview what install.sh would do"
+	@echo "  make uninstall     Preview uninstall plan (sudo ./uninstall.sh for the real thing)"
 	@echo "  make check-deps    Check for required tools"
 	@echo "  make clean         Remove temp files"
 	@echo "  make help          Show this help"

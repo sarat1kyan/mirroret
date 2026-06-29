@@ -15,8 +15,11 @@ _log() {
     ts="$(date '+%Y-%m-%d %H:%M:%S')"
     local line="[${level}] ${ts} $*"
     echo "$line" >&2
+    # Append to the log file when one is configured, but never let a
+    # permission/disk-full error abort the script. Caller's set -e/-u
+    # must not see a non-zero exit from logging.
     if [[ -n "${MIRRORET_LOG_FILE:-}" ]]; then
-        echo "$line" >> "$MIRRORET_LOG_FILE"
+        printf '%s\n' "$line" >> "$MIRRORET_LOG_FILE" 2>/dev/null || true
     fi
 }
 
