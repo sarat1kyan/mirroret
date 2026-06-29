@@ -8,39 +8,215 @@
 #   apt-mirror  — use apt-mirror (or apt-mirror2 via pip if not installed)
 #   debmirror   — use debmirror
 #
+# MIRRORET_APT_FLAVOR=auto|ubuntu|debian
+#   auto    — derive from OS_ID on the mirror server (default)
+#   ubuntu  — force Ubuntu upstream
+#   debian  — force Debian upstream
+#
+# MIRRORET_APT_UPSTREAM_HOST — override the upstream archive host
+#   (default: archive.ubuntu.com for ubuntu, deb.debian.org for debian).
+#
+# MIRRORET_APT_UPSTREAM_PATH — the path component on the upstream host
+#   that contains dists/ and pool/ (default: /ubuntu for ubuntu, /debian
+#   for debian).
+#
+# MIRRORET_APT_SECURITY_HOST — separate security archive (Debian uses
+#   security.debian.org). Empty disables the security suite.
+#
+# MIRRORET_APT_COMPONENTS — components to mirror
+#   (default: "main restricted universe multiverse" for ubuntu,
+#             "main contrib non-free non-free-firmware" for debian).
+#
 # After configure_apt_mirror() succeeds, MIRRORET_APT_DATA_PATH is exported
-# pointing to the directory nginx should serve as /ubuntu.
+# pointing to the directory nginx should serve, and MIRRORET_APT_NGINX_PREFIX
+# points to the URL prefix nginx should expose (/ubuntu or /debian).
+#
+# A note on signed-by: mirroret mirrors upstream packages whose Release
+# files are signed by Ubuntu / Debian, NOT by mirroret. Pointing
+# signed-by= at mirroret's own GPG key would cause clients to reject the
+# Release file. So we point signed-by at the upstream keyring on the
+# client by default. Set MIRRORET_APT_RESIGN=1 if you actually re-sign
+# the mirrored Release with mirroret's key (advanced, not done here).
 
 MIRRORET_APT_MIRROR_TOOL="${MIRRORET_APT_MIRROR_TOOL:-auto}"
 MIRRORET_APT_DATA_PATH="${MIRRORET_APT_DATA_PATH:-}"
 MIRRORET_APT_RESOLVED_TOOL="${MIRRORET_APT_RESOLVED_TOOL:-}"
+MIRRORET_APT_FLAVOR="${MIRRORET_APT_FLAVOR:-auto}"
+MIRRORET_APT_UPSTREAM_HOST="${MIRRORET_APT_UPSTREAM_HOST:-}"
+MIRRORET_APT_UPSTREAM_PATH="${MIRRORET_APT_UPSTREAM_PATH:-}"
+MIRRORET_APT_SECURITY_HOST="${MIRRORET_APT_SECURITY_HOST:-}"
+MIRRORET_APT_COMPONENTS="${MIRRORET_APT_COMPONENTS:-}"
+MIRRORET_APT_RESIGN="${MIRRORET_APT_RESIGN:-0}"
+MIRRORET_APT_NGINX_PREFIX="${MIRRORET_APT_NGINX_PREFIX:-}"
+
+# ── Flavor + upstream resolution ─────────────────────────────────────────────
+
+# _apt_resolve_flavor — print 'ubuntu' or 'debian' based on flavor override / OS_ID.
+_apt_resolve_flavor() {
+    case "${MIRRORET_APT_FLAVOR:-auto}" in
+        ubuntu|debian)
+            echo "${MIRRORET_APT_FLAVOR}"
+            return 0
+            ;;
+        auto)
+            ;;
+        *)
+            die "Unknown MIRRORET_APT_FLAVOR: '${MIRRORET_APT_FLAVOR}'. Use auto, ubuntu, or debian."
+            ;;
+    esac
+
+    case "${OS_ID:-}" in
+        debian) echo "debian" ;;
+        ubuntu|linuxmint|pop) echo "ubuntu" ;;
+        *)
+            # Fall back to ubuntu (the historical default) but make it visible.
+            warn "Cannot auto-detect APT flavor from OS_ID='${OS_ID:-}'. Defaulting to ubuntu."
+            warn "Override with MIRRORET_APT_FLAVOR=debian if mirroring Debian."
+            echo "ubuntu"
+            ;;
+    esac
+}
+
+# _apt_upstream_for <flavor> — print "host path security_host" triple.
+_apt_upstream_for() {
+    local flavor="$1"
+    local host path sec
+    case "${flavor}" in
+        ubuntu)
+            host="${MIRRORET_APT_UPSTREAM_HOST:-archive.ubuntu.com}"
+            path="${MIRRORET_APT_UPSTREAM_PATH:-/ubuntu}"
+            # Ubuntu serves security from the main archive under -security
+            # suites; no separate security host needed.
+            sec="${MIRRORET_APT_SECURITY_HOST:-}"
+            ;;
+        debian)
+            host="${MIRRORET_APT_UPSTREAM_HOST:-deb.debian.org}"
+            path="${MIRRORET_APT_UPSTREAM_PATH:-/debian}"
+            # Debian's security archive is a separate host, separate path.
+            sec="${MIRRORET_APT_SECURITY_HOST:-security.debian.org}"
+            ;;
+        *)
+            die "_apt_upstream_for: unknown flavor '${flavor}'"
+            ;;
+    esac
+    echo "${host}|${path}|${sec}"
+}
+
+# _apt_components <flavor> — default component list per flavor (overridable).
+_apt_components() {
+    local flavor="$1"
+    if [[ -n "${MIRRORET_APT_COMPONENTS:-}" ]]; then
+        echo "${MIRRORET_APT_COMPONENTS}"
+        return 0
+    fi
+    case "${flavor}" in
+        ubuntu) echo "main restricted universe multiverse" ;;
+        debian) echo "main contrib non-free non-free-firmware" ;;
+        *)      die "_apt_components: unknown flavor '${flavor}'" ;;
+    esac
+}
+
+# _apt_codename <flavor> — print the codename to mirror.
+# Priority: env override > OS_CODENAME (if flavor matches the running OS)
+# > known mapping.
+_apt_codename() {
+    local flavor="$1"
+    case "${flavor}" in
+        ubuntu)
+            if [[ -n "${MIRRORET_UBUNTU_CODENAME:-}" ]]; then
+                echo "${MIRRORET_UBUNTU_CODENAME}"
+                return 0
+            fi
+            ;;
+        debian)
+            if [[ -n "${MIRRORET_DEBIAN_CODENAME:-}" ]]; then
+                echo "${MIRRORET_DEBIAN_CODENAME}"
+                return 0
+            fi
+            ;;
+    esac
+
+    if [[ "${OS_ID:-}" == "${flavor}" ]] && [[ -n "${OS_CODENAME:-}" ]]; then
+        echo "${OS_CODENAME}"
+        return 0
+    fi
+
+    case "${flavor}-${OS_VER:-}" in
+        ubuntu-20.04) echo "focal" ;;
+        ubuntu-22.04) echo "jammy" ;;
+        ubuntu-24.04) echo "noble" ;;
+        debian-11)    echo "bullseye" ;;
+        debian-12)    echo "bookworm" ;;
+        debian-13)    echo "trixie" ;;
+        *)
+            if [[ "${flavor}" == "ubuntu" ]]; then
+                die "Unknown Ubuntu version '${OS_VER:-}'. Set MIRRORET_UBUNTU_CODENAME."
+            else
+                die "Unknown Debian version '${OS_VER:-}'. Set MIRRORET_DEBIAN_CODENAME."
+            fi
+            ;;
+    esac
+}
+
+# ── Public API ───────────────────────────────────────────────────────────────
 
 # configure_apt_mirror <backup_id> — write APT mirror configuration.
 configure_apt_mirror() {
     local backup_id="$1"
     local base_dir="${MIRRORET_BASE_DIR}"
+
+    local flavor
+    flavor="$(_apt_resolve_flavor)"
+
     local codename
-    codename="${MIRRORET_UBUNTU_CODENAME:-$(ubuntu_codename)}"
+    codename="$(_apt_codename "${flavor}")"
+
+    local upstream up_host up_path up_sec
+    upstream="$(_apt_upstream_for "${flavor}")"
+    up_host="${upstream%%|*}"
+    upstream="${upstream#*|}"
+    up_path="${upstream%%|*}"
+    up_sec="${upstream#*|}"
+
+    local components
+    components="$(_apt_components "${flavor}")"
+
+    # nginx URL prefix is /ubuntu or /debian — pinned to the flavor so we
+    # can mirror more than one flavor concurrently in the future.
+    MIRRORET_APT_NGINX_PREFIX="${MIRRORET_APT_NGINX_PREFIX:-/${flavor}}"
+
     local tool="${MIRRORET_APT_MIRROR_TOOL:-auto}"
+    section "Configuring APT mirror (flavor: ${flavor}, tool: ${tool})"
+    info "Codename: ${codename}"
+    info "Upstream: ${up_host}${up_path}"
+    [[ -n "${up_sec}" ]] && info "Security: ${up_sec}"
+    info "Components: ${components}"
+    info "Client nginx prefix: ${MIRRORET_APT_NGINX_PREFIX}"
 
-    section "Configuring APT mirror (tool: ${tool})"
-    info "Ubuntu codename: ${codename}"
-
-    # Resolve which tool to actually use.
     local resolved_tool
     resolved_tool="$(_apt_resolve_tool "${tool}")"
-
     info "Using APT mirror tool: ${resolved_tool}"
     MIRRORET_APT_RESOLVED_TOOL="${resolved_tool}"
 
     case "${resolved_tool}" in
-        apt-mirror)  _configure_apt_mirror_classic "${backup_id}" "${base_dir}" "${codename}" ;;
-        apt-mirror2) _configure_apt_mirror2        "${backup_id}" "${base_dir}" "${codename}" ;;
-        debmirror)   _configure_debmirror          "${backup_id}" "${base_dir}" "${codename}" ;;
-        *)           die "Unknown APT mirror tool: ${resolved_tool}" ;;
+        apt-mirror)
+            _configure_apt_mirror_classic "${backup_id}" "${base_dir}" \
+                "${flavor}" "${codename}" "${up_host}" "${up_path}" "${up_sec}" "${components}"
+            ;;
+        apt-mirror2)
+            _configure_apt_mirror2 "${backup_id}" "${base_dir}" \
+                "${flavor}" "${codename}" "${up_host}" "${up_path}" "${up_sec}" "${components}"
+            ;;
+        debmirror)
+            _configure_debmirror "${backup_id}" "${base_dir}" \
+                "${flavor}" "${codename}" "${up_host}" "${up_path}" "${up_sec}" "${components}"
+            ;;
+        *)
+            die "Unknown APT mirror tool: ${resolved_tool}"
+            ;;
     esac
 
-    export MIRRORET_APT_DATA_PATH MIRRORET_APT_RESOLVED_TOOL
+    export MIRRORET_APT_DATA_PATH MIRRORET_APT_RESOLVED_TOOL MIRRORET_APT_NGINX_PREFIX
 }
 
 # _apt_resolve_tool <requested> — print the tool name that will actually be used.
@@ -51,7 +227,6 @@ _apt_resolve_tool() {
             if check_command apt-mirror; then
                 echo "apt-mirror"; return
             fi
-            # apt-mirror2 is a drop-in replacement installable via pip.
             if check_command apt-mirror2 || pip3 show apt-mirror2 &>/dev/null 2>&1; then
                 echo "apt-mirror2"; return
             fi
@@ -80,56 +255,75 @@ _apt_resolve_tool() {
     esac
 }
 
+# _apt_mirror_data_path <base> <flavor> <host> <path>
+# Emit the path apt-mirror / apt-mirror2 store data under, which is
+# determined by the upstream host + path.
+_apt_mirror_data_path() {
+    local base="$1" flavor="$2" host="$3" path="$4"
+    # apt-mirror stores under <mirror>/<host>/<path-without-leading-slash>
+    local trimmed="${path#/}"
+    echo "${base}/${flavor}/mirror/mirror/${host}/${trimmed}"
+}
+
 _configure_apt_mirror_classic() {
-    local backup_id="$1" base_dir="$2" codename="$3"
-    local mirror_base="${base_dir}/debian/mirror"
+    local backup_id="$1" base_dir="$2" flavor="$3" codename="$4"
+    local host="$5" path="$6" sec_host="$7" components="$8"
+    local mirror_base="${base_dir}/${flavor}/mirror"
 
     backup_file "$backup_id" "/etc/apt/mirror.list"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would write /etc/apt/mirror.list (apt-mirror, codename=${codename})"
-        MIRRORET_APT_DATA_PATH="${mirror_base}/mirror/archive.ubuntu.com/ubuntu"
+        MIRRORET_APT_DATA_PATH="$(_apt_mirror_data_path "${base_dir}" "${flavor}" "${host}" "${path}")"
         return 0
     fi
 
+    # shellcheck disable=SC2086  # PKG_MGR_INSTALL is intentionally word-split
     xrun apt-get install -y --no-install-recommends apt-mirror 2>/dev/null || true
 
-    cat > /etc/apt/mirror.list <<MIRROR_EOF
-############# config ##################
-set base_path    ${mirror_base}
-set mirror_path  \$base_path/mirror
-set skel_path    \$base_path/skel
-set var_path     \$base_path/var
-set cleanscript  \$var_path/clean.sh
-set defaultarch  ${MIRRORET_APT_ARCH:-amd64}
-set postmirror_script \$var_path/postmirror.sh
-set run_postmirror 0
-set nthreads     ${MIRRORET_APT_THREADS:-10}
-set _tilde 0
-############# end config ##############
+    local main_url="http://${host}${path}"
 
-# Ubuntu ${codename}
-deb http://archive.ubuntu.com/ubuntu ${codename} main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu ${codename}-updates main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu ${codename}-security main restricted universe multiverse
+    {
+        printf '############# config ##################\n'
+        printf 'set base_path    %s\n' "${mirror_base}"
+        printf 'set mirror_path  $base_path/mirror\n'
+        printf 'set skel_path    $base_path/skel\n'
+        printf 'set var_path     $base_path/var\n'
+        printf 'set cleanscript  $var_path/clean.sh\n'
+        printf 'set defaultarch  %s\n' "${MIRRORET_APT_ARCH:-amd64}"
+        printf 'set postmirror_script $var_path/postmirror.sh\n'
+        printf 'set run_postmirror 0\n'
+        printf 'set nthreads     %s\n' "${MIRRORET_APT_THREADS:-10}"
+        printf 'set _tilde 0\n'
+        printf '############# end config ##############\n\n'
+        printf '# %s %s\n' "${flavor}" "${codename}"
+        printf 'deb %s %s %s\n' "${main_url}" "${codename}" "${components}"
+        printf 'deb %s %s-updates %s\n' "${main_url}" "${codename}" "${components}"
+        if [[ -n "${sec_host}" ]]; then
+            local sec_url="http://${sec_host}${path}"
+            printf 'deb %s %s-security %s\n' "${sec_url}" "${codename}" "${components}"
+        else
+            printf 'deb %s %s-security %s\n' "${main_url}" "${codename}" "${components}"
+        fi
+        printf '\nclean %s\n' "${main_url}"
+        [[ -n "${sec_host}" ]] && printf 'clean http://%s%s\n' "${sec_host}" "${path}"
+    } > /etc/apt/mirror.list
 
-clean http://archive.ubuntu.com/ubuntu
-MIRROR_EOF
-
-    MIRRORET_APT_DATA_PATH="${mirror_base}/mirror/archive.ubuntu.com/ubuntu"
-    success "apt-mirror configured (${codename})."
+    MIRRORET_APT_DATA_PATH="$(_apt_mirror_data_path "${base_dir}" "${flavor}" "${host}" "${path}")"
+    success "apt-mirror configured (${flavor} ${codename})."
 }
 
 _configure_apt_mirror2() {
-    local backup_id="$1" base_dir="$2" codename="$3"
-    local mirror_base="${base_dir}/debian/mirror"
+    local backup_id="$1" base_dir="$2" flavor="$3" codename="$4"
+    local host="$5" path="$6" sec_host="$7" components="$8"
+    local mirror_base="${base_dir}/${flavor}/mirror"
     local config_file="/etc/apt/mirror.list"
 
     backup_file "$backup_id" "${config_file}"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would write ${config_file} (apt-mirror2, codename=${codename})"
-        MIRRORET_APT_DATA_PATH="${mirror_base}/mirror/archive.ubuntu.com/ubuntu"
+        MIRRORET_APT_DATA_PATH="$(_apt_mirror_data_path "${base_dir}" "${flavor}" "${host}" "${path}")"
         return 0
     fi
 
@@ -142,37 +336,44 @@ _configure_apt_mirror2() {
         info "apt-mirror2 installed in virtualenv: ${venv}"
     fi
 
-    # apt-mirror2 is config-compatible with apt-mirror.
-    cat > "${config_file}" <<MIRROR_EOF
-############# config ##################
-set base_path    ${mirror_base}
-set mirror_path  \$base_path/mirror
-set skel_path    \$base_path/skel
-set var_path     \$base_path/var
-set defaultarch  ${MIRRORET_APT_ARCH:-amd64}
-set nthreads     ${MIRRORET_APT_THREADS:-10}
-set _tilde 0
-############# end config ##############
+    local main_url="http://${host}${path}"
 
-# Ubuntu ${codename}
-deb http://archive.ubuntu.com/ubuntu ${codename} main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu ${codename}-updates main restricted universe multiverse
-deb http://archive.ubuntu.com/ubuntu ${codename}-security main restricted universe multiverse
+    {
+        printf '############# config ##################\n'
+        printf 'set base_path    %s\n' "${mirror_base}"
+        printf 'set mirror_path  $base_path/mirror\n'
+        printf 'set skel_path    $base_path/skel\n'
+        printf 'set var_path     $base_path/var\n'
+        printf 'set defaultarch  %s\n' "${MIRRORET_APT_ARCH:-amd64}"
+        printf 'set nthreads     %s\n' "${MIRRORET_APT_THREADS:-10}"
+        printf 'set _tilde 0\n'
+        printf '############# end config ##############\n\n'
+        printf '# %s %s\n' "${flavor}" "${codename}"
+        printf 'deb %s %s %s\n' "${main_url}" "${codename}" "${components}"
+        printf 'deb %s %s-updates %s\n' "${main_url}" "${codename}" "${components}"
+        if [[ -n "${sec_host}" ]]; then
+            local sec_url="http://${sec_host}${path}"
+            printf 'deb %s %s-security %s\n' "${sec_url}" "${codename}" "${components}"
+        else
+            printf 'deb %s %s-security %s\n' "${main_url}" "${codename}" "${components}"
+        fi
+        printf '\nclean %s\n' "${main_url}"
+        [[ -n "${sec_host}" ]] && printf 'clean http://%s%s\n' "${sec_host}" "${path}"
+    } > "${config_file}"
 
-clean http://archive.ubuntu.com/ubuntu
-MIRROR_EOF
-
-    MIRRORET_APT_DATA_PATH="${mirror_base}/mirror/archive.ubuntu.com/ubuntu"
-    success "apt-mirror2 configured (${codename})."
+    MIRRORET_APT_DATA_PATH="$(_apt_mirror_data_path "${base_dir}" "${flavor}" "${host}" "${path}")"
+    success "apt-mirror2 configured (${flavor} ${codename})."
 }
 
 _configure_debmirror() {
-    local backup_id="$1" base_dir="$2" codename="$3"
-    local mirror_dir="${base_dir}/debian/debmirror"
+    local backup_id="$1" base_dir="$2" flavor="$3" codename="$4"
+    local host="$5" path="$6" sec_host="$7" components="$8"
+    local mirror_dir="${base_dir}/${flavor}/debmirror"
     local script_file="${base_dir}/scripts/sync-apt-debmirror.sh"
+    local comma_components="${components// /,}"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
-        info "[DRY-RUN] would configure debmirror for ${codename} → ${mirror_dir}"
+        info "[DRY-RUN] would configure debmirror for ${flavor} ${codename} → ${mirror_dir}"
         MIRRORET_APT_DATA_PATH="${mirror_dir}"
         return 0
     fi
@@ -188,107 +389,180 @@ _configure_debmirror() {
 
     mkdir -p "${mirror_dir}" "${base_dir}/scripts"
 
-    # Write a debmirror sync script (debmirror does not use a config file).
+    # debmirror uses the upstream keyring for the flavor.
+    local default_keyring
+    case "${flavor}" in
+        ubuntu) default_keyring="/usr/share/keyrings/ubuntu-archive-keyring.gpg" ;;
+        debian) default_keyring="/usr/share/keyrings/debian-archive-keyring.gpg" ;;
+        *)      default_keyring="" ;;
+    esac
+
     cat > "${script_file}" <<DEBMIRROR_SCRIPT
 #!/usr/bin/env bash
 set -Eeuo pipefail
-# debmirror sync script — generated by mirroret.
-# TODO: Replace KEYRING_FILE with the actual Ubuntu archive keyring path on
-# your system (/usr/share/keyrings/ubuntu-archive-keyring.gpg is typical).
-# If you receive GPG errors, see docs/TROUBLESHOOTING.md#debmirror-gpg.
 
+# debmirror sync script — generated by mirroret.
+# Flavor:    ${flavor}
+# Codename:  ${codename}
+# Upstream:  ${host}${path}
+# Security:  ${sec_host:-(none)}
+# If you see GPG errors, install the matching keyring or set
+# MIRRORET_APT_INSECURE=1 (lab use only). See docs/TROUBLESHOOTING.md.
+
+FLAVOR="${flavor}"
 CODENAME="${codename}"
 ARCH="${MIRRORET_APT_ARCH:-amd64}"
+HOST="${host}"
+ROOT="${path}"
+SEC_HOST="${sec_host}"
+COMPONENTS="${comma_components}"
 MIRROR_DIR="${mirror_dir}"
 LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-apt-debmirror-\$(date +%Y%m%d-%H%M%S).log"
-mkdir -p "\$LOG_DIR" "\$MIRROR_DIR"
+KEYRING_FILE="\${MIRRORET_APT_KEYRING_OVERRIDE:-${default_keyring}}"
 
-KEYRING_FILE="/usr/share/keyrings/ubuntu-archive-keyring.gpg"
-if [[ ! -f "\${KEYRING_FILE}" ]]; then
-    echo "WARNING: Ubuntu archive keyring not found at \${KEYRING_FILE}" | tee -a "\$LOG_FILE"
-    echo "Install it: apt-get install -y ubuntu-keyring" | tee -a "\$LOG_FILE"
-    echo "Or set MIRRORET_APT_INSECURE=1 to skip GPG checks (lab use only)." | tee -a "\$LOG_FILE"
+mkdir -p "\$LOG_DIR" "\$MIRROR_DIR"
+exec > >(tee -a "\$LOG_FILE") 2>&1
+
+echo "Starting debmirror sync: \$(date)"
+
+if [[ -n "\$KEYRING_FILE" && ! -f "\$KEYRING_FILE" ]]; then
+    echo "ERROR: archive keyring not found at \$KEYRING_FILE"
+    echo "Install the keyring (ubuntu-keyring or debian-archive-keyring),"
+    echo "or override with MIRRORET_APT_KEYRING_OVERRIDE=/path/to/keyring.gpg,"
+    echo "or set MIRRORET_APT_INSECURE=1 (lab use only)."
+    exit 3
 fi
 
-echo "Starting debmirror sync: \$(date)" | tee -a "\$LOG_FILE"
+main_status=0
+sec_status=0
+
+# Main + updates suites from the primary archive.
 debmirror \\
     --arch "\${ARCH}" \\
     --no-source \\
-    --host archive.ubuntu.com \\
-    --root /ubuntu \\
+    --host "\${HOST}" \\
+    --root "\${ROOT}" \\
     --proto http \\
-    --section main,restricted,universe,multiverse \\
-    --dist "\${CODENAME},\${CODENAME}-updates,\${CODENAME}-security" \\
+    --section "\${COMPONENTS}" \\
+    --dist "\${CODENAME},\${CODENAME}-updates" \\
     --keyring "\${KEYRING_FILE}" \\
-    "\${MIRROR_DIR}" 2>&1 | tee -a "\$LOG_FILE"
-echo "debmirror sync done: \$(date)" | tee -a "\$LOG_FILE"
+    "\${MIRROR_DIR}" || main_status=\$?
+
+# Security suite. Debian routes through security.debian.org with a
+# different root; Ubuntu serves it from the main archive.
+if [[ -n "\${SEC_HOST}" ]]; then
+    debmirror \\
+        --arch "\${ARCH}" \\
+        --no-source \\
+        --host "\${SEC_HOST}" \\
+        --root "\${ROOT}" \\
+        --proto http \\
+        --section "\${COMPONENTS}" \\
+        --dist "\${CODENAME}-security" \\
+        --keyring "\${KEYRING_FILE}" \\
+        "\${MIRROR_DIR}" || sec_status=\$?
+else
+    debmirror \\
+        --arch "\${ARCH}" \\
+        --no-source \\
+        --host "\${HOST}" \\
+        --root "\${ROOT}" \\
+        --proto http \\
+        --section "\${COMPONENTS}" \\
+        --dist "\${CODENAME}-security" \\
+        --keyring "\${KEYRING_FILE}" \\
+        "\${MIRROR_DIR}" || sec_status=\$?
+fi
+
+echo "debmirror sync done: \$(date) (main=\${main_status} security=\${sec_status})"
+if [[ \$main_status -ne 0 || \$sec_status -ne 0 ]]; then
+    exit 1
+fi
 DEBMIRROR_SCRIPT
 
     chmod +x "${script_file}"
     MIRRORET_APT_DATA_PATH="${mirror_dir}"
 
-    warn "debmirror requires the Ubuntu archive keyring. See ${script_file} and docs/TROUBLESHOOTING.md."
-    success "debmirror configured (${codename}). Run: ${script_file}"
+    success "debmirror configured (${flavor} ${codename}). Run: ${script_file}"
 }
 
-# generate_apt_client_config <output_file> — write an APT sources.list entry for clients.
-# Uses GPG signing if MIRRORET_APT_KEYRING is set; otherwise requires explicit insecure opt-in.
+# ── Client config generation ─────────────────────────────────────────────────
+
+# generate_apt_client_config <output_file>
+# Writes an APT sources.list entry for clients.
+#
+# signed-by behavior:
+#  * MIRRORET_APT_INSECURE=1 → trusted=yes (lab only, warning printed)
+#  * MIRRORET_APT_RESIGN=1   → signed-by=<MIRRORET_APT_KEYRING>
+#       (caller is responsible for actually re-signing the mirrored
+#        Release files with that key — mirroret does not do this today)
+#  * otherwise → no signed-by override; rely on the client's existing
+#       upstream archive keyring (which signed the upstream Release).
 generate_apt_client_config() {
     local output_file="$1"
     local server_ip="${MIRRORET_SERVER_IP}"
     local web_port="${MIRRORET_WEB_PORT:-8080}"
-    local codename
-    codename="${MIRRORET_UBUNTU_CODENAME:-$(ubuntu_codename)}"
-    # Path must match the nginx location defined in nginx.sh (/ubuntu).
-    local base_path="/ubuntu"
     local insecure="${MIRRORET_APT_INSECURE:-0}"
+    local resign="${MIRRORET_APT_RESIGN:-0}"
 
-    section "Generating APT client config"
+    local flavor
+    flavor="$(_apt_resolve_flavor)"
+
+    local codename
+    codename="$(_apt_codename "${flavor}")"
+
+    local components
+    components="$(_apt_components "${flavor}")"
+
+    local base_path="${MIRRORET_APT_NGINX_PREFIX:-/${flavor}}"
+
+    section "Generating APT client config (flavor: ${flavor})"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would write APT client config to: ${output_file}"
         return 0
     fi
 
+    local url="http://${server_ip}:${web_port}${base_path}"
+
     if [[ "${insecure}" == "1" ]]; then
         warn_insecure "APT client config generated with trusted=yes (signature checking DISABLED)."
-        warn_insecure "This is suitable for isolated lab environments ONLY."
-        warn_insecure "Set MIRRORET_APT_INSECURE=0 and configure a GPG keyring for production use."
+        warn_insecure "Use only in isolated lab environments."
 
         cat > "$output_file" <<APT_EOF
-# Local Repository Server - INSECURE MODE (no GPG verification)
+# mirroret APT client config — INSECURE MODE (no GPG verification).
 # WARNING: trusted=yes disables package signature checking.
-# Do NOT use this in production without GPG signing.
-deb [trusted=yes] http://${server_ip}:${web_port}${base_path} ${codename} main restricted universe multiverse
-deb [trusted=yes] http://${server_ip}:${web_port}${base_path} ${codename}-updates main restricted universe multiverse
-deb [trusted=yes] http://${server_ip}:${web_port}${base_path} ${codename}-security main restricted universe multiverse
+# Do NOT use this in production.
+# Flavor: ${flavor}  Codename: ${codename}
+deb [trusted=yes] ${url} ${codename} ${components}
+deb [trusted=yes] ${url} ${codename}-updates ${components}
+deb [trusted=yes] ${url} ${codename}-security ${components}
 APT_EOF
 
-    elif [[ -n "${MIRRORET_APT_KEYRING:-}" ]]; then
-        local signed_by="signed-by=${MIRRORET_APT_KEYRING}"
+    elif [[ "${resign}" == "1" ]] && [[ -n "${MIRRORET_APT_KEYRING:-}" ]]; then
+        warn "MIRRORET_APT_RESIGN=1 but mirroret does not yet re-sign mirrored Release files."
+        warn "If you re-signed manually, this client config will work; if not, apt update will fail."
+
         cat > "$output_file" <<APT_EOF
-# Local Repository Server
-deb [${signed_by}] http://${server_ip}:${web_port}${base_path} ${codename} main restricted universe multiverse
-deb [${signed_by}] http://${server_ip}:${web_port}${base_path} ${codename}-updates main restricted universe multiverse
-deb [${signed_by}] http://${server_ip}:${web_port}${base_path} ${codename}-security main restricted universe multiverse
+# mirroret APT client config — locally re-signed.
+# Flavor: ${flavor}  Codename: ${codename}
+deb [signed-by=${MIRRORET_APT_KEYRING}] ${url} ${codename} ${components}
+deb [signed-by=${MIRRORET_APT_KEYRING}] ${url} ${codename}-updates ${components}
+deb [signed-by=${MIRRORET_APT_KEYRING}] ${url} ${codename}-security ${components}
 APT_EOF
-        success "APT client config generated with GPG keyring: ${MIRRORET_APT_KEYRING}"
 
     else
-        # No keyring configured and insecure not explicitly enabled.
-        # Generate a placeholder that will not work until configured.
         cat > "$output_file" <<APT_EOF
-# Local Repository Server - NOT READY
-# Configure GPG signing before use:
-#   Option A (production): Set MIRRORET_APT_KEYRING=/etc/apt/keyrings/mirroret.gpg
-#   Option B (lab only):   Set MIRRORET_APT_INSECURE=1 (disables signature checking)
-#
-# Uncomment and configure after setting up GPG:
-# deb [signed-by=/etc/apt/keyrings/mirroret.gpg] http://${server_ip}:${web_port}${base_path} ${codename} main restricted universe multiverse
+# mirroret APT client config — relies on upstream ${flavor} archive keyring.
+# The mirrored Release files are signed by the upstream archive, not by
+# mirroret. The client only needs the standard ${flavor}-archive-keyring
+# package (already present on stock systems).
+# Flavor: ${flavor}  Codename: ${codename}
+deb ${url} ${codename} ${components}
+deb ${url} ${codename}-updates ${components}
+deb ${url} ${codename}-security ${components}
 APT_EOF
-        warn "APT client config requires GPG configuration before use."
-        warn "See docs/SECURITY.md for GPG signing setup."
     fi
 
     success "APT client config written: ${output_file}"

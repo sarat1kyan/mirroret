@@ -1,11 +1,23 @@
 #!/bin/bash
 
 #######################################################################
-# UNIFIED MIRRORET SERVER - Complete Installation Script
-# Supports: deb, rpm, pip, Docker, npm packages
-# Purpose: Central package repository for all Linux distributions
-# Author: Mher Saratikyan
+# LEGACY — DO NOT USE
+# This file is the original unified monolithic installer. It contains
+# every critical issue documented in docs/DEEP_REVIEW.md and is preserved
+# only for historical comparison.
+#
+# Use install.sh instead. See README.md.
 #######################################################################
+
+case "${MIRRORET_ALLOW_LEGACY:-0}" in
+    1) ;;
+    *)
+        echo "mirroret-unified.sh is the legacy monolithic installer and is no" >&2
+        echo "longer supported. Use install.sh instead. To run anyway, set" >&2
+        echo "MIRRORET_ALLOW_LEGACY=1 and re-invoke." >&2
+        exit 2
+        ;;
+esac
 
 set -e  # Exit on error
 

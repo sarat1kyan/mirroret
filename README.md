@@ -19,26 +19,32 @@ Local package repository server for Linux. Mirrors APT, RPM, pip, Docker, and np
 git clone https://github.com/sarat1kyan/mirroret.git
 cd mirroret
 
-# Standard install — GPG key required before clients work (most secure):
-sudo ./install.sh --gpg-auto
-
-# Fully automated: TLS cert + GPG key auto-provisioned:
-sudo ./install.sh --tls-self-signed --gpg-auto
-
-# Staging/approval workflow for pip and npm:
-sudo ./install.sh --gpg-auto --approval-mode
-
-# Lab / air-gapped install (no GPG, no TLS — insecure):
-sudo ./install.sh --insecure
-
 # Preview without making any changes:
 sudo ./install.sh --dry-run
 
-# APT-only mirror, restrict firewall to a specific subnet:
-sudo MIRRORET_FIREWALL_SOURCE=10.0.0.0/8 ./install.sh --no-pip --no-docker --no-npm
+# Standard install (Docker as pull-through cache by default):
+sudo ./install.sh
 
-# Native mode — no Docker or Podman required:
-sudo MIRRORET_DOCKER_BACKEND=native ./install.sh --gpg-auto
+# Hosted Docker mode — accepts `docker push` for curated pre-seeding:
+sudo ./install.sh --docker-mode hosted
+
+# Standalone APT-only mirror, restricted to a corporate subnet:
+sudo MIRRORET_FIREWALL_SOURCE=10.0.0.0/8 ./install.sh \
+    --no-pip --no-docker --no-npm
+
+# Force-treat the host as Debian even if /etc/os-release says otherwise:
+sudo ./install.sh --apt-flavor debian
+
+# Native mode — no Docker daemon required:
+sudo MIRRORET_DOCKER_BACKEND=native ./install.sh
+
+# Lab / air-gapped install (no GPG, no TLS — INSECURE; warning printed):
+sudo ./install.sh --insecure
+
+# Run the read-only diagnostic snapshot at any time:
+sudo ./scripts/mirroret-debug.sh
+sudo ./scripts/mirroret-debug.sh --net      # also probe outbound HTTPS
+sudo ./scripts/mirroret-debug.sh --bundle   # write a /tmp tarball for support
 ```
 
 ### After installation
@@ -96,12 +102,28 @@ Key settings:
 
 ```bash
 MIRRORET_SERVER_IP=192.168.1.10        # IP written into client configs
-MIRRORET_FIREWALL_SOURCE=10.0.0.0/8   # Restrict inbound access by subnet
+MIRRORET_FIREWALL_SOURCE=10.0.0.0/8    # Restrict inbound access by subnet
+
+# Docker
+MIRRORET_DOCKER_MODE=cache             # cache (default, pull-through) | hosted
 MIRRORET_DOCKER_BACKEND=native         # Use OS-native registry (no Docker daemon)
-MIRRORET_APT_MIRROR_TOOL=debmirror    # Required on Debian 12 (apt-mirror removed)
-MIRRORET_TLS_SELF_SIGNED=1            # Auto-generate a self-signed TLS cert
-MIRRORET_GPG_AUTO=1                   # Auto-generate a GPG signing key
-MIRRORET_APPROVAL_ENABLED=1           # Require admin approval before serving pip/npm packages
+MIRRORET_DOCKER_UPSTREAM_URL=https://registry-1.docker.io   # cache-mode upstream
+
+# APT
+MIRRORET_APT_FLAVOR=auto               # auto | ubuntu | debian
+MIRRORET_APT_UPSTREAM_HOST=            # override upstream archive host
+MIRRORET_APT_MIRROR_TOOL=debmirror     # Required on Debian 12 (apt-mirror removed)
+MIRRORET_APT_RESIGN=0                  # See docs/SECURITY.md before enabling
+
+# RPM
+MIRRORET_RPM_FLAVOR=                   # Override OS_ID-based directory name
+MIRRORET_RPM_REPOS=                    # Space-separated repo names to sync
+
+# Other
+MIRRORET_TLS_SELF_SIGNED=1             # Auto-generate a self-signed TLS cert
+MIRRORET_GPG_AUTO=1                    # Auto-generate a GPG signing key
+MIRRORET_APPROVAL_ENABLED=1            # Require admin approval before serving pip/npm
+MIRRORET_PREFLIGHT_NETWORK=1           # Probe outbound HTTPS during preflight
 ```
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full variable reference.
@@ -162,10 +184,8 @@ sudo ./install.sh --list-backups
 sudo ./install.sh --rollback <backup-id>
 
 # Development and testing:
-make lint                            # shellcheck all scripts
-make test                            # run unit tests (36 tests, no root)
-make test-integration                # run integration tests (56 tests, no root)
-make test-all                        # run all 92 tests
+make lint                            # shellcheck install.sh + lib/*.sh + scripts/*.sh
+make test                            # run every BATS file in tests/
 make format                          # auto-format scripts with shfmt
 make check-deps                      # check for required tools
 make dry-run                         # run install.sh --dry-run
@@ -178,7 +198,8 @@ make dry-run                         # run install.sh --dry-run
 | Document | Contents |
 |----------|---------|
 | [docs/NETWORK_ACCESS.md](docs/NETWORK_ACCESS.md) | **Firewall rules** — inbound ports for clients, outbound ports for sync, firewall commands for ufw/firewalld/iptables |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Full variable reference: TLS, GPG, approval, Docker backend, APT tool |
+| [docs/PROXY_AND_CA.md](docs/PROXY_AND_CA.md) | HTTP/HTTPS proxy setup and corporate TLS-inspection CA trust (sudo, apt/dnf, pip, npm, docker, podman, systemd, cron) |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Full variable reference: TLS, GPG, approval, Docker mode, APT tool |
 | [docs/SECURITY.md](docs/SECURITY.md) | TLS setup, GPG automation, nginx auth, privilege model |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Daily ops: sync, approval workflow, Docker backend, disk management |
 | [docs/NATIVE_MODE.md](docs/NATIVE_MODE.md) | Running without Docker: native Linux services on RHEL and Debian |
@@ -227,7 +248,7 @@ mirroret/
 │   ├── test_config.bats        8 tests  — config loading, backup IDs
 │   ├── test_security.bats      11 tests — security defaults, insecure flags
 │   ├── test_dryrun.bats        6 tests  — DRY_RUN behaviour
-│   └── test_integration.bats  56 tests — TLS, GPG, approval, Docker backend
+│   └── test_integration.bats  TLS, GPG, approval, Docker backend
 └── docs/
     ├── NETWORK_ACCESS.md       Firewall rules — inbound and outbound
     ├── CONFIGURATION.md        Config variable reference
@@ -241,18 +262,36 @@ mirroret/
 
 ---
 
-## Known limitations
+## Known limitations and unsupported scenarios
 
+- Mirroret has not been end-to-end validated against every real upstream;
+  installs are tested under DRY_RUN and with mocked `/etc/os-release` only.
+  Treat the first real sync as a smoke test, not a guarantee.
 - Full APT mirror requires 200–500 GB and several hours on first sync.
-- Docker image pre-seeding (`sync-docker-images.sh`) requires `docker` or `podman` CLI
-  installed on the mirror server even when using the native registry backend.
-- npm auto-publish to Verdaccio requires authentication (`npm login`) when
-  `MIRRORET_NPM_ALLOW_ANON_PUBLISH=0` (the default). Set `MIRRORET_NPM_ALLOW_ANON_PUBLISH=1`
-  for networks where authentication is not needed.
-- APT repo GPG signing covers mirrored upstream packages (already signed by Ubuntu/Debian).
-  Signing locally-built custom packages requires an additional `dpkg-scanpackages` +
-  `apt-ftparchive` step; see [docs/SECURITY.md](docs/SECURITY.md).
+  Sizes grow over time — there is no automatic retention/cleanup.
+- Docker registry has two operating modes (see `MIRRORET_DOCKER_MODE`):
+    - `cache` (default): pull-through proxy. Clients pull through the
+      mirror and layers are cached on demand. Pushes are rejected — this
+      is a registry-level restriction, not a mirroret choice.
+    - `hosted`: the registry accepts `docker push`. `sync-docker-images.sh`
+      pre-seeds a curated list using a local `docker` or `podman` CLI.
+- npm auto-publish to Verdaccio requires `npm login` unless you set
+  `MIRRORET_NPM_ALLOW_ANON_PUBLISH=1`.
+- **APT signed-by:** by default, generated client configs do NOT emit
+  `signed-by=mirroret.gpg`. The mirrored Release files are signed by the
+  upstream archive (Ubuntu/Debian), not by mirroret. If you re-sign the
+  Release files manually, set `MIRRORET_APT_RESIGN=1` to have the client
+  configs reference your mirror keyring. See `docs/SECURITY.md`.
 - Debian 12 (Bookworm) removed `apt-mirror` from its repos. Set
   `MIRRORET_APT_MIRROR_TOOL=debmirror` or let mirroret fall back automatically.
-- SELinux context changes on RHEL apply the blanket `httpd_sys_content_t` type.
-  A custom policy module is not generated.
+- SELinux: file contexts are set blanket-style (`httpd_sys_content_t`)
+  and `httpd_can_network_connect` is enabled. A custom policy module is
+  not generated.
+- TLS-inspecting middleboxes that re-sign upstream archive HTTPS will
+  cause apt clients to reject the mirrored Release files. There is no
+  fix short of an allow-list or manual re-sign. See `docs/PROXY_AND_CA.md`.
+- Clean uninstall is not implemented. `--rollback` restores files but
+  does not remove created users, data directories, or systemd units.
+- Mirroring more than one distro family on a single host concurrently
+  (e.g. Rocky AND AlmaLinux) is possible but largely untested — set
+  `MIRRORET_RPM_FLAVOR` explicitly per install.

@@ -14,10 +14,13 @@ setup() {
     TMPDIR="$(mktemp -d)"
     DRY_RUN=1
     MIRRORET_BASE_DIR="${TMPDIR}/mirroret"
+    # Don't try to write to /var/backups as a non-root developer.
+    MIRRORET_BACKUP_BASE="${TMPDIR}/backups"
+    export MIRRORET_BACKUP_BASE
     MIRRORET_SERVER_IP="10.0.0.1"
     MIRRORET_WEB_PORT=8080
     MIRRORET_DOCKER_REGISTRY_PORT=5000
-    mkdir -p "${MIRRORET_BASE_DIR}/scripts"
+    mkdir -p "${MIRRORET_BASE_DIR}/scripts" "${MIRRORET_BACKUP_BASE}"
 }
 
 teardown() {

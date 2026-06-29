@@ -120,17 +120,51 @@ mktemp_file() {
 
 # get_server_ip — return the primary non-loopback IPv4 address.
 # Can be overridden by setting MIRRORET_SERVER_IP.
+#
+# Strategy (each step skipped silently on failure / empty output):
+#   1. MIRRORET_SERVER_IP override
+#   2. Address used to reach the default gateway (works air-gapped: a
+#      default route only needs to exist, not actually go to the internet)
+#   3. First non-loopback, non-link-local global-scope IPv4 address on
+#      any interface (no route required)
+#   4. Legacy `hostname -I` first field
+#   5. Loud, actionable error
 get_server_ip() {
     if [[ -n "${MIRRORET_SERVER_IP:-}" ]]; then
         echo "$MIRRORET_SERVER_IP"
         return 0
     fi
-    # Try ip(8) first; fall back to hostname -I.
+
+    local ip=""
+
     if check_command ip; then
-        ip -4 route get 1.1.1.1 2>/dev/null | awk '/src/ {print $7; exit}'
-    else
-        hostname -I 2>/dev/null | awk '{print $1}'
+        # Step 2: route via the default gateway. Does not require Internet.
+        local gw
+        gw="$(ip -4 route show default 2>/dev/null | awk '/default/ {print $3; exit}')"
+        if [[ -n "$gw" ]]; then
+            ip="$(ip -4 route get "$gw" 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+        fi
+
+        # Step 3: first global-scope IPv4 on any interface.
+        if [[ -z "$ip" ]]; then
+            ip="$(ip -4 -o addr show scope global 2>/dev/null \
+                | awk '{print $4}' | head -1 | cut -d/ -f1)"
+        fi
     fi
+
+    # Step 4: legacy fallback.
+    if [[ -z "$ip" ]] && check_command hostname; then
+        ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
+
+    if [[ -z "$ip" ]]; then
+        error "Could not determine the server's IPv4 address."
+        error "Set MIRRORET_SERVER_IP explicitly, e.g.:"
+        error "    sudo MIRRORET_SERVER_IP=192.168.1.10 ./install.sh"
+        return 1
+    fi
+
+    echo "$ip"
 }
 
 # confirm <prompt> — ask the user y/n; returns 0 for yes, 1 for no.

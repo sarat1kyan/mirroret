@@ -84,10 +84,24 @@ MIRRORET_PIP_INSECURE="${MIRRORET_PIP_INSECURE:-0}"
 
 # Docker backend.
 MIRRORET_DOCKER_BACKEND="${MIRRORET_DOCKER_BACKEND:-auto}"
+MIRRORET_DOCKER_MODE="${MIRRORET_DOCKER_MODE:-cache}"
+MIRRORET_DOCKER_UPSTREAM_URL="${MIRRORET_DOCKER_UPSTREAM_URL:-https://registry-1.docker.io}"
 MIRRORET_DOCKER_IMAGES_FILE="${MIRRORET_DOCKER_IMAGES_FILE:-}"
 
-# APT mirror tool.
+# APT mirror tool / flavor / upstream.
 MIRRORET_APT_MIRROR_TOOL="${MIRRORET_APT_MIRROR_TOOL:-auto}"
+MIRRORET_APT_FLAVOR="${MIRRORET_APT_FLAVOR:-auto}"
+MIRRORET_APT_UPSTREAM_HOST="${MIRRORET_APT_UPSTREAM_HOST:-}"
+MIRRORET_APT_SECURITY_HOST="${MIRRORET_APT_SECURITY_HOST:-}"
+MIRRORET_APT_COMPONENTS="${MIRRORET_APT_COMPONENTS:-}"
+MIRRORET_APT_RESIGN="${MIRRORET_APT_RESIGN:-0}"
+
+# RPM flavor / repos.
+MIRRORET_RPM_FLAVOR="${MIRRORET_RPM_FLAVOR:-}"
+MIRRORET_RPM_REPOS="${MIRRORET_RPM_REPOS:-}"
+
+# Preflight network probe (off by default; on means outbound HTTPS).
+MIRRORET_PREFLIGHT_NETWORK="${MIRRORET_PREFLIGHT_NETWORK:-0}"
 
 # Approval workflow.
 MIRRORET_APPROVAL_ENABLED="${MIRRORET_APPROVAL_ENABLED:-0}"
@@ -181,6 +195,17 @@ parse_args() {
                 warn_insecure "--insecure flag set: ALL insecure modes enabled."
                 warn_insecure "Use only in isolated lab/air-gapped environments."
                 ;;
+            --docker-mode)
+                shift
+                MIRRORET_DOCKER_MODE="$1"
+                ;;
+            --apt-flavor)
+                shift
+                MIRRORET_APT_FLAVOR="$1"
+                ;;
+            --network-preflight)
+                MIRRORET_PREFLIGHT_NETWORK=1
+                ;;
             --tls-self-signed)
                 MIRRORET_TLS_SELF_SIGNED=1
                 ;;
@@ -260,6 +285,10 @@ Options:
   --no-npm               Skip npm/Verdaccio setup
   --no-firewall          Skip firewall configuration
   --insecure             Enable all insecure modes (LAB ONLY)
+  --docker-mode <cache|hosted>  cache: pull-through proxy (default).
+                                hosted: accept docker push, no proxy.
+  --apt-flavor <auto|ubuntu|debian>  override APT upstream flavor
+  --network-preflight    run optional outbound HTTPS preflight probe
   --tls-self-signed      Generate a self-signed TLS certificate during install
   --gpg-auto             Auto-generate a GPG signing key if none exists
   --approval-mode        Enable staging/approved workflow for pip and npm
@@ -408,6 +437,12 @@ install_system_packages() {
 }
 
 # ── Cron setup ────────────────────────────────────────────────────────────────
+# We bracket our cron lines with sentinel comments. Re-runs replace only
+# the bracketed region, so unrelated operator cron lines are preserved
+# even if they mention "mirroret" or "sync" by coincidence.
+MIRRORET_CRON_BEGIN="# >>> mirroret managed (do not edit between markers) >>>"
+MIRRORET_CRON_END="# <<< mirroret managed <<<"
+
 setup_cron() {
     local sync_script="${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
     local cron_entry="0 ${MIRRORET_SYNC_HOUR} * * * ${sync_script}"
@@ -419,11 +454,34 @@ setup_cron() {
         return 0
     fi
 
-    # Idempotent: remove any existing mirroret sync entry, then add fresh.
-    # crontab -l exits 1 when no crontab exists; guard with || true to avoid
-    # tripping set -e / pipefail inside the subshell.
-    local _existing; _existing=$(crontab -l 2>/dev/null || true)
-    (echo "${_existing}" | grep -v "mirroret\|sync-all\.sh" || true; echo "$cron_entry") | crontab -
+    if ! check_command crontab; then
+        warn "crontab not found — skipping cron setup. Schedule ${sync_script} manually."
+        return 0
+    fi
+
+    local existing
+    existing="$(crontab -l 2>/dev/null || true)"
+
+    # Strip only the previously-managed block. awk so we don't accidentally
+    # match the sentinel inside other operator content.
+    local stripped
+    stripped="$(printf '%s\n' "${existing}" | awk -v b="${MIRRORET_CRON_BEGIN}" -v e="${MIRRORET_CRON_END}" '
+        $0 == b { skip = 1; next }
+        $0 == e { skip = 0; next }
+        !skip { print }
+    ')"
+
+    # Build the new crontab: kept lines + our managed block.
+    {
+        # Preserve existing entries (trim trailing empty lines).
+        if [[ -n "${stripped// /}" ]]; then
+            printf '%s\n' "${stripped}"
+        fi
+        printf '%s\n' "${MIRRORET_CRON_BEGIN}"
+        printf '%s\n' "${cron_entry}"
+        printf '%s\n' "${MIRRORET_CRON_END}"
+    } | crontab -
+
     success "Cron job: daily sync at ${MIRRORET_SYNC_HOUR}:00 AM."
 }
 
@@ -438,21 +496,35 @@ write_master_sync_script() {
 
     # Choose the APT sync command based on whichever tool was resolved.
     # MIRRORET_APT_RESOLVED_TOOL is exported by configure_apt_mirror().
-    local apt_sync_cmd
-    case "${MIRRORET_APT_RESOLVED_TOOL:-apt-mirror}" in
-        debmirror)   apt_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-apt-debmirror.sh" ;;
-        apt-mirror2) apt_sync_cmd="/usr/local/bin/apt-mirror2" ;;
-        *)           apt_sync_cmd="/usr/bin/apt-mirror" ;;
-    esac
+    local apt_sync_cmd=""
+    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
+        case "${MIRRORET_APT_RESOLVED_TOOL:-apt-mirror}" in
+            debmirror)   apt_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-apt-debmirror.sh" ;;
+            apt-mirror2) apt_sync_cmd="/usr/local/bin/apt-mirror2" ;;
+            *)           apt_sync_cmd="/usr/bin/apt-mirror" ;;
+        esac
+    fi
 
+    # Docker step only runs in hosted mode (cache mode rejects pushes).
+    local docker_sync_cmd=""
+    if [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && [[ "${MIRRORET_DOCKER_MODE:-cache}" == "hosted" ]]; then
+        docker_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
+    fi
+
+    # We do NOT use `set -e` for the script body: we WANT the master to
+    # run every step even if an earlier one fails, and we exit with the
+    # accumulated failure count.
     cat > "$sync_script" <<SYNC_EOF
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -Euo pipefail
 
 BASE_DIR="${MIRRORET_BASE_DIR}"
 LOG_DIR="\${BASE_DIR}/logs"
 TIMESTAMP="\$(date +%Y%m%d-%H%M%S)"
 mkdir -p "\$LOG_DIR"
+
+LOG_FILE="\${LOG_DIR}/sync-all-\${TIMESTAMP}.log"
+exec > >(tee -a "\$LOG_FILE") 2>&1
 
 echo "=== Mirroret sync started: \$(date) ==="
 
@@ -460,9 +532,19 @@ FAILED=0
 
 _run_step() {
     local name="\$1"; local script="\$2"
-    if [ -x "\$script" ]; then
+    if [[ -z "\$script" ]]; then
+        echo "SKIP: \${name} (disabled by install configuration)"
+        return 0
+    fi
+    if [[ -x "\$script" ]]; then
         echo "--- Syncing \${name}..."
-        "\$script" || { echo "FAILED: \${name}"; FAILED=\$(( FAILED + 1 )); }
+        if "\$script"; then
+            echo "OK: \${name}"
+        else
+            rc=\$?
+            echo "FAILED: \${name} (exit \${rc})"
+            FAILED=\$(( FAILED + 1 ))
+        fi
     else
         echo "SKIP: \${name} (\${script} not found or not executable)"
     fi
@@ -471,7 +553,7 @@ _run_step() {
 _run_step "apt"         "${apt_sync_cmd}"
 _run_step "RHEL repos"  "\${BASE_DIR}/scripts/sync-redhat-repos.sh"
 _run_step "pip"         "\${BASE_DIR}/scripts/sync-pip-packages.sh"
-_run_step "Docker"      "\${BASE_DIR}/scripts/sync-docker-images.sh"
+_run_step "Docker"      "${docker_sync_cmd}"
 _run_step "npm"         "\${BASE_DIR}/scripts/sync-npm-packages.sh"
 
 echo "=== Mirroret sync completed: \$(date) (failures: \${FAILED}) ==="
@@ -703,6 +785,7 @@ _backup_existing_configs() {
     backup_file "$backup_id" "/etc/systemd/system/pypiserver.service"
     backup_file "$backup_id" "/etc/systemd/system/verdaccio.service"
     backup_file "$backup_id" "/etc/docker/registry/config.yml"
+    backup_file "$backup_id" "/etc/docker-distribution/registry/config.yml"
     backup_file "$backup_id" "/etc/verdaccio/config.yaml"
 }
 

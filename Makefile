@@ -5,7 +5,7 @@ SHELL := /bin/bash
 # Production scripts (linted strictly).
 # mirroret.sh and mirroret-unified.sh are legacy reference files — kept for
 # comparison, not actively maintained, so excluded from strict lint.
-SCRIPTS := install.sh $(wildcard lib/*.sh)
+SCRIPTS := install.sh $(wildcard lib/*.sh) $(wildcard scripts/*.sh)
 TEST_DIR := tests
 
 .PHONY: all lint format test test-integration test-all validate check-deps help dry-run clean
@@ -105,12 +105,8 @@ test:
 		echo "  npm install -g bats  OR  apt-get install bats"; \
 		exit 1; \
 	fi
-	@echo "Running unit tests..."
-	@bats --tap \
-		$(TEST_DIR)/test_distro.bats \
-		$(TEST_DIR)/test_config.bats \
-		$(TEST_DIR)/test_security.bats \
-		$(TEST_DIR)/test_dryrun.bats
+	@echo "Running all unit+integration tests..."
+	@bats --tap $(TEST_DIR)/*.bats
 
 test-integration:
 	@if ! command -v bats >/dev/null 2>&1; then \
@@ -119,12 +115,7 @@ test-integration:
 	@echo "Running integration tests..."
 	@bats --tap $(TEST_DIR)/test_integration.bats
 
-test-all:
-	@if ! command -v bats >/dev/null 2>&1; then \
-		echo "bats not found."; exit 1; \
-	fi
-	@echo "Running all tests..."
-	@bats --tap $(TEST_DIR)/*.bats
+test-all: test
 
 test-verbose:
 	@if ! command -v bats >/dev/null 2>&1; then \
@@ -162,9 +153,9 @@ help:
 	@echo "  make lint          Run shellcheck on all scripts"
 	@echo "  make format        Auto-format scripts with shfmt (in-place)"
 	@echo "  make format-check  Check formatting without modifying files"
-	@echo "  make test              Run unit tests (36 tests, no root needed)"
-	@echo "  make test-integration  Run integration tests (new features)"
-	@echo "  make test-all          Run all tests"
+	@echo "  make test              Run every BATS test (no root needed)"
+	@echo "  make test-integration  Run integration tests subset"
+	@echo "  make test-all          Alias for 'make test'"
 	@echo "  make test-verbose      Run all tests with verbose output"
 	@echo "  make validate      Validate existing installation (requires root)"
 	@echo "  make dry-run       Preview what install.sh would do"

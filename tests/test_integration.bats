@@ -414,7 +414,9 @@ teardown() {
 
 @test "apt: _apt_resolve_tool apt-mirror returns apt-mirror or fallback" {
     # Returns apt-mirror if installed, otherwise debmirror/apt-mirror2 fallback.
+    # `run` merges stdout + stderr (the warn line goes to stderr on fallback),
+    # so we accept a substring match rather than full-equality.
     run _apt_resolve_tool "apt-mirror"
     [[ "${status}" -eq 0 ]]
-    [[ "${output}" == "apt-mirror" || "${output}" == "apt-mirror2" || "${output}" == "debmirror" ]]
+    [[ "${output}" == *"apt-mirror"* || "${output}" == *"debmirror"* ]]
 }

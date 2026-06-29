@@ -1,11 +1,25 @@
 #!/bin/bash
 
 #######################################################################
-# MIRRORET Installation Script
-# Purpose: Turn this machine into a central package repository server
-# Supports: Debian/Ubuntu and RHEL/CentOS/Fedora based systems
-# Author: Mher Saratikyan
+# LEGACY — DO NOT USE
+# This file is the original monolithic installer. It contains every
+# critical issue documented in docs/DEEP_REVIEW.md (insecure-by-default
+# client configs, no rollback, runs services as root, etc.) and is
+# preserved only for historical comparison.
+#
+# Use install.sh instead. See README.md.
 #######################################################################
+
+# Refuse to run if invoked directly.
+case "${MIRRORET_ALLOW_LEGACY:-0}" in
+    1) ;;
+    *)
+        echo "mirroret.sh is the legacy monolithic installer and is no longer" >&2
+        echo "supported. Use install.sh instead. To run the legacy script anyway" >&2
+        echo "set MIRRORET_ALLOW_LEGACY=1 and re-invoke." >&2
+        exit 2
+        ;;
+esac
 
 set -e  # Exit on error
 

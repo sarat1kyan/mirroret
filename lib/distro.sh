@@ -69,24 +69,67 @@ ubuntu_codename() {
     fi
 }
 
-# selinux_enforcing — true if SELinux is in enforcing mode.
-selinux_enforcing() {
-    [[ -f /sys/fs/selinux/enforce ]] && [[ "$(cat /sys/fs/selinux/enforce)" == "1" ]]
+# selinux_mode — print the current SELinux mode: enforcing, permissive,
+# disabled, or absent. Never fails, never errors.
+selinux_mode() {
+    if [[ ! -f /sys/fs/selinux/enforce ]]; then
+        echo "absent"
+        return 0
+    fi
+    case "$(cat /sys/fs/selinux/enforce 2>/dev/null)" in
+        1) echo "enforcing" ;;
+        0) echo "permissive" ;;
+        *) echo "disabled" ;;
+    esac
 }
 
-# set_selinux_context <path> — set the correct SELinux context for web content.
+# selinux_enforcing — true if SELinux is in enforcing mode.
+selinux_enforcing() {
+    [[ "$(selinux_mode)" == "enforcing" ]]
+}
+
+# selinux_active — true if SELinux is enforcing OR permissive (i.e., loaded).
+# We want to apply contexts and booleans even in permissive mode so that
+# a future switch to enforcing doesn't surprise the operator.
+selinux_active() {
+    case "$(selinux_mode)" in
+        enforcing|permissive) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# set_selinux_context <path> — set the correct SELinux context for web content
+# AND enable httpd_can_network_connect so nginx can reverse-proxy to local
+# backends (pypiserver, Verdaccio, the Docker registry). Non-fatal: SELinux
+# tooling is sometimes absent on minimal images.
 set_selinux_context() {
     local path="$1"
-    if selinux_enforcing; then
-        if check_command semanage && check_command restorecon; then
-            info "Setting SELinux context on ${path}"
-            xrun semanage fcontext -a -t httpd_sys_content_t "${path}(/.*)?" 2>/dev/null || \
-                xrun semanage fcontext -m -t httpd_sys_content_t "${path}(/.*)?" || true
-            xrun restorecon -Rv "$path" || true
-        else
-            warn "SELinux is enforcing but semanage/restorecon not found."
-            warn "nginx may be blocked from serving ${path}."
-            warn "Install: policycoreutils-python-utils (RHEL 8+) or policycoreutils-python (RHEL 7)"
-        fi
+
+    if ! selinux_active; then
+        debug "SELinux not active — skipping context + boolean setup."
+        return 0
+    fi
+
+    if ! check_command semanage || ! check_command restorecon; then
+        warn "SELinux is active but semanage/restorecon not found."
+        warn "nginx may be blocked from serving ${path}."
+        warn "Install: policycoreutils-python-utils (RHEL 8+) or policycoreutils-python (RHEL 7)"
+    else
+        info "Setting SELinux file context on ${path}"
+        xrun semanage fcontext -a -t httpd_sys_content_t "${path}(/.*)?" 2>/dev/null \
+            || xrun semanage fcontext -m -t httpd_sys_content_t "${path}(/.*)?" || true
+        xrun restorecon -Rv "$path" || true
+    fi
+
+    # Booleans: nginx → pypiserver/Verdaccio/registry on loopback ports.
+    # Without httpd_can_network_connect, nginx will return 502 from /pip/,
+    # /npm/, /v2/ on every enforcing-SELinux host.
+    if check_command setsebool; then
+        info "Enabling SELinux boolean: httpd_can_network_connect=1 (persistent)"
+        xrun setsebool -P httpd_can_network_connect 1 || \
+            warn "Failed to enable httpd_can_network_connect. nginx may 502 on /pip /npm /v2."
+    else
+        warn "setsebool not found. nginx may 502 on proxied locations until you run:"
+        warn "    setsebool -P httpd_can_network_connect 1"
     fi
 }
