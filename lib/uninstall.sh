@@ -87,6 +87,27 @@ uninst_do() {
     fi
 }
 
+# uninst_try — best-effort: run a command and count a non-zero exit as a
+# skip, not a failure. Use for hygiene ops where the target state may
+# legitimately be absent (systemctl reset-failed on a healthy unit,
+# semanage fcontext -d on a rule that isn't in the policy store).
+uninst_try() {
+    local label="$1"; shift
+    if [[ "${DRY_RUN:-0}" == "1" ]] || [[ "${UNINST_LIST_ONLY}" == "1" ]]; then
+        info "[plan] ${label}"
+        return 0
+    fi
+    debug "uninstall (try): ${label}"
+    if "$@" >/dev/null 2>&1; then
+        info "[remove] ${label}"
+        UNINST_REMOVED=$(( UNINST_REMOVED + 1 ))
+    else
+        debug "[skip] ${label} (nothing to do)"
+        UNINST_SKIPPED=$(( UNINST_SKIPPED + 1 ))
+    fi
+    return 0
+}
+
 uninst_skip() {
     debug "uninstall: skip ${1}"
     UNINST_SKIPPED=$(( UNINST_SKIPPED + 1 ))
@@ -248,12 +269,15 @@ uninst_remove_service() {
         uninst_skip "service ${svc} (not installed)"
         return 0
     fi
-    uninst_do "stop ${svc}.service"      systemctl stop "${svc}.service"      || true
-    uninst_do "disable ${svc}.service"   systemctl disable "${svc}.service"   2>/dev/null || true
-    uninst_do "reset-failed ${svc}"      systemctl reset-failed "${svc}.service" 2>/dev/null || true
+    uninst_do  "stop ${svc}.service"    systemctl stop    "${svc}.service" || true
+    uninst_try "disable ${svc}.service" systemctl disable "${svc}.service"
+    # reset-failed is hygiene: it returns non-zero on many systemd builds
+    # when the unit ISN'T in a failed state (i.e. there's nothing to reset).
+    # That is not a failure — treat it as best-effort.
+    uninst_try "reset-failed ${svc}"    systemctl reset-failed "${svc}.service"
     local unit_file="/etc/systemd/system/${svc}.service"
     if [[ -f "${unit_file}" ]]; then
-        uninst_do "rm ${unit_file}"      rm -f "${unit_file}"
+        uninst_do "rm ${unit_file}" rm -f "${unit_file}"
     fi
 }
 
@@ -523,8 +547,11 @@ uninstall_selinux_restore() {
         return 0
     fi
     if [[ -d "${MIRRORET_BASE_DIR}" ]]; then
-        uninst_do "semanage fcontext -d ${MIRRORET_BASE_DIR}(/.*)?" \
-            semanage fcontext -d "${MIRRORET_BASE_DIR}(/.*)?" 2>/dev/null || true
+        # semanage fcontext -d returns non-zero if the rule isn't in the
+        # local policy store — that's not a failure, it just means there's
+        # nothing to delete.
+        uninst_try "semanage fcontext -d ${MIRRORET_BASE_DIR}(/.*)?" \
+            semanage fcontext -d "${MIRRORET_BASE_DIR}(/.*)?"
         uninst_do "restorecon -Rv ${MIRRORET_BASE_DIR}" \
             restorecon -Rv "${MIRRORET_BASE_DIR}" >/dev/null || true
     fi
