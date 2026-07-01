@@ -30,6 +30,62 @@ MIRRORET_DOCKER_MODE="${MIRRORET_DOCKER_MODE:-cache}"
 MIRRORET_DOCKER_UPSTREAM_URL="${MIRRORET_DOCKER_UPSTREAM_URL:-https://registry-1.docker.io}"
 MIRRORET_DOCKER_IMAGES_FILE="${MIRRORET_DOCKER_IMAGES_FILE:-}"
 
+# ── Proxy propagation helpers ────────────────────────────────────────────────
+# The registry container (cache mode) must reach the upstream, and the
+# native docker-distribution / docker-registry services likewise. On hosts
+# behind a corporate proxy, systemd starts services with a MINIMAL env
+# (systemd does not read /etc/environment for services), so we have to
+# inject the proxy explicitly into both the container run and the native
+# service drop-in.
+
+# _docker_proxy_run_args — print the `-e HTTP_PROXY=... -e HTTPS_PROXY=... -e NO_PROXY=...`
+# argument list for `podman run` / `docker run`. Empty when no proxy env is set.
+_docker_proxy_run_args() {
+    local args=""
+    # Read whichever case the operator has. Uppercase wins if both set.
+    local http_p="${HTTP_PROXY:-${http_proxy:-}}"
+    local https_p="${HTTPS_PROXY:-${https_proxy:-}}"
+    local no_p="${NO_PROXY:-${no_proxy:-}}"
+    [[ -n "$http_p"  ]] && args+=" -e HTTP_PROXY=${http_p} -e http_proxy=${http_p}"
+    [[ -n "$https_p" ]] && args+=" -e HTTPS_PROXY=${https_p} -e https_proxy=${https_p}"
+    [[ -n "$no_p"    ]] && args+=" -e NO_PROXY=${no_p} -e no_proxy=${no_p}"
+    printf '%s' "${args}"
+}
+
+# _write_service_proxy_dropin <service-name> — write a systemd drop-in that
+# injects proxy env into the given service. No-op if no proxy env is set.
+_write_service_proxy_dropin() {
+    local svc="$1"
+    local http_p="${HTTP_PROXY:-${http_proxy:-}}"
+    local https_p="${HTTPS_PROXY:-${https_proxy:-}}"
+    local no_p="${NO_PROXY:-${no_proxy:-}}"
+
+    if [[ -z "$http_p" && -z "$https_p" && -z "$no_p" ]]; then
+        debug "No proxy env in installer shell — skipping ${svc} proxy drop-in."
+        return 0
+    fi
+
+    local dir="/etc/systemd/system/${svc}.service.d"
+    local file="${dir}/proxy.conf"
+
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        info "[DRY-RUN] would write ${file} with proxy env for ${svc}"
+        return 0
+    fi
+
+    mkdir -p "$dir"
+    {
+        printf '[Service]\n'
+        [[ -n "$http_p"  ]] && printf 'Environment="HTTP_PROXY=%s"\n'  "$http_p"  \
+                             && printf 'Environment="http_proxy=%s"\n' "$http_p"
+        [[ -n "$https_p" ]] && printf 'Environment="HTTPS_PROXY=%s"\n' "$https_p" \
+                             && printf 'Environment="https_proxy=%s"\n' "$https_p"
+        [[ -n "$no_p"    ]] && printf 'Environment="NO_PROXY=%s"\n'   "$no_p"    \
+                             && printf 'Environment="no_proxy=%s"\n'  "$no_p"
+    } > "$file"
+    info "Wrote proxy drop-in for ${svc}: ${file}"
+}
+
 # ── Container runtime detection ───────────────────────────────────────────────
 
 # _detect_container_runtime — set CONTAINER_CMD to 'podman' or 'docker'.
@@ -217,6 +273,11 @@ _setup_native_registry() {
     mkdir -p "${NATIVE_CONF_DIR}" "${MIRRORET_BASE_DIR}/docker/registry"
     _emit_registry_config "${NATIVE_CONF_FILE}"
 
+    # Native services run under systemd with a minimal env — they won't
+    # inherit the operator's shell HTTP_PROXY. Drop in an Environment
+    # override so cache mode can actually reach the upstream.
+    _write_service_proxy_dropin "${NATIVE_SERVICE}"
+
     xrun systemctl daemon-reload
     xrun systemctl enable --now "${NATIVE_SERVICE}"
     success "Native Docker registry running (mode: ${MIRRORET_DOCKER_MODE}, service: ${NATIVE_SERVICE})."
@@ -250,12 +311,20 @@ _setup_container_registry() {
         xrun "${CONTAINER_CMD}" start "${MIRRORET_DOCKER_CONTAINER_NAME}"
     else
         info "Creating Docker registry container (runtime: ${CONTAINER_CMD}, mode: ${MIRRORET_DOCKER_MODE})."
+        # Propagate the installer shell's proxy env into the container.
+        # Cache mode NEEDS this to reach the upstream; hosted mode doesn't
+        # dial out on start, but the -e flags are harmless there.
+        local proxy_args
+        proxy_args="$(_docker_proxy_run_args)"
+        [[ -n "${proxy_args}" ]] && info "Passing proxy env into container: ${proxy_args}"
+        # shellcheck disable=SC2086  # proxy_args must be word-split into -e/name/value triples
         xrun "${CONTAINER_CMD}" run -d \
             --name "${MIRRORET_DOCKER_CONTAINER_NAME}" \
             --restart=always \
             -p "${registry_port}:${registry_port}" \
             -v "${base_dir}/docker/registry:/var/lib/registry" \
             -v "/etc/docker/registry/config.yml:/etc/docker/registry/config.yml:ro" \
+            ${proxy_args} \
             registry:2
     fi
 
@@ -263,6 +332,12 @@ _setup_container_registry() {
     # generate a proper systemd unit to ensure the container survives reboots.
     if [[ "${CONTAINER_CMD}" == "podman" ]]; then
         _generate_podman_systemd_unit "${MIRRORET_DOCKER_CONTAINER_NAME}"
+        # Belt+suspenders: even though the -e flags at run time get baked
+        # into the generated unit, drop in an explicit Environment override
+        # in case podman regenerates the ExecStart without them.
+        _write_service_proxy_dropin "${MIRRORET_DOCKER_CONTAINER_NAME}"
+        xrun systemctl daemon-reload || true
+        xrun systemctl restart "${MIRRORET_DOCKER_CONTAINER_NAME}.service" || true
     fi
 
     success "Docker registry running (mode: ${MIRRORET_DOCKER_MODE}, runtime: ${CONTAINER_CMD})."

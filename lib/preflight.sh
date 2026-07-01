@@ -281,16 +281,30 @@ _pf_check_rhel_subscription() {
     local status
     status="$(subscription-manager status 2>/dev/null | grep -E '^Overall Status:' | awk -F: '{print $2}' | xargs || true)"
     case "${status}" in
-        Current)
-            success "RHEL subscription: Current"
+        Current|"Simple Content Access"|Disabled)
+            # `Current`             = classic entitlements OK
+            # `Simple Content Access` = SCA org, no entitlements needed
+            # `Disabled`            = subscription checks are turned off (SCA on some newer
+            #                         RHEL builds)
+            success "RHEL subscription: ${status}"
+            ;;
+        Registered)
+            # RHEL 9 with SCA usually reports "Registered" when queried by a
+            # non-root user OR when subscription-manager can't reach the CDN
+            # right now. dnf actually still works in most of these cases.
+            # Warn but don't scare the operator.
+            info "RHEL subscription: Registered (SCA or partial state; dnf should still work)."
+            ;;
+        "Unknown"|"Not registered"|"Invalid"|"Expired"|"Insufficient")
+            warn "RHEL subscription status: ${status}"
+            warn "dnf install will likely fail until subscription is renewed."
             ;;
         "")
             warn "Could not determine RHEL subscription status."
             warn "Ensure subscription-manager is configured before running install.sh."
             ;;
         *)
-            warn "RHEL subscription status: ${status}"
-            warn "dnf install will likely fail until subscription is renewed."
+            info "RHEL subscription status: ${status}"
             ;;
     esac
 }

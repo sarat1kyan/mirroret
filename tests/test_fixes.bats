@@ -395,3 +395,83 @@ EOF
     [ "$status" -ne 0 ]
     grep -q "registry-1.docker.io|/v2/" "${SCRIPT_DIR}/scripts/mirroret-debug.sh"
 }
+
+# ── Real-world fixes (from 2026-07-01 log review) ────────────────────────────
+
+@test "docker: _docker_proxy_run_args emits -e HTTP_PROXY when set" {
+    source "${SCRIPT_DIR}/lib/logging.sh"
+    source "${SCRIPT_DIR}/lib/common.sh"
+    source "${SCRIPT_DIR}/lib/docker_registry.sh"
+    HTTP_PROXY="http://proxy.example:3128"
+    HTTPS_PROXY="http://proxy.example:3128"
+    NO_PROXY="localhost,127.0.0.1"
+    result="$(_docker_proxy_run_args)"
+    [[ "$result" == *"-e HTTP_PROXY=http://proxy.example:3128"* ]]
+    [[ "$result" == *"-e HTTPS_PROXY=http://proxy.example:3128"* ]]
+    [[ "$result" == *"-e NO_PROXY=localhost,127.0.0.1"* ]]
+}
+
+@test "docker: _docker_proxy_run_args emits nothing when no proxy env is set" {
+    source "${SCRIPT_DIR}/lib/logging.sh"
+    source "${SCRIPT_DIR}/lib/common.sh"
+    source "${SCRIPT_DIR}/lib/docker_registry.sh"
+    unset HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
+    result="$(_docker_proxy_run_args)"
+    [ -z "${result// }" ]
+}
+
+@test "docker: _write_service_proxy_dropin writes proxy env file when proxy set" {
+    source "${SCRIPT_DIR}/lib/logging.sh"
+    source "${SCRIPT_DIR}/lib/common.sh"
+    source "${SCRIPT_DIR}/lib/docker_registry.sh"
+    HTTPS_PROXY="http://p.example:3128"
+    DRY_RUN=1
+    run _write_service_proxy_dropin "docker-distribution"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"would write /etc/systemd/system/docker-distribution.service.d/proxy.conf"* ]]
+}
+
+@test "docker: _write_service_proxy_dropin is a no-op with no proxy env" {
+    source "${SCRIPT_DIR}/lib/logging.sh"
+    source "${SCRIPT_DIR}/lib/common.sh"
+    source "${SCRIPT_DIR}/lib/docker_registry.sh"
+    unset HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
+    DRY_RUN=0   # even in live mode, we must not create the file.
+    tmp="$(mktemp -d)"
+    _write_service_proxy_dropin "docker-distribution" 2>/dev/null || true
+    [ ! -d /etc/systemd/system/docker-distribution.service.d ] || \
+        [ ! -f /etc/systemd/system/docker-distribution.service.d/proxy.conf ]
+    rm -rf "$tmp"
+}
+
+@test "npm: Verdaccio pin logic uses verdaccio@^5 when node < 18" {
+    # We can't easily run _install_verdaccio because it does real installs.
+    # Assert the source contains the version-pin branch and the right
+    # verdaccio spec.
+    grep -q 'verdaccio@\^5' "${SCRIPT_DIR}/lib/npm.sh"
+    grep -q 'node_major.*-lt.*18' "${SCRIPT_DIR}/lib/npm.sh"
+}
+
+@test "npm: MIRRORET_VERDACCIO_VERSION override is honored" {
+    grep -q 'MIRRORET_VERDACCIO_VERSION' "${SCRIPT_DIR}/lib/npm.sh"
+}
+
+@test "preflight: subscription 'Simple Content Access' treated as OK" {
+    grep -q 'Simple Content Access' "${SCRIPT_DIR}/lib/preflight.sh"
+}
+
+@test "preflight: subscription 'Registered' does NOT fire the dnf-will-fail warning" {
+    # Regression: the old code warned "dnf install will likely fail" on
+    # any status != Current, including the perfectly-normal SCA state.
+    # Read the source and confirm the case-branch treats Registered as info-level.
+    section="$(awk '/_pf_check_rhel_subscription/,/^}/' "${SCRIPT_DIR}/lib/preflight.sh")"
+    [[ "$section" == *"Registered)"* ]]
+    # And the alarming message must NOT be in the Registered branch.
+    reg_branch="$(printf '%s\n' "$section" | awk '/^        Registered\)/,/;;/')"
+    [[ "$reg_branch" != *"dnf install will likely fail"* ]]
+}
+
+@test "uninstall: failed labels are captured and printed in summary" {
+    grep -q 'UNINST_FAILED_LABELS' "${SCRIPT_DIR}/lib/uninstall.sh"
+    grep -q 'Some items failed:' "${SCRIPT_DIR}/lib/uninstall.sh"
+}

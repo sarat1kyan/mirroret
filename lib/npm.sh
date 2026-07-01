@@ -65,15 +65,37 @@ _install_verdaccio() {
             # RHEL 8 requires the AppStream module to be enabled first.
             dnf module enable nodejs -y 2>/dev/null || true
         fi
+        # shellcheck disable=SC2086  # PKG_MGR_INSTALL intentionally word-split
         xrun ${PKG_MGR_INSTALL} nodejs npm \
             || die "npm installation failed. Install nodejs and npm manually, then re-run install.sh."
     fi
 
+    # Detect Node major version and pick a Verdaccio release that supports it.
+    # Verdaccio 6.x requires Node >= 20 (as of writing).
+    # Verdaccio 5.x supports Node 12 – 20 and is the safe pin for older hosts
+    # like RHEL 9 default AppStream (which ships Node 16).
+    local node_major=""
+    if check_command node; then
+        node_major="$(node -v 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+    fi
+
+    local verdaccio_pkg="verdaccio"
+    if [[ -n "${node_major}" ]] && [[ "${node_major}" =~ ^[0-9]+$ ]] && [[ "${node_major}" -lt 18 ]]; then
+        verdaccio_pkg="verdaccio@^5"
+        warn "Node ${node_major} detected. Pinning to Verdaccio 5.x (last release compatible with Node < 18)."
+        warn "For Verdaccio 6+, upgrade Node: sudo dnf module reset nodejs && sudo dnf module enable nodejs:20"
+    elif [[ -n "${MIRRORET_VERDACCIO_VERSION:-}" ]]; then
+        verdaccio_pkg="verdaccio@${MIRRORET_VERDACCIO_VERSION}"
+        info "Verdaccio version override: ${verdaccio_pkg}"
+    fi
+
     if [[ "${DRY_RUN}" == "1" ]]; then
-        info "[DRY-RUN] would run: npm install -g verdaccio"
+        info "[DRY-RUN] would run: npm install -g ${verdaccio_pkg}"
         return 0
     fi
-    xrun npm install -g verdaccio
+    info "Installing Verdaccio: ${verdaccio_pkg}"
+    xrun npm install -g "${verdaccio_pkg}" \
+        || die "Verdaccio install failed. Check proxy + npm config, then re-run."
     info "Verdaccio installed."
 }
 
