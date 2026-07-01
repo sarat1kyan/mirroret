@@ -125,7 +125,8 @@ NGINX_EOF
     # Append TLS server block when TLS is ready.
     if declare -f is_tls_ready >/dev/null 2>&1 && is_tls_ready; then
         local conf_file
-        if [[ -d /etc/nginx/sites-available ]]; then
+        # Match the same DISTRO_TYPE keying used in _write_nginx_config.
+        if [[ "${DISTRO_TYPE:-}" == "debian" ]]; then
             conf_file="/etc/nginx/sites-available/mirroret-unified"
         else
             conf_file="/etc/nginx/conf.d/mirroret-unified.conf"
@@ -158,13 +159,18 @@ _write_nginx_config() {
     local conf_file
     local sites_enabled_symlink=""
 
-    if [[ -d /etc/nginx/sites-available ]]; then
-        # Debian/Ubuntu style
+    # Key off DISTRO_TYPE — not directory existence. A stale sites-available/
+    # left over from a partial install could otherwise fool us into writing
+    # Debian-style config on a RHEL host (whose nginx.conf includes conf.d/
+    # but NOT sites-enabled/), and the symlink step would fail with
+    # "No such file or directory".
+    if [[ "${DISTRO_TYPE:-}" == "debian" ]]; then
         conf_file="/etc/nginx/sites-available/${config_name}"
         sites_enabled_symlink="/etc/nginx/sites-enabled/${config_name}"
+        mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
     else
-        # RHEL style
         conf_file="/etc/nginx/conf.d/${config_name}.conf"
+        mkdir -p /etc/nginx/conf.d
     fi
 
     # Back up existing config.
