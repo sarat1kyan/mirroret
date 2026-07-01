@@ -476,6 +476,18 @@ EOF
     grep -q 'Some items failed:' "${SCRIPT_DIR}/lib/uninstall.sh"
 }
 
+@test "nginx: layout choice is keyed on DISTRO_TYPE, not directory existence" {
+    # Regression: previously _write_nginx_config did `if [[ -d /etc/nginx/sites-available ]]`
+    # to pick Debian vs RHEL style. A stale sites-available/ left over from
+    # a partial install on RHEL made the code pick Debian style, then the
+    # symlink step failed because sites-enabled/ didn't exist. Fix keys off
+    # DISTRO_TYPE instead.
+    section="$(awk '/^_write_nginx_config/,/^}/' "${SCRIPT_DIR}/lib/nginx.sh")"
+    [[ "$section" == *'DISTRO_TYPE'* ]]
+    # And it must NOT depend on `-d /etc/nginx/sites-available` for the choice.
+    ! [[ "$section" == *'-d /etc/nginx/sites-available'*'conf_file='* ]]
+}
+
 @test "install: client-config gen is gated on DISTRO_TYPE (no cross-distro nonsense)" {
     # Regression: install.sh used to call generate_apt_client_config even
     # on RHEL, which then died in _apt_codename because OS_VER=9.8 has no
