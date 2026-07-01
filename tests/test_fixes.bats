@@ -476,6 +476,17 @@ EOF
     grep -q 'Some items failed:' "${SCRIPT_DIR}/lib/uninstall.sh"
 }
 
+@test "nginx: newly-written config is restorecon'd on SELinux hosts" {
+    # Regression: on RHEL SELinux enforcing, a file created under
+    # /etc/nginx/ by an unconfined process inherits etc_t which httpd_t
+    # cannot read — nginx -t then fails with "Permission denied". The
+    # fix is to call restorecon on the freshly-written config file.
+    grep -q 'restorecon "\$conf_file"' "${SCRIPT_DIR}/lib/nginx.sh"
+    # Also the TLS-append path must restorecon after appending.
+    section="$(awk '/configure_nginx_unified/,/^}/' "${SCRIPT_DIR}/lib/nginx.sh")"
+    [[ "$section" == *'restorecon'* ]]
+}
+
 @test "nginx: layout choice is keyed on DISTRO_TYPE, not directory existence" {
     # Regression: previously _write_nginx_config did `if [[ -d /etc/nginx/sites-available ]]`
     # to pick Debian vs RHEL style. A stale sites-available/ left over from

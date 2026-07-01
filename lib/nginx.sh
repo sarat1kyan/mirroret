@@ -138,6 +138,11 @@ NGINX_EOF
                 tls_nginx_server_block "" "mirroret-unified" >> "${conf_file}"
                 info "TLS server block appended to ${conf_file}"
             fi
+            # Same SELinux gotcha applies — an append can carry over the
+            # inherited context. Re-label to be safe.
+            if [[ -e /sys/fs/selinux/enforce ]] && command -v restorecon >/dev/null 2>&1; then
+                restorecon "${conf_file}" >/dev/null 2>&1 || true
+            fi
             if nginx -t 2>/dev/null; then
                 systemctl reload nginx 2>/dev/null || systemctl restart nginx
             else
@@ -218,10 +223,21 @@ NGINX_CONF
     atomic_write "$conf_file" "$tmpfile"
     info "nginx config written: ${conf_file}"
 
+    # SELinux (RHEL): a file created under /etc/nginx/ by an unconfined_t
+    # process inherits etc_t, which httpd_t cannot read. nginx -t then
+    # fails with "Permission denied" even though DAC permissions look fine.
+    # restorecon relabels it to httpd_config_t.
+    if [[ -e /sys/fs/selinux/enforce ]] && command -v restorecon >/dev/null 2>&1; then
+        restorecon "$conf_file" >/dev/null 2>&1 || true
+    fi
+
     # Enable the site on Debian/Ubuntu.
     if [[ -n "$sites_enabled_symlink" ]]; then
         ln -sf "$conf_file" "$sites_enabled_symlink"
         info "Site enabled: ${sites_enabled_symlink}"
+        if [[ -e /sys/fs/selinux/enforce ]] && command -v restorecon >/dev/null 2>&1; then
+            restorecon "$sites_enabled_symlink" >/dev/null 2>&1 || true
+        fi
     fi
 
     # Remove default site to avoid port conflicts.
