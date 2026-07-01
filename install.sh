@@ -586,11 +586,18 @@ generate_all_client_configs() {
     local config_dir="${MIRRORET_BASE_DIR}/config"
     mkdir -p "$config_dir"
 
-    [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && \
+    # APT and RPM client configs only make sense when this server actually
+    # mirrors that ecosystem. Since configure_apt_mirror / configure_createrepo
+    # are gated on DISTRO_TYPE, the client-config side must be too — otherwise
+    # you get either a nonsense config or a hard fail (e.g. asking for the
+    # Ubuntu codename of "9.8" on a RHEL host).
+    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
         generate_apt_client_config "${config_dir}/debian-client.list"
+    fi
 
-    [[ "${MIRRORET_ENABLE_RPM}" == "1" ]] && \
+    if [[ "${MIRRORET_ENABLE_RPM}" == "1" ]] && [[ "${DISTRO_TYPE}" == "rhel" ]]; then
         generate_rpm_client_config "${config_dir}/redhat-client.repo"
+    fi
 
     [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && \
         generate_pip_client_config "${config_dir}/pip.conf"

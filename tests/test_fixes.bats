@@ -475,3 +475,16 @@ EOF
     grep -q 'UNINST_FAILED_LABELS' "${SCRIPT_DIR}/lib/uninstall.sh"
     grep -q 'Some items failed:' "${SCRIPT_DIR}/lib/uninstall.sh"
 }
+
+@test "install: client-config gen is gated on DISTRO_TYPE (no cross-distro nonsense)" {
+    # Regression: install.sh used to call generate_apt_client_config even
+    # on RHEL, which then died in _apt_codename because OS_VER=9.8 has no
+    # matching Ubuntu codename. Same in reverse for RPM on Debian.
+    section="$(awk '/^generate_all_client_configs/,/^}/' "${SCRIPT_DIR}/install.sh")"
+    # APT client config must be gated on DISTRO_TYPE == debian
+    [[ "$section" == *'DISTRO_TYPE}" == "debian"'*'generate_apt_client_config'* ]] || \
+        [[ "$section" == *'generate_apt_client_config'*'DISTRO_TYPE'* ]]
+    # RPM client config must be gated on DISTRO_TYPE == rhel
+    [[ "$section" == *'DISTRO_TYPE}" == "rhel"'*'generate_rpm_client_config'* ]] || \
+        [[ "$section" == *'generate_rpm_client_config'*'DISTRO_TYPE'* ]]
+}
