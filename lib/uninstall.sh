@@ -43,6 +43,9 @@ UNINST_PLAN=()
 UNINST_REMOVED=0
 UNINST_SKIPPED=0
 UNINST_FAILED=0
+# Labels of steps that returned non-zero — printed in the summary so the
+# operator knows what to investigate.
+UNINST_FAILED_LABELS=()
 
 # Toggles populated by uninstall_main from CLI flags.
 UNINST_T_APT=0
@@ -79,6 +82,7 @@ uninst_do() {
         local rc=$?
         warn "[fail] ${label} (rc=${rc})"
         UNINST_FAILED=$(( UNINST_FAILED + 1 ))
+        UNINST_FAILED_LABELS+=("${label} (rc=${rc})")
         return "$rc"
     fi
 }
@@ -717,7 +721,12 @@ uninstall_main() {
     echo ""
     info "Uninstall summary: removed=${UNINST_REMOVED}  skipped=${UNINST_SKIPPED}  failed=${UNINST_FAILED}"
     if [[ "${UNINST_FAILED}" -gt 0 ]]; then
-        warn "Some items failed. Re-run with --debug to see details."
+        warn "Some items failed:"
+        local lbl
+        for lbl in "${UNINST_FAILED_LABELS[@]}"; do
+            warn "  - ${lbl}"
+        done
+        warn "Re-run with --debug for more detail."
         return 1
     fi
     success "Uninstall complete."
