@@ -559,6 +559,7 @@ uninstall_selinux_restore() {
 
 uninstall_master_sync() {
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
+    uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/cleanup-all.sh"
 }
 
 uninstall_purge_data() {
@@ -617,7 +618,7 @@ uninstall_build_plan() {
     if [[ "${UNINST_T_COMMON}" == "1" ]]; then
         uninst_step "remove nginx vhost (sites-available/enabled, conf.d, reload nginx)"
         uninst_step "strip cron managed block"
-        uninst_step "remove ${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
+        uninst_step "remove ${MIRRORET_BASE_DIR}/scripts/sync-all.sh + cleanup-all.sh"
         uninst_step "restore SELinux file context on ${MIRRORET_BASE_DIR}"
         if [[ "${UNINST_KEEP_FIREWALL}" != "1" ]]; then
             uninst_step "reverse firewall rules for selected ports"

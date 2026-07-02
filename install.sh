@@ -855,6 +855,13 @@ main() {
         exit 0
     fi
 
+    # --upgrade fast-path assumes a prior install exists. Refuse if the
+    # base directory doesn't yet exist — otherwise downstream steps
+    # (nginx config, service start) fail with cryptic errors.
+    if [[ "${MODE_UPGRADE}" == "1" ]] && [[ ! -d "${MIRRORET_BASE_DIR}" ]]; then
+        die "--upgrade requires an existing install. ${MIRRORET_BASE_DIR} not found. Run a full install first: sudo ./install.sh"
+    fi
+
     # Install system packages. In --upgrade mode we skip this because
     # dnf/apt-get with `-y` on already-installed packages is a slow no-op
     # (and can hit repo issues) — the operator is on the same code path
