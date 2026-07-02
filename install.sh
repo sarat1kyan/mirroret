@@ -64,6 +64,8 @@ source "${SCRIPT_DIR}/lib/gpg.sh"
 source "${SCRIPT_DIR}/lib/approval.sh"
 # shellcheck source=lib/uninstall.sh
 source "${SCRIPT_DIR}/lib/uninstall.sh"
+# shellcheck source=lib/retention.sh
+source "${SCRIPT_DIR}/lib/retention.sh"
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
@@ -105,6 +107,17 @@ MIRRORET_RPM_REPOS="${MIRRORET_RPM_REPOS:-}"
 # Preflight network probe (off by default; on means outbound HTTPS).
 MIRRORET_PREFLIGHT_NETWORK="${MIRRORET_PREFLIGHT_NETWORK:-0}"
 
+# Retention (off by default — most operators want "keep everything").
+MIRRORET_RETENTION_ENABLE="${MIRRORET_RETENTION_ENABLE:-0}"
+MIRRORET_RETENTION_MODE="${MIRRORET_RETENTION_MODE:-report}"
+MIRRORET_RPM_KEEP_VERSIONS="${MIRRORET_RPM_KEEP_VERSIONS:-3}"
+MIRRORET_PIP_KEEP_VERSIONS="${MIRRORET_PIP_KEEP_VERSIONS:-3}"
+MIRRORET_NPM_KEEP_DAYS="${MIRRORET_NPM_KEEP_DAYS:-180}"
+MIRRORET_DOCKER_GC="${MIRRORET_DOCKER_GC:-0}"
+MIRRORET_CLEANUP_HOUR="${MIRRORET_CLEANUP_HOUR:-3}"        # weekly Sun @03:00
+MIRRORET_CLEANUP_DOW="${MIRRORET_CLEANUP_DOW:-0}"           # Sunday
+MIRRORET_UPGRADE_MODE="${MIRRORET_UPGRADE_MODE:-0}"
+
 # Approval workflow.
 MIRRORET_APPROVAL_ENABLED="${MIRRORET_APPROVAL_ENABLED:-0}"
 
@@ -139,6 +152,9 @@ MODE_APPROVE_ALL_NPM=0
 MODE_APPROVE_PACKAGE=""
 MODE_EXCLUDE_PIP=""
 MODE_EXCLUDE_NPM=""
+MODE_CLEANUP=0
+MODE_CLEANUP_REPORT=0
+MODE_UPGRADE=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parse_args() {
@@ -207,6 +223,15 @@ parse_args() {
                 ;;
             --network-preflight)
                 MIRRORET_PREFLIGHT_NETWORK=1
+                ;;
+            --cleanup)
+                MODE_CLEANUP=1
+                ;;
+            --cleanup-report)
+                MODE_CLEANUP_REPORT=1
+                ;;
+            --upgrade)
+                MODE_UPGRADE=1
                 ;;
             --tls-self-signed)
                 MIRRORET_TLS_SELF_SIGNED=1
@@ -302,6 +327,11 @@ Options:
                                 hosted: accept docker push, no proxy.
   --apt-flavor <auto|ubuntu|debian>  override APT upstream flavor
   --network-preflight    run optional outbound HTTPS preflight probe
+  --upgrade              Fast re-install: skip pkg install + user create; refresh
+                         configs + systemd units + regenerated sync scripts
+                         (managed files only — user-customized ones are preserved).
+  --cleanup              Run mirror retention now (needs MIRRORET_RETENTION_ENABLE=1)
+  --cleanup-report       Show what --cleanup would remove without deleting anything
   --tls-self-signed      Generate a self-signed TLS certificate during install
   --gpg-auto             Auto-generate a GPG signing key if none exists
   --approval-mode        Enable staging/approved workflow for pip and npm
@@ -460,12 +490,16 @@ MIRRORET_CRON_END="# <<< mirroret managed <<<"
 
 setup_cron() {
     local sync_script="${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
-    local cron_entry="0 ${MIRRORET_SYNC_HOUR} * * * ${sync_script}"
+    local cleanup_script="${MIRRORET_BASE_DIR}/scripts/cleanup-all.sh"
+    local sync_entry="0 ${MIRRORET_SYNC_HOUR} * * * ${sync_script}"
+    # Weekly cleanup on ${MIRRORET_CLEANUP_DOW} at ${MIRRORET_CLEANUP_HOUR}:00
+    local cleanup_entry="0 ${MIRRORET_CLEANUP_HOUR} * * ${MIRRORET_CLEANUP_DOW} ${cleanup_script}"
 
     section "Setting Up Automated Sync (cron)"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
-        info "[DRY-RUN] would add cron: ${cron_entry}"
+        info "[DRY-RUN] would add cron: ${sync_entry}"
+        info "[DRY-RUN] would add cron: ${cleanup_entry}"
         return 0
     fi
 
@@ -493,11 +527,12 @@ setup_cron() {
             printf '%s\n' "${stripped}"
         fi
         printf '%s\n' "${MIRRORET_CRON_BEGIN}"
-        printf '%s\n' "${cron_entry}"
+        printf '%s\n' "${sync_entry}"
+        printf '%s\n' "${cleanup_entry}"
         printf '%s\n' "${MIRRORET_CRON_END}"
     } | crontab -
 
-    success "Cron job: daily sync at ${MIRRORET_SYNC_HOUR}:00 AM."
+    success "Cron: daily sync at ${MIRRORET_SYNC_HOUR}:00, weekly cleanup on DOW=${MIRRORET_CLEANUP_DOW} at ${MIRRORET_CLEANUP_HOUR}:00."
 }
 
 # ── Master sync script ────────────────────────────────────────────────────────
@@ -506,6 +541,11 @@ write_master_sync_script() {
 
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would write: ${sync_script}"
+        return 0
+    fi
+
+    # Upgrade safety: don't clobber operator-edited sync-all.sh.
+    if ! preserve_user_customization "${sync_script}"; then
         return 0
     fi
 
@@ -532,6 +572,11 @@ write_master_sync_script() {
     cat > "$sync_script" <<SYNC_EOF
 #!/usr/bin/env bash
 set -Euo pipefail
+
+${MIRRORET_MANAGED_MARKER}
+# To disable individual sync steps, use --no-apt / --no-rpm / --no-pip
+# / --no-docker / --no-npm at install time, or edit MIRRORET_ENABLE_*
+# in /etc/mirroret/mirroret.conf and re-run install.sh.
 
 BASE_DIR="${MIRRORET_BASE_DIR}"
 LOG_DIR="\${BASE_DIR}/logs"
@@ -577,6 +622,76 @@ SYNC_EOF
 
     chmod +x "$sync_script"
     success "Master sync script: ${sync_script}"
+}
+
+# ── Master cleanup script ────────────────────────────────────────────────────
+# Generates a self-contained /srv/mirroret/scripts/cleanup-all.sh that
+# performs retention (per-ecosystem prune + optional Docker GC). Weekly
+# cron entry set up alongside the daily sync entry.
+write_master_cleanup_script() {
+    local cleanup_script="${MIRRORET_BASE_DIR}/scripts/cleanup-all.sh"
+
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would write: ${cleanup_script}"
+        return 0
+    fi
+
+    if ! preserve_user_customization "${cleanup_script}"; then
+        return 0
+    fi
+
+    cat > "${cleanup_script}" <<CLEANUP_EOF
+#!/usr/bin/env bash
+set -Euo pipefail
+
+${MIRRORET_MANAGED_MARKER}
+# Retention / cleanup runner.
+#
+# Runs weekly via cron (Sunday ${MIRRORET_CLEANUP_HOUR}:00 by default).
+# Also invokable manually: sudo ./install.sh --cleanup [--cleanup-report]
+#
+# All retention is OFF by default. Enable in /etc/mirroret/mirroret.conf:
+#   MIRRORET_RETENTION_ENABLE=1
+#   MIRRORET_RETENTION_MODE=prune       # (or 'report' for dry-run)
+#   MIRRORET_RPM_KEEP_VERSIONS=3
+#   MIRRORET_PIP_KEEP_VERSIONS=3
+#   MIRRORET_NPM_KEEP_DAYS=180
+#   MIRRORET_DOCKER_GC=0                # (1 needs brief registry restart)
+
+BASE_DIR="${MIRRORET_BASE_DIR}"
+LOG_DIR="\${BASE_DIR}/logs"
+TIMESTAMP="\$(date +%Y%m%d-%H%M%S)"
+mkdir -p "\$LOG_DIR"
+LOG_FILE="\${LOG_DIR}/cleanup-\${TIMESTAMP}.log"
+exec > >(tee -a "\$LOG_FILE") 2>&1
+
+# Load /etc/mirroret/mirroret.conf if present.
+if [[ -f /etc/mirroret/mirroret.conf ]]; then
+    # shellcheck disable=SC1091
+    . /etc/mirroret/mirroret.conf
+fi
+
+# Load retention library from the install tree.
+INSTALL_DIR="${SCRIPT_DIR}"
+if [[ ! -d "\${INSTALL_DIR}/lib" ]]; then
+    echo "ERROR: mirroret install tree not found at \${INSTALL_DIR}"
+    echo "Set INSTALL_DIR at the top of this script if you moved the repo."
+    exit 2
+fi
+# shellcheck disable=SC1091
+source "\${INSTALL_DIR}/lib/logging.sh"
+# shellcheck disable=SC1091
+source "\${INSTALL_DIR}/lib/common.sh"
+# shellcheck disable=SC1091
+source "\${INSTALL_DIR}/lib/retention.sh"
+
+echo "=== Mirroret cleanup started: \$(date) ==="
+run_retention
+echo "=== Mirroret cleanup completed: \$(date) ==="
+CLEANUP_EOF
+
+    chmod +x "${cleanup_script}"
+    success "Master cleanup script: ${cleanup_script}"
 }
 
 # ── Client config generation ──────────────────────────────────────────────────
@@ -663,6 +778,16 @@ main() {
     info "Log file: ${MIRRORET_LOG_FILE}"
 
     # Handle non-install modes.
+    if [[ "${MODE_CLEANUP}" == "1" ]] || [[ "${MODE_CLEANUP_REPORT}" == "1" ]]; then
+        detect_distro
+        if [[ "${MODE_CLEANUP_REPORT}" == "1" ]]; then
+            retention_report
+        else
+            retention_prune
+        fi
+        exit $?
+    fi
+
     if [[ "${MODE_CHECK}" == "1" ]]; then
         detect_distro
         run_validation
@@ -730,11 +855,22 @@ main() {
         exit 0
     fi
 
-    # Install system packages.
-    install_system_packages
+    # Install system packages. In --upgrade mode we skip this because
+    # dnf/apt-get with `-y` on already-installed packages is a slow no-op
+    # (and can hit repo issues) — the operator is on the same code path
+    # they already installed with, they just want configs refreshed.
+    if [[ "${MODE_UPGRADE}" == "1" ]]; then
+        info "Upgrade mode: skipping system package install."
+    else
+        install_system_packages
+    fi
 
-    # Create directory structure.
-    create_directory_structure
+    # Create directory structure. Idempotent, but skip the noise on upgrade.
+    if [[ "${MODE_UPGRADE}" == "1" ]]; then
+        info "Upgrade mode: skipping directory structure step."
+    else
+        create_directory_structure
+    fi
 
     # Ensure approval dirs exist when workflow is enabled.
     ensure_approval_dirs
@@ -782,6 +918,7 @@ main() {
 
     # Set up cron and master sync script.
     write_master_sync_script
+    write_master_cleanup_script
     setup_cron
 
     # Configure firewall.
