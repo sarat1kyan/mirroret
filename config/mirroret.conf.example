@@ -261,3 +261,30 @@
 # Optional per-language sync sources.
 #MIRRORET_PIP_PACKAGES_FILE=/etc/mirroret/pip-packages.txt
 #MIRRORET_NPM_PACKAGES_FILE=/etc/mirroret/npm-packages.txt
+
+# ── Retention / cleanup ──────────────────────────────────────────────────────
+
+# Retention is OPT-IN. Default: keep everything forever.
+# Enable it, then set the mode to 'report' (dry-run) first to see what
+# would be removed. Flip to 'prune' when you're happy.
+#
+# Weekly cron runs /srv/mirroret/scripts/cleanup-all.sh Sundays at 03:00
+# by default (override MIRRORET_CLEANUP_HOUR / MIRRORET_CLEANUP_DOW).
+#
+# You can also invoke it manually:
+#   sudo ./install.sh --cleanup-report    # dry-run, prints what would go
+#   sudo ./install.sh --cleanup           # actually delete
+
+#MIRRORET_RETENTION_ENABLE=0        # 1 to enable
+#MIRRORET_RETENTION_MODE=report     # report | prune
+
+# Per-ecosystem policies (only take effect when RETENTION_ENABLE=1)
+#MIRRORET_RPM_KEEP_VERSIONS=3       # keep 3 newest of each RPM (0 = disable)
+#MIRRORET_PIP_KEEP_VERSIONS=3       # keep 3 newest wheels/sdists per package
+#MIRRORET_NPM_KEEP_DAYS=180         # drop npm tarballs older than N days
+#MIRRORET_DOCKER_GC=0               # 1 = weekly registry garbage-collect
+                                    #     (needs brief registry restart)
+
+# Cron schedule for the weekly cleanup (default Sun @ 03:00).
+#MIRRORET_CLEANUP_HOUR=3
+#MIRRORET_CLEANUP_DOW=0             # 0=Sun ... 6=Sat
