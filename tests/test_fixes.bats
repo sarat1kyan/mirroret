@@ -213,6 +213,29 @@ teardown() {
     grep -q 'FLAVOR="rhel"' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
 }
 
+@test "rpm: OL9 defaults include UEKR8 and developer_EPEL" {
+    mock_os_release "ol" "9.4"
+    detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    unset MIRRORET_RPM_REPOS
+    result="$(_rpm_default_repos ol 9)"
+    [[ "$result" == *"ol9_baseos_latest"* ]]
+    [[ "$result" == *"ol9_appstream"* ]]
+    [[ "$result" == *"ol9_UEKR8"* ]]
+    [[ "$result" == *"ol9_developer_EPEL"* ]]
+}
+
+@test "rpm: OL8 defaults stay minimal (no UEK/EPEL auto-add)" {
+    mock_os_release "ol" "8.9"
+    detect_distro_from_mock
+    unset MIRRORET_RPM_REPOS
+    result="$(_rpm_default_repos ol 8)"
+    [[ "$result" == *"ol8_baseos_latest"* ]]
+    [[ "$result" == *"ol8_appstream"* ]]
+    [[ "$result" != *"UEKR"* ]]
+    [[ "$result" != *"EPEL"* ]]
+}
+
 @test "rpm: MIRRORET_RPM_REPOS override threads through to sync script" {
     mock_os_release "rocky" "9.3"
     detect_distro_from_mock
