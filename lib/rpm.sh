@@ -60,7 +60,14 @@ _rpm_default_repos() {
             fi
             ;;
         ol)
-            echo "ol${major}_baseos_latest ol${major}_appstream"
+            # Oracle Linux 9: add UEK R8 kernel channel + developer EPEL.
+            # Older OL keeps the minimal pair; override with
+            # MIRRORET_RPM_REPOS to add UEK/EPEL there too.
+            if [[ "${major}" == "9" ]]; then
+                echo "ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL"
+            else
+                echo "ol${major}_baseos_latest ol${major}_appstream"
+            fi
             ;;
         centos)
             echo "baseos appstream"

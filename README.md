@@ -65,6 +65,25 @@ ls /srv/mirroret/config/
 
 ---
 
+## Updating mirroret itself
+
+Safe upgrade path — never touches your mirror data:
+
+```bash
+cd ~/mirroret-main         # or wherever you cloned it
+git fetch origin
+git reset --hard origin/main   # or `git pull --ff-only`
+sudo ./install.sh --upgrade    # fast path: refresh configs + services only
+sudo ./scripts/mirroret-debug.sh   # verify
+```
+
+`--upgrade` skips package install and directory creation (already done),
+regenerates configs + managed sync scripts, and refreshes the cron block.
+Your customizations are preserved: any sync script whose `MIRRORET-MANAGED`
+sentinel line you removed is left alone. Full docs: [docs/RETENTION.md](docs/RETENTION.md).
+
+---
+
 ## Supported package types
 
 | Type | Service | Default port | Client config |

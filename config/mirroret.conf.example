@@ -208,7 +208,8 @@
 # Rocky/Alma 8:   "baseos appstream extras"
 # Rocky/Alma 9:   "baseos appstream"
 # RHEL:           "rhel-9-for-x86_64-baseos-rpms rhel-9-for-x86_64-appstream-rpms"
-# Oracle Linux 9: "ol9_baseos_latest ol9_appstream"
+# Oracle Linux 9: "ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL"
+# Oracle Linux 8: "ol8_baseos_latest ol8_appstream"
 # Fedora:         "fedora updates"
 #MIRRORET_RPM_REPOS="baseos appstream"
 
