@@ -213,6 +213,13 @@ teardown() {
     grep -q 'FLAVOR="rhel"' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
 }
 
+@test "install: auto-loads /etc/mirroret/mirroret.conf when --config absent" {
+    # Regression: prior behavior required --config. Now install.sh
+    # auto-sources /etc/mirroret/mirroret.conf if present.
+    grep -q 'Auto-load' "${SCRIPT_DIR}/install.sh" || \
+        grep -q 'Auto-load\|auto-load\|mirroret.conf (auto)' "${SCRIPT_DIR}/install.sh"
+}
+
 @test "rpm: OL9 defaults include UEKR8 and developer_EPEL" {
     mock_os_release "ol" "9.4"
     detect_distro_from_mock
