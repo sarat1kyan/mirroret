@@ -158,6 +158,14 @@ MODE_UPGRADE=0
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parse_args() {
+    # Auto-load /etc/mirroret/mirroret.conf if present and --config not
+    # given. Explicit --config overrides.
+    if [[ -f /etc/mirroret/mirroret.conf ]] && [[ "$*" != *"--config"* ]]; then
+        # shellcheck disable=SC1091
+        source /etc/mirroret/mirroret.conf
+        info "Loaded config: /etc/mirroret/mirroret.conf (auto)"
+    fi
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --config)
