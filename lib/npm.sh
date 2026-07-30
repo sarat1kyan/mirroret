@@ -209,6 +209,7 @@ _write_npm_sync_script() {
     local approval="${MIRRORET_APPROVAL_ENABLED:-0}"
     local packages_file="${MIRRORET_NPM_PACKAGES_FILE:-}"
     local allow_anon="${MIRRORET_NPM_ALLOW_ANON_PUBLISH:-0}"
+    local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would write npm sync script: ${sync_script}"
@@ -251,7 +252,7 @@ _write_npm_sync_script() {
     elif [[ "${allow_anon}" == "1" ]]; then
         publish_block='    tarball=$(ls -t "${WORK_DIR}/"*.tgz 2>/dev/null | head -1)
     if [[ -n "${tarball}" ]]; then
-        if npm publish "${tarball}" --registry "${VERDACCIO_URL}"; then
+        if npm publish --loglevel=error "${tarball}" --registry "${VERDACCIO_URL}"; then
             echo "  PUBLISHED: ${package}"
         else
             echo "  PUBLISH FAILED: ${package}"
@@ -264,7 +265,7 @@ _write_npm_sync_script() {
     # or run: npm login --registry="${VERDACCIO_URL}" before syncing.
     tarball=$(ls -t "${WORK_DIR}/"*.tgz 2>/dev/null | head -1)
     if [[ -n "${tarball}" ]]; then
-        if npm publish "${tarball}" --registry "${VERDACCIO_URL}"; then
+        if npm publish --loglevel=error "${tarball}" --registry "${VERDACCIO_URL}"; then
             echo "  PUBLISHED: ${package}"
         else
             echo "  PUBLISH FAILED (auth required?): ${package}"
@@ -295,8 +296,17 @@ LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-npm-\$(date +%Y%m%d-%H%M%S).log"
 APPROVAL_MODE="${approval}"
 
+MIN_FREE_GB="${min_free_gb}"
+LOCK_FILE="/var/lock/mirroret-sync-npm.lock"
 mkdir -p "\$LOG_DIR" "\$STAGING_DIR" "\$WORK_DIR_DEFAULT" "\$APPROVED_DIR"
 exec > >(tee -a "\$LOG_FILE") 2>&1
+
+# Single-instance lock — stop cron colliding with a manual run.
+exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
+if ! flock -n 9; then
+    echo "ERROR: another npm sync is already running. Exiting."
+    exit 3
+fi
 
 echo "Starting npm package sync: \$(date)"
 
@@ -304,6 +314,22 @@ if ! command -v npm >/dev/null 2>&1; then
     echo "ERROR: npm not found on this host. Install nodejs + npm and re-run."
     exit 2
 fi
+
+_free_gb() { df -BG --output=avail "\$APPROVED_DIR" 2>/dev/null | tail -1 | tr -dc '0-9'; }
+_check_disk() {
+    local free; free="\$(_free_gb)"
+    [[ -z "\$free" ]] && return 0
+    if [[ "\$free" -lt "\$MIN_FREE_GB" ]]; then
+        echo "ABORT: only \${free} GB free (floor: \${MIN_FREE_GB} GB)."
+        return 1
+    fi
+    return 0
+}
+_check_disk || exit 4
+
+# npm pack/publish are extremely chatty (one line per file in the tarball —
+# lodash alone prints 1000+ lines). Quiet them down so the log stays useful.
+export npm_config_loglevel=error
 
 PACKAGES=(
 ${packages_block}
@@ -319,9 +345,14 @@ fi
 failed=0
 
 for package in "\${PACKAGES[@]}"; do
+    if ! _check_disk; then
+        echo "Stopping before \${package} — disk floor reached."
+        failed=\$(( failed + 1 ))
+        break
+    fi
     echo "Processing \${package}..."
     pushd "\${WORK_DIR}" >/dev/null
-    if npm pack "\${package}"; then
+    if npm pack --loglevel=error "\${package}"; then
         echo "  DOWNLOADED: \${package}"
 ${publish_block}
     else

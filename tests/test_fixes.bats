@@ -541,3 +541,97 @@ EOF
     [[ "$section" == *'DISTRO_TYPE}" == "rhel"'*'generate_rpm_client_config'* ]] || \
         [[ "$section" == *'generate_rpm_client_config'*'DISTRO_TYPE'* ]]
 }
+
+# ── Sync safety guards (runaway-download incident, 2026-07-22) ────────────────
+
+@test "rpm: reposync pins arch (prevents src.rpm runaway)" {
+    # A real sync pulled 44k .src.rpm files (400-600 MB each) because
+    # reposync had no --arch pin. Assert the generated script pins arch.
+    mock_os_release "ol" "9.4"
+    detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    DRY_RUN=0
+    configure_createrepo "id"
+    grep -q -- '--arch' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'arch noarch' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "rpm: source RPMs default to OFF" {
+    unset MIRRORET_RPM_SOURCE
+    mock_os_release "ol" "9.4"
+    detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    DRY_RUN=0
+    configure_createrepo "id"
+    grep -q 'INCLUDE_SOURCE="0"' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "rpm: newest-only defaults to ON" {
+    unset MIRRORET_RPM_NEWEST_ONLY
+    mock_os_release "ol" "9.4"
+    detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    DRY_RUN=0
+    configure_createrepo "id"
+    grep -q 'NEWEST_ONLY="1"' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "rpm: sync script has a disk floor guard" {
+    mock_os_release "ol" "9.4"
+    detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    DRY_RUN=0
+    configure_createrepo "id"
+    grep -q '_check_disk' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'MIN_FREE_GB' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "rpm: sync script takes a single-instance flock" {
+    mock_os_release "ol" "9.4"
+    detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    DRY_RUN=0
+    configure_createrepo "id"
+    grep -q 'flock -n 9' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "pip: sync script has disk guard and flock" {
+    DRY_RUN=0
+    _write_pip_sync_script "${MIRRORET_BASE_DIR}"
+    grep -q '_check_disk' "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
+    grep -q 'flock -n 9' "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
+}
+
+@test "pip: download has timeout and retry cap" {
+    DRY_RUN=0
+    _write_pip_sync_script "${MIRRORET_BASE_DIR}"
+    grep -q -- '--timeout 60' "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
+    grep -q -- '--retries 3' "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
+}
+
+@test "npm: sync script has disk guard, flock, and quiet loglevel" {
+    DRY_RUN=0
+    MIRRORET_APPROVAL_ENABLED=0
+    MIRRORET_NPM_PORT=4873
+    _write_npm_sync_script "${MIRRORET_BASE_DIR}"
+    grep -q '_check_disk' "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+    grep -q 'flock -n 9' "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+    grep -q 'npm_config_loglevel=error' "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+}
+
+@test "install: generates a logrotate config" {
+    grep -q 'write_logrotate_config' "${SCRIPT_DIR}/install.sh"
+    grep -q '/etc/logrotate.d/mirroret' "${SCRIPT_DIR}/install.sh"
+}
+
+@test "uninstall: removes logrotate config and stale sync locks" {
+    grep -q '/etc/logrotate.d/mirroret' "${SCRIPT_DIR}/lib/uninstall.sh"
+    grep -q 'mirroret-sync-redhat.lock' "${SCRIPT_DIR}/lib/uninstall.sh"
+}
+
+@test "config example documents the sync-safety knobs" {
+    for v in MIRRORET_RPM_ARCH MIRRORET_RPM_NEWEST_ONLY MIRRORET_RPM_SOURCE \
+             MIRRORET_RPM_DELETE MIRRORET_SYNC_MIN_FREE_GB; do
+        grep -q "$v" "${SCRIPT_DIR}/config/mirroret.conf.example"
+    done
+}

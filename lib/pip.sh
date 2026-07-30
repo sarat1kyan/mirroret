@@ -124,6 +124,7 @@ _write_pip_sync_script() {
     local base_dir="$1"
     local sync_script="${base_dir}/scripts/sync-pip-packages.sh"
     local approval="${MIRRORET_APPROVAL_ENABLED:-0}"
+    local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would write pip sync script: ${sync_script}"
@@ -188,8 +189,17 @@ DEST_DIR="${dest_dir}"
 LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-pip-\$(date +%Y%m%d-%H%M%S).log"
 APPROVAL_MODE="${approval}"
+MIN_FREE_GB="${min_free_gb}"
+LOCK_FILE="/var/lock/mirroret-sync-pip.lock"
 mkdir -p "\$LOG_DIR" "\$DEST_DIR"
 exec > >(tee -a "\$LOG_FILE") 2>&1
+
+# Single-instance lock — stop cron colliding with a manual run.
+exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
+if ! flock -n 9; then
+    echo "ERROR: another pip sync is already running. Exiting."
+    exit 3
+fi
 
 echo "Starting pip package sync: \$(date)"
 
@@ -198,14 +208,31 @@ if ! command -v pip3 >/dev/null 2>&1; then
     exit 2
 fi
 
+_free_gb() { df -BG --output=avail "\$DEST_DIR" 2>/dev/null | tail -1 | tr -dc '0-9'; }
+_check_disk() {
+    local free; free="\$(_free_gb)"
+    [[ -z "\$free" ]] && return 0
+    if [[ "\$free" -lt "\$MIN_FREE_GB" ]]; then
+        echo "ABORT: only \${free} GB free (floor: \${MIN_FREE_GB} GB)."
+        return 1
+    fi
+    return 0
+}
+_check_disk || exit 4
+
 PACKAGES=(
 ${packages_block}
 )
 
 failed=0
 for package in "\${PACKAGES[@]}"; do
+    if ! _check_disk; then
+        echo "Stopping before \${package} — disk floor reached."
+        failed=\$(( failed + 1 ))
+        break
+    fi
     echo "Downloading \${package}..."
-    if pip3 download "\${package}" -d "\${DEST_DIR}"; then
+    if pip3 download --timeout 60 --retries 3 "\${package}" -d "\${DEST_DIR}"; then
         echo "  OK: \${package}"
     else
         echo "  FAILED: \${package}"
