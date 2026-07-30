@@ -204,6 +204,32 @@
 # servers store under almalinux/, Rocky under rocky/, etc.
 #MIRRORET_RPM_FLAVOR=
 
+# ── RPM sync safety (IMPORTANT) ───────────────────────────────────────────────
+
+# Architecture to mirror. "noarch" is always included in addition.
+# Default: x86_64
+#MIRRORET_RPM_ARCH=x86_64
+
+# Only mirror the newest build of each package.
+# Default: 1 (ON). Set 0 for full version history — this multiplies disk
+# usage several times over and is rarely what you want.
+#MIRRORET_RPM_NEWEST_ONLY=1
+
+# Mirror source RPMs (.src.rpm).
+# Default: 0 (OFF) — and you almost certainly want it OFF.
+# Source RPMs are 400-600 MB EACH. The OL9 appstream repo carries roughly
+# 44,000 of them. Enabling this needs MULTIPLE TERABYTES of disk.
+#MIRRORET_RPM_SOURCE=0
+
+# Delete local packages that upstream no longer ships.
+# Default: 1 (ON) — keeps the mirror tracking upstream and bounds growth.
+# Set 0 to accumulate every package ever seen.
+#MIRRORET_RPM_DELETE=1
+
+# Abort any sync when free space on the mirror volume drops below this.
+# Checked before the run AND between each repo/package. Default: 10 GB.
+#MIRRORET_SYNC_MIN_FREE_GB=10
+
 # Repository list to sync. Defaults vary by flavor.
 # Rocky/Alma 8:   "baseos appstream extras"
 # Rocky/Alma 9:   "baseos appstream"

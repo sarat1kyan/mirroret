@@ -9,6 +9,16 @@
 #                            ("rocky", "almalinux", "rhel", "ol", "centos", "fedora")
 #   MIRRORET_RPM_REPOS       space-separated repo list (default depends on distro)
 #   MIRRORET_RPM_GPGKEY_URL  URL where clients fetch the repo's signing key
+#   MIRRORET_RPM_ARCH        arch to mirror (default: x86_64). noarch always added.
+#   MIRRORET_RPM_NEWEST_ONLY 1 (default) = only newest build of each package.
+#                            0 = full history (WARNING: terabytes on some repos).
+#   MIRRORET_RPM_SOURCE      0 (default) = skip .src.rpm. 1 = include source RPMs
+#                            (WARNING: source RPMs are 400-600 MB each; the
+#                            OL9 appstream repo has ~44k of them = multi-TB).
+#   MIRRORET_RPM_DELETE      1 (default) = delete local packages that upstream
+#                            dropped. 0 = keep forever.
+#   MIRRORET_SYNC_MIN_FREE_GB abort a sync when free space drops below this
+#                            (default 10). Prevents filling the disk mid-run.
 
 # _rpm_resolve_flavor — print directory name for this distro's tree.
 _rpm_resolve_flavor() {
@@ -94,9 +104,25 @@ configure_createrepo() {
     local repos
     repos="$(_rpm_default_repos "${flavor}" "${rhel_ver}")"
 
+    # Sync-safety knobs. Defaults are deliberately conservative: without
+    # an arch pin and --newest-only, reposync on OL9 appstream pulls every
+    # historical .src.rpm (~44k packages, 400-600 MB each = multi-TB).
+    local rpm_arch="${MIRRORET_RPM_ARCH:-x86_64}"
+    local newest_only="${MIRRORET_RPM_NEWEST_ONLY:-1}"
+    local include_source="${MIRRORET_RPM_SOURCE:-0}"
+    local delete_removed="${MIRRORET_RPM_DELETE:-1}"
+    local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
+
     section "Configuring createrepo (${flavor} ${rhel_ver})"
-    info "Repo tree:    ${base_dir}/redhat/mirror/${flavor}/${rhel_ver}/"
+    info "Repo tree:     ${base_dir}/redhat/mirror/${flavor}/${rhel_ver}/"
     info "Repos to sync: ${repos}"
+    info "Arch:          ${rpm_arch} (+noarch)"
+    info "Newest only:   ${newest_only}   Source RPMs: ${include_source}   Delete removed: ${delete_removed}"
+    info "Disk floor:    ${min_free_gb} GB (sync aborts below this)"
+    if [[ "${include_source}" == "1" ]]; then
+        warn "MIRRORET_RPM_SOURCE=1 — source RPMs will be mirrored."
+        warn "This can consume MULTIPLE TERABYTES. Ensure the volume is sized for it."
+    fi
 
     local sync_script="${base_dir}/scripts/sync-redhat-repos.sh"
     backup_file "$backup_id" "$sync_script"
@@ -146,27 +172,85 @@ LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-redhat-\$(date +%Y%m%d-%H%M%S).log"
 FLAVOR="${flavor}"
 RHEL_VER="${rhel_ver}"
+ARCH="${rpm_arch}"
+NEWEST_ONLY="${newest_only}"
+INCLUDE_SOURCE="${include_source}"
+DELETE_REMOVED="${delete_removed}"
+MIN_FREE_GB="${min_free_gb}"
+LOCK_FILE="/var/lock/mirroret-sync-redhat.lock"
 mkdir -p "\$LOG_DIR"
 exec > >(tee -a "\$LOG_FILE") 2>&1
 
-echo "Starting RPM sync: \$(date)"
+# ── Single-instance lock ─────────────────────────────────────────────────
+# Prevents a cron run from colliding with a manual run. Concurrent
+# reposync + createrepo on the same tree corrupts repodata.
+exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
+if ! flock -n 9; then
+    echo "ERROR: another RPM sync is already running (lock: \$LOCK_FILE). Exiting."
+    exit 3
+fi
+echo \$\$ >&9
 
-for _cmd in reposync ${createrepo_cmd}; do
+echo "Starting RPM sync: \$(date)"
+echo "  arch=\${ARCH}  newest_only=\${NEWEST_ONLY}  source=\${INCLUDE_SOURCE}  delete=\${DELETE_REMOVED}"
+
+for _cmd in reposync ${createrepo_cmd} flock; do
     if ! command -v "\$_cmd" >/dev/null 2>&1; then
-        echo "ERROR: \$_cmd not found. Install yum-utils and createrepo_c, then re-run."
+        echo "ERROR: \$_cmd not found. Install yum-utils, createrepo_c, util-linux."
         exit 2
     fi
 done
+
+# ── Disk guard ───────────────────────────────────────────────────────────
+# reposync has no size cap. On repos that carry source RPMs a single sync
+# can pull terabytes. Abort before we fill the filesystem.
+_free_gb() {
+    df -BG --output=avail "\$REPO_BASE" 2>/dev/null | tail -1 | tr -dc '0-9'
+}
+_check_disk() {
+    local free
+    free="\$(_free_gb)"
+    if [[ -z "\$free" ]]; then
+        echo "WARN: cannot determine free space on \$REPO_BASE"
+        return 0
+    fi
+    if [[ "\$free" -lt "\$MIN_FREE_GB" ]]; then
+        echo "ABORT: only \${free} GB free on \$REPO_BASE (floor: \${MIN_FREE_GB} GB)."
+        echo "Free space or raise MIRRORET_SYNC_MIN_FREE_GB, then re-run."
+        return 1
+    fi
+    return 0
+}
+
+mkdir -p "\$REPO_BASE"
+_check_disk || exit 4
+
+# ── reposync flags ───────────────────────────────────────────────────────
+# --arch pins the architecture. WITHOUT this, reposync on some repos
+# (notably OL9 appstream) also pulls every .src.rpm — 44k packages at
+# 400-600 MB each. That is the single most destructive default here.
+REPOSYNC_ARGS=(--download-metadata --arch "\${ARCH}" --arch noarch)
+[[ "\${NEWEST_ONLY}"   == "1" ]] && REPOSYNC_ARGS+=(--newest-only)
+[[ "\${DELETE_REMOVED}" == "1" ]] && REPOSYNC_ARGS+=(--delete)
+[[ "\${INCLUDE_SOURCE}" == "1" ]] && REPOSYNC_ARGS+=(--source)
 
 REPOS=(${repos})
 
 sync_failed=0
 metadata_failed=0
+aborted=0
 
 for repo in "\${REPOS[@]}"; do
+    if ! _check_disk; then
+        echo "Stopping before \${repo} — disk floor reached."
+        aborted=1
+        break
+    fi
     target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
     mkdir -p "\$target"
-    if ! reposync -p "\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}" --download-metadata --repo "\${repo}"; then
+    echo "--- reposync \${repo} (free: \$(_free_gb) GB)"
+    if ! reposync -p "\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}" \\
+            "\${REPOSYNC_ARGS[@]}" --repo "\${repo}"; then
         echo "FAIL: reposync \${repo}"
         sync_failed=\$(( sync_failed + 1 ))
         continue
@@ -176,14 +260,16 @@ done
 for repo in "\${REPOS[@]}"; do
     target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
     [[ -d "\$target" ]] || continue
+    echo "--- createrepo \${repo}"
     if ! ${createrepo_cmd} --update "\$target"; then
         echo "FAIL: createrepo \${repo}"
         metadata_failed=\$(( metadata_failed + 1 ))
     fi
 done
 
-echo "RPM sync completed: \$(date) (sync_failed=\${sync_failed} metadata_failed=\${metadata_failed})"
-total=\$(( sync_failed + metadata_failed ))
+echo "RPM sync completed: \$(date) (sync_failed=\${sync_failed} metadata_failed=\${metadata_failed} aborted=\${aborted})"
+echo "Free space now: \$(_free_gb) GB"
+total=\$(( sync_failed + metadata_failed + aborted ))
 if [[ \$total -ne 0 ]]; then
     exit 1
 fi

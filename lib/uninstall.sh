@@ -560,6 +560,11 @@ uninstall_selinux_restore() {
 uninstall_master_sync() {
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/cleanup-all.sh"
+    uninst_remove_file "/etc/logrotate.d/mirroret"
+    # Stale sync locks (harmless if a sync is not running).
+    uninst_remove_file "/var/lock/mirroret-sync-redhat.lock"
+    uninst_remove_file "/var/lock/mirroret-sync-pip.lock"
+    uninst_remove_file "/var/lock/mirroret-sync-npm.lock"
 }
 
 uninstall_purge_data() {
