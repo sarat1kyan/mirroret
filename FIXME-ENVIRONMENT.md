@@ -469,3 +469,85 @@ df -h /srv/mirroret
 
 Items 3 and 4 are the two that actually gate everything else. Without the
 CA (or a proxy allow-list) no upstream sync can succeed at all.
+
+---
+
+## Appendix — Transferring mirroret when the server has no GitHub access
+
+The mirror server cannot reach github.com. Move the code in as a zip from
+a machine that can.
+
+### Step 1 — on a machine WITH internet (your laptop/workstation)
+
+```bash
+curl -L -o mirroret.zip \
+    https://github.com/sarat1kyan/mirroret/archive/refs/heads/main.zip
+```
+
+Or in a browser: `https://github.com/sarat1kyan/mirroret` → Code →
+Download ZIP.
+
+### Step 2 — copy it to the mirror server
+
+Pick whichever you have:
+
+```bash
+# scp
+scp mirroret.zip serob@192.168.30.110:~/
+
+# MobaXterm: drag mirroret.zip into the left-hand SFTP pane
+
+# USB / shared drive: copy the file, then move it to ~ on the server
+```
+
+### Step 3 — on the mirror server
+
+```bash
+cd ~
+# Keep the old tree until the new one is verified.
+[[ -d mirroret-main ]] && mv mirroret-main mirroret-main.prev
+
+unzip -o mirroret.zip
+cd mirroret-main
+
+# A zip does NOT preserve the execute bit. Restore it or nothing runs.
+chmod +x install.sh uninstall.sh scripts/*.sh
+
+# Confirm you got the version you expect:
+grep -c 'mirroret_script_preamble' lib/common.sh   # expect >= 1
+grep -c 'logs|scripts|staging'      lib/nginx.sh   # expect >= 1
+```
+
+### Step 4 — apply
+
+```bash
+sudo ./install.sh --upgrade
+sudo ./scripts/mirroret-debug.sh
+```
+
+### Step 5 — once verified, drop the old tree
+
+```bash
+rm -rf ~/mirroret-main.prev ~/mirroret.zip
+```
+
+### Important — do not delete the old tree before running `--upgrade`
+
+`cleanup-all.sh` embeds the install-tree path as `INSTALL_DIR`. If you
+delete or rename the directory it was generated from without re-running
+`--upgrade`, the weekly cron cleanup exits 2 silently forever. Running
+`--upgrade` from the new path regenerates it with the correct path.
+
+### Verifying the transfer was complete
+
+```bash
+# Should be ~20 lib modules and 6+ test files:
+ls lib/*.sh | wc -l
+ls tests/*.bats | wc -l
+
+# Should print the current flag set:
+bash install.sh --help | grep -E 'upgrade|cleanup'
+```
+
+If `lib/` is short or `--help` errors, the zip extracted partially —
+re-download and repeat.
