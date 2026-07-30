@@ -177,6 +177,36 @@ _write_verdaccio_unit() {
     local verdaccio_bin
     verdaccio_bin="$(command -v verdaccio 2>/dev/null || echo /usr/bin/verdaccio)"
 
+    # Verdaccio needs a writable HOME. The mirroret-npm user is created
+    # with --no-create-home, and ProtectSystem=strict makes most of the
+    # filesystem read-only — without an explicit HOME inside
+    # ReadWritePaths, Verdaccio crash-loops on startup (systemd shows it
+    # stuck in "activating").
+    local npm_home="${base_dir}/npm"
+
+    # Propagate proxy into the unit — systemd does NOT read /etc/environment,
+    # so without this the npmjs uplink cannot reach the internet behind a
+    # corporate proxy and every client `npm install` fails.
+    local proxy_env=""
+    local _hp="${HTTP_PROXY:-${http_proxy:-}}"
+    local _hsp="${HTTPS_PROXY:-${https_proxy:-}}"
+    local _np="${NO_PROXY:-${no_proxy:-}}"
+    [[ -n "${_hp}"  ]] && proxy_env+="
+Environment=\"HTTP_PROXY=${_hp}\"
+Environment=\"http_proxy=${_hp}\""
+    [[ -n "${_hsp}" ]] && proxy_env+="
+Environment=\"HTTPS_PROXY=${_hsp}\"
+Environment=\"https_proxy=${_hsp}\""
+    [[ -n "${_np}"  ]] && proxy_env+="
+Environment=\"NO_PROXY=${_np}\"
+Environment=\"no_proxy=${_np}\""
+    # Corporate CA for Node's TLS stack (Node ignores the OS store).
+    if [[ -n "${MIRRORET_CA_BUNDLE:-}" ]] && [[ -f "${MIRRORET_CA_BUNDLE}" ]]; then
+        proxy_env+="
+Environment=\"NODE_EXTRA_CA_CERTS=${MIRRORET_CA_BUNDLE}\""
+        info "Verdaccio will trust CA bundle: ${MIRRORET_CA_BUNDLE}"
+    fi
+
     local unit_content="[Unit]
 Description=Verdaccio npm Registry (mirroret)
 After=network.target
@@ -184,6 +214,7 @@ After=network.target
 [Service]
 Type=simple
 User=${MIRRORET_NPM_USER}
+Environment=\"HOME=${npm_home}\"${proxy_env}
 ExecStart=${verdaccio_bin} --config /etc/verdaccio/config.yaml --listen ${npm_port}
 Restart=on-failure
 RestartSec=5s
@@ -252,10 +283,17 @@ _write_npm_sync_script() {
     elif [[ "${allow_anon}" == "1" ]]; then
         publish_block='    tarball=$(ls -t "${WORK_DIR}/"*.tgz 2>/dev/null | head -1)
     if [[ -n "${tarball}" ]]; then
-        if npm publish --loglevel=error "${tarball}" --registry "${VERDACCIO_URL}"; then
+        _out="$(npm publish --loglevel=error "${tarball}" --registry "${VERDACCIO_URL}" 2>&1)" && _rc=0 || _rc=$?
+        if [[ $_rc -eq 0 ]]; then
             echo "  PUBLISHED: ${package}"
+        elif printf "%s" "$_out" | grep -qiE "EPUBLISHCONFLICT|cannot publish over|already present|previously published"; then
+            # Version already in the registry from an earlier sync. That is
+            # the steady state, not an error — without this the nightly run
+            # reports "FAILED: npm" forever and operators tune it out.
+            echo "  ALREADY PRESENT: ${package}"
         else
             echo "  PUBLISH FAILED: ${package}"
+            printf "%s\n" "$_out"
             failed=$(( failed + 1 ))
         fi
     fi'
@@ -308,6 +346,8 @@ if ! flock -n 9; then
     exit 3
 fi
 
+$(mirroret_script_preamble)
+
 echo "Starting npm package sync: \$(date)"
 
 if ! command -v npm >/dev/null 2>&1; then
@@ -352,7 +392,7 @@ for package in "\${PACKAGES[@]}"; do
     fi
     echo "Processing \${package}..."
     pushd "\${WORK_DIR}" >/dev/null
-    if npm pack --loglevel=error "\${package}"; then
+    if npm pack --loglevel=error --fetch-timeout=60000 --fetch-retries=3 "\${package}"; then
         echo "  DOWNLOADED: \${package}"
 ${publish_block}
     else

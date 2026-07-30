@@ -217,6 +217,11 @@ log:
   fields:
     service: registry
 storage:
+  # delete.enabled is required for `registry garbage-collect` to be able
+  # to remove unreferenced blobs. Without it retention_docker_gc can
+  # never reclaim anything.
+  delete:
+    enabled: true
   cache:
     blobdescriptor: inmemory
   filesystem:
@@ -581,7 +586,9 @@ for image in "\${IMAGES[@]}"; do
 done
 
 echo "Docker sync completed: \$(date) (\${failed} failures)"
-exit "\${failed}"
+# Clamp: exit codes wrap at 256, so a large failure count could exit 0.
+[[ "\${failed}" -gt 0 ]] && exit 1
+exit 0
 SYNC_HEADER
 
     mv "$tmp" "$output_file"

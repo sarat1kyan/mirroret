@@ -315,3 +315,31 @@
 # Cron schedule for the weekly cleanup (default Sun @ 03:00).
 #MIRRORET_CLEANUP_HOUR=3
 #MIRRORET_CLEANUP_DOW=0             # 0=Sun ... 6=Sat
+
+# ── Proxy / corporate CA (needed for unattended cron syncs) ───────────────────
+
+# Proxy for all upstream fetches. Set these HERE (not just in your shell) so
+# the cron-driven syncs and the Verdaccio/pypiserver systemd units inherit
+# them — cron and systemd do NOT read /etc/environment or shell rc files.
+#http_proxy=http://proxy.example.internal:3128
+#https_proxy=http://proxy.example.internal:3128
+#no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,192.168.0.0/16
+
+# Corporate CA bundle for TLS-inspecting proxies. When set, mirroret exports
+# it as SSL_CERT_FILE / REQUESTS_CA_BUNDLE / PIP_CERT / NODE_EXTRA_CA_CERTS /
+# CURL_CA_BUNDLE in every generated sync script, and injects
+# NODE_EXTRA_CA_CERTS into the Verdaccio unit.
+# You still need the CA in the OS store: see FIXME-ENVIRONMENT.md.
+#MIRRORET_CA_BUNDLE=/etc/pki/tls/cert.pem
+
+# ── Sync timeouts / log retention ─────────────────────────────────────────────
+
+# Wall-clock cap on a single reposync invocation. Behind a flaky proxy
+# reposync can hang for days while holding the sync lock, which silently
+# blocks every later cron run. Default: 6h
+#MIRRORET_SYNC_TIMEOUT=6h
+
+# Age out sync logs. logrotate alone cannot bound these because each run
+# writes a NEW timestamped filename. cleanup-all.sh deletes older ones.
+# Default: 30 days. 0 disables.
+#MIRRORET_LOG_KEEP_DAYS=30

@@ -112,6 +112,7 @@ configure_createrepo() {
     local include_source="${MIRRORET_RPM_SOURCE:-0}"
     local delete_removed="${MIRRORET_RPM_DELETE:-1}"
     local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
+    local sync_timeout="${MIRRORET_SYNC_TIMEOUT:-6h}"
 
     section "Configuring createrepo (${flavor} ${rhel_ver})"
     info "Repo tree:     ${base_dir}/redhat/mirror/${flavor}/${rhel_ver}/"
@@ -178,6 +179,7 @@ INCLUDE_SOURCE="${include_source}"
 DELETE_REMOVED="${delete_removed}"
 MIN_FREE_GB="${min_free_gb}"
 LOCK_FILE="/var/lock/mirroret-sync-redhat.lock"
+SYNC_TIMEOUT="${sync_timeout}"
 mkdir -p "\$LOG_DIR"
 exec > >(tee -a "\$LOG_FILE") 2>&1
 
@@ -190,6 +192,12 @@ if ! flock -n 9; then
     exit 3
 fi
 echo \$\$ >&9
+
+# Kill the whole process group on exit so a cancelled run does not leave
+# orphaned reposync/createrepo writing into the tree after the lock frees.
+trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
+
+$(mirroret_script_preamble)
 
 echo "Starting RPM sync: \$(date)"
 echo "  arch=\${ARCH}  newest_only=\${NEWEST_ONLY}  source=\${INCLUDE_SOURCE}  delete=\${DELETE_REMOVED}"
@@ -229,7 +237,8 @@ _check_disk || exit 4
 # --arch pins the architecture. WITHOUT this, reposync on some repos
 # (notably OL9 appstream) also pulls every .src.rpm — 44k packages at
 # 400-600 MB each. That is the single most destructive default here.
-REPOSYNC_ARGS=(--download-metadata --arch "\${ARCH}" --arch noarch)
+REPOSYNC_ARGS=(--download-metadata --arch "\${ARCH}" --arch noarch
+    --setopt=timeout=60 --setopt=minrate=1000 --setopt=retries=3)
 [[ "\${NEWEST_ONLY}"   == "1" ]] && REPOSYNC_ARGS+=(--newest-only)
 [[ "\${DELETE_REMOVED}" == "1" ]] && REPOSYNC_ARGS+=(--delete)
 [[ "\${INCLUDE_SOURCE}" == "1" ]] && REPOSYNC_ARGS+=(--source)
@@ -249,7 +258,8 @@ for repo in "\${REPOS[@]}"; do
     target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
     mkdir -p "\$target"
     echo "--- reposync \${repo} (free: \$(_free_gb) GB)"
-    if ! reposync -p "\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}" \\
+    if ! timeout -k 60 "\${SYNC_TIMEOUT}" \\
+            reposync -p "\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}" \\
             "\${REPOSYNC_ARGS[@]}" --repo "\${repo}"; then
         echo "FAIL: reposync \${repo}"
         sync_failed=\$(( sync_failed + 1 ))
@@ -257,11 +267,20 @@ for repo in "\${REPOS[@]}"; do
     fi
 done
 
+# --download-metadata already fetched upstream repodata, INCLUDING its
+# signatures (repomd.xml.asc). Running createrepo over that regenerates
+# repomd.xml and destroys the upstream signature, breaking any client
+# using repo_gpgcheck=1 — and burns hours of CPU rebuilding metadata we
+# already have. Only build metadata when upstream metadata is absent.
 for repo in "\${REPOS[@]}"; do
     target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
     [[ -d "\$target" ]] || continue
-    echo "--- createrepo \${repo}"
-    if ! ${createrepo_cmd} --update "\$target"; then
+    if [[ -f "\${target}/repodata/repomd.xml" ]]; then
+        echo "--- \${repo}: upstream repodata present, keeping signed metadata"
+        continue
+    fi
+    echo "--- createrepo \${repo} (no upstream repodata found)"
+    if ! ${createrepo_cmd} "\$target"; then
         echo "FAIL: createrepo \${repo}"
         metadata_failed=\$(( metadata_failed + 1 ))
     fi
@@ -312,11 +331,22 @@ generate_rpm_client_config() {
         gpg_check_line="gpgcheck=1"
         gpg_key_line="gpgkey=${MIRRORET_RPM_GPGKEY_URL}"
     else
+        # gpgcheck=1 with NO gpgkey makes every client dnf call fail
+        # ("package not signed / no gpgkey available"). Mirrored packages
+        # keep their UPSTREAM signature, so point at the upstream vendor
+        # key that stock clients already ship in /etc/pki/rpm-gpg/.
         gpg_check_line="gpgcheck=1"
-        gpg_key_line="# gpgkey=http://${server_ip}:${web_port}/config/RPM-GPG-KEY-mirroret"
-        warn "RPM client config: gpgcheck=1 but no MIRRORET_RPM_GPGKEY_URL set."
-        warn "Clients will fail to verify packages until a gpgkey is configured."
-        warn "See docs/SECURITY.md for GPG key setup."
+        case "${flavor}" in
+            ol)        gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle" ;;
+            rhel)      gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release" ;;
+            rocky)     gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-${rhel_ver}" ;;
+            almalinux) gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-${rhel_ver}" ;;
+            centos)    gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial" ;;
+            fedora)    gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-${rhel_ver}-primary" ;;
+            *)         gpg_key_line="# gpgkey=  # set MIRRORET_RPM_GPGKEY_URL" ;;
+        esac
+        info "RPM client config: gpgcheck=1 using the upstream ${flavor} vendor key."
+        info "Override with MIRRORET_RPM_GPGKEY_URL if you re-sign locally."
     fi
 
     {
@@ -332,6 +362,12 @@ generate_rpm_client_config() {
             [[ -n "${gpg_key_line}" ]] && printf '%s\n' "${gpg_key_line}"
             printf '\n'
         done
+        printf '# ── Client setup ─────────────────────────────────────────────\n'
+        printf '# After installing this file, DISABLE the upstream repos or dnf\n'
+        printf '# will keep reaching the internet and bypass this mirror:\n'
+        printf '#\n'
+        printf '#   sudo dnf config-manager --disable %s\n' "${repos}"
+        printf '#   sudo dnf clean all && sudo dnf repolist\n'
     } > "$output_file"
 
     success "RPM client config written: ${output_file}"
