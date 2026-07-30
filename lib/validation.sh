@@ -215,13 +215,16 @@ _check_repo_metadata() {
     fi
 
     # Check for RPM metadata.
-    local rpm_approved="${base_dir}/redhat/approved"
+    # reposync writes into redhat/mirror/<flavor>/<ver>/<repo>/repodata,
+    # NOT redhat/approved. Checking the wrong path made --check return
+    # non-zero after a perfectly good sync.
+    local rpm_approved="${base_dir}/redhat/mirror"
     if [[ -d "$rpm_approved" ]]; then
         if find "$rpm_approved" -name "repomd.xml" 2>/dev/null | grep -q .; then
             success "RPM metadata: found"
         else
             warn "RPM metadata: repomd.xml not found in ${rpm_approved}"
-            warn "  Run: createrepo --update ${rpm_approved}"
+            warn "  Run a sync first: ${base_dir}/scripts/sync-redhat-repos.sh"
             (( fail += 1 )) || true
         fi
     fi

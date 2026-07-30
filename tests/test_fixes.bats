@@ -386,11 +386,13 @@ EOF
     [ "$status" -ne 0 ]
 }
 
-@test "sync: generated docker sync script returns failed count, not 0" {
+@test "sync: generated docker sync script propagates failure via exit code" {
     DRY_RUN=0
     CONTAINER_CMD=docker
     write_docker_sync_script "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
-    grep -q 'exit "${failed}"' "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
+    # Exit codes wrap at 256, so we clamp rather than `exit $failed`.
+    grep -q 'exit 1' "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
+    grep -q 'wrap at 256' "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
 }
 
 # ── Outbound HTTPS probes: don't false-flag healthy upstreams ─────────────────
@@ -632,6 +634,124 @@ EOF
 @test "config example documents the sync-safety knobs" {
     for v in MIRRORET_RPM_ARCH MIRRORET_RPM_NEWEST_ONLY MIRRORET_RPM_SOURCE \
              MIRRORET_RPM_DELETE MIRRORET_SYNC_MIN_FREE_GB; do
+        grep -q "$v" "${SCRIPT_DIR}/config/mirroret.conf.example"
+    done
+}
+
+# ── Audit round 2 (2026-07-22 full-repo audit) ────────────────────────────────
+
+@test "nginx: logs and scripts dirs are denied over HTTP" {
+    grep -q 'logs|scripts|staging' "${SCRIPT_DIR}/lib/nginx.sh"
+    grep -q 'deny all' "${SCRIPT_DIR}/lib/nginx.sh"
+}
+
+@test "nginx: alias locations use matching trailing slashes" {
+    grep -q 'location /redhat/ {' "${SCRIPT_DIR}/lib/nginx.sh"
+    grep -q 'location /ubuntu/ {' "${SCRIPT_DIR}/lib/nginx.sh"
+}
+
+@test "common: script preamble sources conf and exports proxy" {
+    source "${SCRIPT_DIR}/lib/common.sh"
+    out="$(mirroret_script_preamble)"
+    [[ "$out" == *"/etc/mirroret/mirroret.conf"* ]]
+    [[ "$out" == *"https_proxy"* ]]
+    [[ "$out" == *"NODE_EXTRA_CA_CERTS"* ]]
+    [[ "$out" == *"PIP_CERT"* ]]
+}
+
+@test "rpm: generated sync script carries the runtime preamble" {
+    mock_os_release "ol" "9.4"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9; DRY_RUN=0
+    configure_createrepo "id"
+    grep -q '/etc/mirroret/mirroret.conf' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "rpm: reposync runs under a wall-clock timeout" {
+    mock_os_release "ol" "9.4"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9; DRY_RUN=0
+    configure_createrepo "id"
+    grep -q 'timeout -k 60' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'setopt=timeout=60' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "rpm: createrepo does not clobber downloaded upstream metadata" {
+    mock_os_release "ol" "9.4"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9; DRY_RUN=0
+    configure_createrepo "id"
+    grep -q 'upstream repodata present' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "rpm: OL client config points gpgkey at the Oracle vendor key" {
+    mock_os_release "ol" "9.4"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_RPM_INSECURE=0
+    unset MIRRORET_RPM_GPGKEY_URL
+    DRY_RUN=0
+    generate_rpm_client_config "${TMPDIR}/ol.repo"
+    grep -q 'gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle' "${TMPDIR}/ol.repo"
+    run grep -c '^# gpgkey=' "${TMPDIR}/ol.repo"
+    [ "$output" = "0" ]
+}
+
+@test "rpm: client config tells operators to disable upstream repos" {
+    mock_os_release "ol" "9.4"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9; MIRRORET_RPM_INSECURE=1; DRY_RUN=0
+    generate_rpm_client_config "${TMPDIR}/ol.repo"
+    grep -q 'config-manager --disable' "${TMPDIR}/ol.repo"
+}
+
+@test "pip: download uses --no-cache-dir (root fs is not the guarded volume)" {
+    DRY_RUN=0
+    _write_pip_sync_script "${MIRRORET_BASE_DIR}"
+    grep -q -- '--no-cache-dir' "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
+}
+
+@test "npm: republish conflict is not counted as a failure" {
+    DRY_RUN=0
+    MIRRORET_APPROVAL_ENABLED=0
+    MIRRORET_NPM_ALLOW_ANON_PUBLISH=1
+    MIRRORET_NPM_PORT=4873
+    _write_npm_sync_script "${MIRRORET_BASE_DIR}"
+    grep -q 'ALREADY PRESENT' "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+    grep -q 'EPUBLISHCONFLICT' "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+}
+
+@test "npm: verdaccio unit sets a writable HOME" {
+    grep -q 'HOME=' "${SCRIPT_DIR}/lib/npm.sh"
+    grep -q 'crash-loops' "${SCRIPT_DIR}/lib/npm.sh"
+}
+
+@test "docker: registry config enables delete (required for GC)" {
+    MIRRORET_DOCKER_MODE=hosted
+    _emit_registry_config "${TMPDIR}/config.yml"
+    grep -q -A1 'delete:' "${TMPDIR}/config.yml"
+    grep -q 'enabled: true' "${TMPDIR}/config.yml"
+}
+
+@test "docker: sync script clamps exit code (256 must not become 0)" {
+    grep -q 'exit codes wrap at 256' "${SCRIPT_DIR}/lib/docker_registry.sh"
+}
+
+@test "install: cleanup-all takes the sync locks before pruning" {
+    grep -q 'mirroret-sync-\\${_lk}.lock' "${SCRIPT_DIR}/install.sh" || \
+        grep -q 'Cleanup deferred' "${SCRIPT_DIR}/install.sh"
+}
+
+@test "install: cleanup-all age-deletes old logs" {
+    grep -q 'MIRRORET_LOG_KEEP_DAYS' "${SCRIPT_DIR}/install.sh"
+}
+
+@test "install: seeds /etc/mirroret/mirroret.conf on first install" {
+    grep -q 'Seeded /etc/mirroret/mirroret.conf' "${SCRIPT_DIR}/install.sh"
+}
+
+@test "validation: RPM metadata check looks at redhat/mirror not approved" {
+    section="$(awk '/_check_repo_metadata/,/^}/' "${SCRIPT_DIR}/lib/validation.sh")"
+    [[ "$section" == *'redhat/mirror'* ]]
+}
+
+@test "config example documents proxy, CA bundle, timeout, log retention" {
+    for v in MIRRORET_CA_BUNDLE MIRRORET_SYNC_TIMEOUT MIRRORET_LOG_KEEP_DAYS https_proxy; do
         grep -q "$v" "${SCRIPT_DIR}/config/mirroret.conf.example"
     done
 }

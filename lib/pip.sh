@@ -201,6 +201,8 @@ if ! flock -n 9; then
     exit 3
 fi
 
+$(mirroret_script_preamble)
+
 echo "Starting pip package sync: \$(date)"
 
 if ! command -v pip3 >/dev/null 2>&1; then
@@ -232,7 +234,7 @@ for package in "\${PACKAGES[@]}"; do
         break
     fi
     echo "Downloading \${package}..."
-    if pip3 download --timeout 60 --retries 3 "\${package}" -d "\${DEST_DIR}"; then
+    if pip3 download --no-cache-dir --timeout 60 --retries 3 "\${package}" -d "\${DEST_DIR}"; then
         echo "  OK: \${package}"
     else
         echo "  FAILED: \${package}"

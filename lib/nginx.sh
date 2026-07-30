@@ -63,15 +63,15 @@ configure_nginx_unified() {
 
     # APT mirror — path set by MIRRORET_APT_DATA_PATH (tool-agnostic)
     # Clients use: deb http://server:PORT/ubuntu codename main
-    location /ubuntu {
-        alias ${apt_data_path};
+    location /ubuntu/ {
+        alias ${apt_data_path}/;
         autoindex on;
     }
 
     # RPM mirror — reposync writes to redhat/mirror/rocky/VER/REPO/
     # Clients use: baseurl=http://server:PORT/redhat/rocky/VER/baseos
-    location /redhat {
-        alias ${base_dir}/redhat/mirror;
+    location /redhat/ {
+        alias ${base_dir}/redhat/mirror/;
         autoindex on;
     }
 
@@ -194,6 +194,15 @@ server {
 
     root ${base_dir};
     autoindex on;
+
+    # SECURITY: base_dir also contains logs/ (which can hold proxy URLs
+    # with embedded credentials) and scripts/ (generated sync scripts).
+    # The catch-all location below would otherwise serve both to any
+    # client that can reach this port.
+    location ~ ^/(logs|scripts|staging)(/|\$) {
+        deny all;
+        return 404;
+    }
 
     location / {
         try_files \$uri \$uri/ =404;
