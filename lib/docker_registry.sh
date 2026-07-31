@@ -492,6 +492,8 @@ write_docker_sync_script() {
     local registry_port="${MIRRORET_DOCKER_REGISTRY_PORT:-5000}"
     local runtime="${CONTAINER_CMD:-docker}"
     local images_file="${MIRRORET_DOCKER_IMAGES_FILE:-}"
+    local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
+    local pull_timeout="${MIRRORET_DOCKER_PULL_TIMEOUT:-30m}"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would write Docker sync script to: ${output_file}"
@@ -547,10 +549,42 @@ LOCAL_REGISTRY="localhost:${registry_port}"
 CONTAINER_CMD="${runtime}"
 LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-docker-\$(date +%Y%m%d-%H%M%S).log"
+MIN_FREE_GB="${min_free_gb}"
+PULL_TIMEOUT="${pull_timeout}"
+LOCK_FILE="/var/lock/mirroret-sync-docker.lock"
 mkdir -p "\$LOG_DIR"
 
 # Log to file AND console without losing the exit code from the pipeline.
 exec > >(tee -a "\$LOG_FILE") 2>&1
+
+$(mirroret_script_preamble)
+
+# Single-instance lock. Concurrent pulls into one registry store can corrupt
+# the blob layout, and two runs racing means double the disk for no gain.
+exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
+if ! flock -n 9; then
+    echo "ERROR: another Docker sync is already running. Exiting."
+    exit 3
+fi
+trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
+
+# Disk guard. Image layers land in the container store, which on many hosts
+# is on / rather than the mirror volume, so check BOTH.
+_free_gb() { df -BG --output=avail "\$1" 2>/dev/null | tail -1 | tr -dc '0-9'; }
+_check_disk() {
+    local d free
+    for d in "${base_dir}/docker" /var/lib/containers /var/lib/docker; do
+        [[ -d "\$d" ]] || continue
+        free="\$(_free_gb "\$d")"
+        [[ -z "\$free" ]] && continue
+        if [[ "\$free" -lt "\$MIN_FREE_GB" ]]; then
+            echo "ABORT: only \${free} GB free on \${d} (floor: \${MIN_FREE_GB} GB)."
+            return 1
+        fi
+    done
+    return 0
+}
+_check_disk || exit 4
 
 echo "Starting Docker image sync: \$(date)"
 
@@ -566,8 +600,13 @@ ${images_block}
 
 failed=0
 for image in "\${IMAGES[@]}"; do
+    if ! _check_disk; then
+        echo "Stopping before \${image} - disk floor reached."
+        failed=\$(( failed + 1 ))
+        break
+    fi
     echo "Syncing \${image}..."
-    if ! "\${CONTAINER_CMD}" pull "\$image"; then
+    if ! timeout -k 30 "\${PULL_TIMEOUT}" "\${CONTAINER_CMD}" pull "\$image"; then
         echo "  PULL FAILED: \${image}"
         failed=\$(( failed + 1 ))
         continue
@@ -583,7 +622,14 @@ for image in "\${IMAGES[@]}"; do
         continue
     fi
     echo "  OK: \${image}"
+    # The image now lives in the registry store. Drop the local copy so the
+    # container store does not grow by the full size of every synced image.
+    "\${CONTAINER_CMD}" rmi "\${LOCAL_REGISTRY}/\${image}" >/dev/null 2>&1 || true
+    "\${CONTAINER_CMD}" rmi "\$image" >/dev/null 2>&1 || true
 done
+
+# Reclaim dangling layers left by the pull/tag/push cycle.
+"\${CONTAINER_CMD}" image prune -f >/dev/null 2>&1 || true
 
 echo "Docker sync completed: \$(date) (\${failed} failures)"
 # Clamp: exit codes wrap at 256, so a large failure count could exit 0.

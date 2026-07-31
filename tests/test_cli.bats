@@ -287,3 +287,155 @@ EOF
     [[ "$section" == *'203/EXEC'* ]]
     [[ "$section" == *'ExecStart binary is missing'* ]]
 }
+
+# ================== audit round 3: remaining findings ==================
+
+@test "retention: _ret_int rejects non-numeric and warns" {
+    source "${SCRIPT_DIR}/lib/logging.sh"
+    source "${SCRIPT_DIR}/lib/common.sh"
+    source "${SCRIPT_DIR}/lib/retention.sh"
+    run _ret_int MIRRORET_RPM_KEEP_VERSIONS "abc" 3
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"3"* ]]
+    [[ "$output" == *"not a number"* ]]
+}
+
+@test "retention: _ret_int passes a valid number through" {
+    source "${SCRIPT_DIR}/lib/logging.sh"
+    source "${SCRIPT_DIR}/lib/common.sh"
+    source "${SCRIPT_DIR}/lib/retention.sh"
+    result="$(_ret_int MIRRORET_RPM_KEEP_VERSIONS 5 3 2>/dev/null)"
+    [ "$result" = "5" ]
+}
+
+@test "retention: pip prune orders by version not mtime" {
+    section="$(awk '/^retention_pip_prune\(\)/,/^}/' "${SCRIPT_DIR}/lib/retention.sh")"
+    [[ "$section" == *'sort -V'* ]]
+    [[ "$section" != *'ls -t '* ]]
+}
+
+@test "retention: pip prune keeps the highest VERSION even if downloaded first" {
+    source "${SCRIPT_DIR}/lib/logging.sh"
+    source "${SCRIPT_DIR}/lib/common.sh"
+    source "${SCRIPT_DIR}/lib/retention.sh"
+    d="${TMPDIR}/pipver/pip/approved"
+    mkdir -p "$d"
+    export MIRRORET_BASE_DIR="${TMPDIR}/pipver"
+    # 2.0.0 is the newest VERSION but the OLDEST mtime. The old mtime-based
+    # code would have deleted it and kept 1.0.0.
+    touch -t 202601010000 "${d}/pkg-2.0.0-py3-none-any.whl"
+    touch -t 202612010000 "${d}/pkg-1.0.0-py3-none-any.whl"
+    MIRRORET_PIP_KEEP_VERSIONS=1
+    MIRRORET_RETENTION_MODE=prune
+    retention_pip_prune >/dev/null 2>&1
+    [ -f "${d}/pkg-2.0.0-py3-none-any.whl" ]
+    [ ! -f "${d}/pkg-1.0.0-py3-none-any.whl" ]
+}
+
+@test "retention: npm prune refuses a live Verdaccio storage root" {
+    source "${SCRIPT_DIR}/lib/logging.sh"
+    source "${SCRIPT_DIR}/lib/common.sh"
+    source "${SCRIPT_DIR}/lib/retention.sh"
+    d="${TMPDIR}/verd/npm/approved"
+    mkdir -p "${d}/express"
+    export MIRRORET_BASE_DIR="${TMPDIR}/verd"
+    # Verdaccio marker.
+    printf '{}' > "${d}/express/package.json"
+    touch -t 202001010000 "${d}/express/express-1.0.0.tgz"
+    MIRRORET_NPM_KEEP_DAYS=30
+    MIRRORET_RETENTION_MODE=prune
+    unset MIRRORET_NPM_PRUNE_STORAGE
+    run retention_npm_prune
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"live Verdaccio storage root"* ]]
+    # The tarball must survive.
+    [ -f "${d}/express/express-1.0.0.tgz" ]
+}
+
+@test "retention: stale metadata sets a non-zero run_retention exit" {
+    grep -q 'RETENTION_METADATA_BROKEN' "${SCRIPT_DIR}/lib/retention.sh"
+    grep -q 'METADATA STALE' "${SCRIPT_DIR}/lib/retention.sh"
+}
+
+@test "rpm: sync script estimates size before downloading" {
+    grep -q '_estimate_gb' "${SCRIPT_DIR}/lib/rpm.sh"
+    grep -q 'MIRRORET_SYNC_ESTIMATE' "${SCRIPT_DIR}/lib/rpm.sh"
+}
+
+@test "rpm: sync script smoke tests repodata after syncing" {
+    grep -q 'MIRRORET_SYNC_SMOKE_TEST' "${SCRIPT_DIR}/lib/rpm.sh"
+    grep -q 'repofrompath' "${SCRIPT_DIR}/lib/rpm.sh"
+}
+
+@test "rpm: sync script uses nice and ionice" {
+    grep -q 'MIRRORET_SYNC_NICE' "${SCRIPT_DIR}/lib/rpm.sh"
+    grep -q 'ionice' "${SCRIPT_DIR}/lib/rpm.sh"
+}
+
+@test "rpm: flavor and repo-name mismatch is warned about" {
+    grep -q 'names Oracle repos' "${SCRIPT_DIR}/lib/rpm.sh"
+}
+
+@test "docker: sync script has lock, disk guard, timeout and prune" {
+    grep -q 'mirroret-sync-docker.lock' "${SCRIPT_DIR}/lib/docker_registry.sh"
+    grep -q '_check_disk' "${SCRIPT_DIR}/lib/docker_registry.sh"
+    grep -q 'MIRRORET_DOCKER_PULL_TIMEOUT' "${SCRIPT_DIR}/lib/docker_registry.sh"
+    grep -q 'image prune -f' "${SCRIPT_DIR}/lib/docker_registry.sh"
+}
+
+@test "docker: disk guard also watches the container store on /" {
+    section="$(awk '/write_docker_sync_script/,/^}/' "${SCRIPT_DIR}/lib/docker_registry.sh")"
+    [[ "$section" == *'/var/lib/containers'* ]]
+}
+
+@test "install: sync-all takes a lock and checks disk" {
+    grep -q 'mirroret-sync-all.lock' "${SCRIPT_DIR}/install.sh"
+    section="$(awk '/^write_master_sync_script\(\)/,/^}/' "${SCRIPT_DIR}/install.sh")"
+    [[ "$section" == *'MIN_FREE_GB'* ]]
+}
+
+@test "install: cleanup-all falls back when the install tree moved" {
+    grep -q 'MIRRORET_INSTALL_DIR' "${SCRIPT_DIR}/install.sh"
+    grep -q 'the tree may have moved' "${SCRIPT_DIR}/install.sh"
+}
+
+@test "install: help example puts env vars before the script name" {
+    run bash "${SCRIPT_DIR}/install.sh" --help
+    [[ "$output" == *"sudo MIRRORET_FIREWALL_SOURCE=10.0.0.0/8 ./install.sh"* ]]
+}
+
+@test "install: --config detection is exact, not a substring match" {
+    section="$(awk '/^parse_args\(\)/,/while \[\[ \$# -gt 0/' "${SCRIPT_DIR}/install.sh")"
+    [[ "$section" == *'_explicit_config'* ]]
+    [[ "$section" != *'!= *"--config"*'* ]]
+}
+
+@test "common: run_quietly uses mktemp not a fixed /tmp path" {
+    section="$(awk '/^run_quietly\(\)/,/^}/' "${SCRIPT_DIR}/lib/common.sh")"
+    [[ "$section" == *'mktemp'* ]]
+    [[ "$section" != *'> /tmp/mirroret_cmd_out '* ]]
+}
+
+@test "logging: warn_insecure log append is fail-soft" {
+    section="$(awk '/^warn_insecure\(\)/,/^}/' "${SCRIPT_DIR}/lib/logging.sh")"
+    [[ "$section" == *'|| true'* ]]
+}
+
+@test "validation: registry status is runtime-agnostic" {
+    grep -q '_status_registry' "${SCRIPT_DIR}/lib/validation.sh"
+    section="$(awk '/_status_registry\(\)/,/^}/' "${SCRIPT_DIR}/lib/validation.sh")"
+    [[ "$section" == *'podman'* ]]
+    [[ "$section" == *'docker-distribution'* ]]
+}
+
+@test "npm: sync clears stale tarballs before packing" {
+    grep -q 'cannot pick up a tarball' "${SCRIPT_DIR}/lib/npm.sh"
+}
+
+@test "config example documents every new knob" {
+    for v in MIRRORET_SYNC_ESTIMATE MIRRORET_SYNC_SMOKE_TEST MIRRORET_SYNC_NICE \
+             MIRRORET_DOCKER_PULL_TIMEOUT MIRRORET_NPM_PRUNE_STORAGE \
+             MIRRORET_INSTALL_DIR; do
+        grep -q "$v" "${SCRIPT_DIR}/config/mirroret.conf.example"
+    done
+}

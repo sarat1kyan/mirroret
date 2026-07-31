@@ -44,15 +44,7 @@ print_status() {
 
     echo ""
     echo "Docker registry:"
-    if check_command docker; then
-        if container_is_running "${MIRRORET_DOCKER_CONTAINER_NAME:-mirroret-registry}"; then
-            success "  mirroret-registry: running"
-        else
-            warn "  mirroret-registry: not running"
-        fi
-    else
-        info "  docker: not installed"
-    fi
+    _status_registry
 
     echo ""
     echo "Disk usage:"
@@ -68,6 +60,57 @@ print_status() {
     echo ""
     echo "Cron jobs:"
     crontab -l 2>/dev/null | grep -i "mirroret\|sync" || echo "  (none found)"
+}
+
+# _status_registry - report the registry regardless of how it is run.
+# The old code only ever asked `docker`, so a native docker-distribution
+# service or a podman-managed container always showed "not running".
+_status_registry() {
+    local name="${MIRRORET_DOCKER_CONTAINER_NAME:-mirroret-registry}"
+    local reported=0
+
+    # Native OS-package services.
+    local svc
+    for svc in docker-distribution docker-registry; do
+        if check_command systemctl && \
+           systemctl list-unit-files --full --no-legend "${svc}.service" 2>/dev/null \
+             | grep -q "${svc}.service"; then
+            if service_is_active "$svc"; then
+                success "  ${svc}: running"
+            else
+                warn "  ${svc}: not running"
+            fi
+            reported=1
+        fi
+    done
+
+    # Container under whichever runtime is present.
+    local rt
+    for rt in podman docker; do
+        check_command "$rt" || continue
+        if "$rt" ps --format '{{.Names}}' 2>/dev/null | grep -qx "$name"; then
+            success "  ${name}: running (${rt})"
+            reported=1
+        elif "$rt" ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$name"; then
+            warn "  ${name}: exists but stopped (${rt})"
+            reported=1
+        fi
+    done
+
+    # Podman-generated unit.
+    if [[ "$reported" -eq 0 ]] && check_command systemctl && \
+       systemctl list-unit-files --full --no-legend "${name}.service" 2>/dev/null \
+         | grep -q "${name}.service"; then
+        if service_is_active "$name"; then
+            success "  ${name}.service: running"
+        else
+            warn "  ${name}.service: not running"
+        fi
+        reported=1
+    fi
+
+    [[ "$reported" -eq 0 ]] && info "  no registry backend detected"
+    return 0
 }
 
 # ── Private check functions ──────────────────────────────────────────────────

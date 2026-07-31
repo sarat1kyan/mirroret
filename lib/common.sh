@@ -25,11 +25,16 @@ run_quietly() {
         return 0
     fi
     debug "running quietly: $*"
-    if ! "$@" > /tmp/mirroret_cmd_out 2>&1; then
+    # A fixed /tmp path is a symlink-race target when running as root.
+    local out
+    out="$(mktemp /tmp/mirroret_cmd_out.XXXXXX)" || return 1
+    if ! "$@" > "$out" 2>&1; then
         error "command failed: $*"
-        cat /tmp/mirroret_cmd_out >&2
+        cat "$out" >&2
+        rm -f "$out"
         return 1
     fi
+    rm -f "$out"
 }
 
 # write_file <path> <content> — write content to a file (respects DRY_RUN).

@@ -160,7 +160,12 @@ MODE_UPGRADE=0
 parse_args() {
     # Auto-load /etc/mirroret/mirroret.conf if present and --config not
     # given. Explicit --config overrides.
-    if [[ -f /etc/mirroret/mirroret.conf ]] && [[ "$*" != *"--config"* ]]; then
+    local _explicit_config=0
+    local _a
+    for _a in "$@"; do
+        [[ "$_a" == "--config" ]] && { _explicit_config=1; break; }
+    done
+    if [[ -f /etc/mirroret/mirroret.conf ]] && [[ "${_explicit_config}" == "0" ]]; then
         # shellcheck disable=SC1091
         source /etc/mirroret/mirroret.conf
         info "Loaded config: /etc/mirroret/mirroret.conf (auto)"
@@ -368,8 +373,9 @@ Examples:
   sudo ./install.sh --dry-run
 
   # APT only, restrict firewall to local subnet
-  sudo ./install.sh --no-pip --no-docker --no-npm \
-    MIRRORET_FIREWALL_SOURCE=10.0.0.0/8
+  # (env vars go BEFORE the script name, not after)
+  sudo MIRRORET_FIREWALL_SOURCE=10.0.0.0/8 ./install.sh \
+    --no-pip --no-docker --no-npm
 
   # Check existing installation
   sudo ./install.sh --check
@@ -594,6 +600,23 @@ mkdir -p "\$LOG_DIR"
 LOG_FILE="\${LOG_DIR}/sync-all-\${TIMESTAMP}.log"
 exec > >(tee -a "\$LOG_FILE") 2>&1
 
+LOCK_FILE="/var/lock/mirroret-sync-all.lock"
+exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
+if ! flock -n 9; then
+    echo "ERROR: another sync-all is already running. Exiting."
+    exit 3
+fi
+trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
+
+# Abort early rather than letting each child hit the floor separately.
+MIN_FREE_GB="\${MIRRORET_SYNC_MIN_FREE_GB:-10}"
+_free_gb() { df -BG --output=avail "\$BASE_DIR" 2>/dev/null | tail -1 | tr -dc '0-9'; }
+_free="\$(_free_gb)"
+if [[ -n "\$_free" ]] && [[ "\$_free" -lt "\$MIN_FREE_GB" ]]; then
+    echo "ABORT: only \${_free} GB free on \${BASE_DIR} (floor: \${MIN_FREE_GB} GB)."
+    exit 4
+fi
+
 $(mirroret_script_preamble)
 
 echo "=== Mirroret sync started: \$(date) ==="
@@ -682,10 +705,25 @@ if [[ -f /etc/mirroret/mirroret.conf ]]; then
 fi
 
 # Load retention library from the install tree.
-INSTALL_DIR="${SCRIPT_DIR}"
+# Recorded at generation time, but the tree may have moved (a zip-based
+# upgrade extracts to a new directory). Fall back to a search rather than
+# failing forever with a stale path.
+INSTALL_DIR="\${MIRRORET_INSTALL_DIR:-${SCRIPT_DIR}}"
 if [[ ! -d "\${INSTALL_DIR}/lib" ]]; then
-    echo "ERROR: mirroret install tree not found at \${INSTALL_DIR}"
-    echo "Set INSTALL_DIR at the top of this script if you moved the repo."
+    for _cand in \
+        "${SCRIPT_DIR}" \
+        /opt/mirroret /usr/local/share/mirroret \
+        "\$HOME/mirroret-main" /root/mirroret-main; do
+        if [[ -d "\${_cand}/lib" ]] && [[ -f "\${_cand}/lib/retention.sh" ]]; then
+            INSTALL_DIR="\${_cand}"
+            break
+        fi
+    done
+fi
+if [[ ! -d "\${INSTALL_DIR}/lib" ]]; then
+    echo "ERROR: mirroret install tree not found (tried \${INSTALL_DIR})."
+    echo "Set MIRRORET_INSTALL_DIR=/path/to/mirroret in /etc/mirroret/mirroret.conf,"
+    echo "or re-run install.sh --upgrade from the current tree to regenerate this."
     exit 2
 fi
 # shellcheck disable=SC1091
