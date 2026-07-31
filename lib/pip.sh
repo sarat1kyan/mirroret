@@ -74,13 +74,47 @@ _install_pypiserver() {
     info "pypiserver installed in virtualenv: ${venv_dir}"
 }
 
+# _resolve_pypiserver_bin - print an ABSOLUTE, EXISTING, EXECUTABLE path to
+# pypi-server, or print nothing. The venv path is checked first because that
+# is where _install_pypiserver puts it.
+_resolve_pypiserver_bin() {
+    local c
+    local -a candidates=(
+        "${MIRRORET_PYPI_VENV:-/opt/mirroret-pypiserver}/bin/pypi-server"
+    )
+
+    c="$(command -v pypi-server 2>/dev/null || true)"
+    [[ -n "$c" ]] && candidates+=("$c")
+
+    candidates+=(
+        /usr/local/bin/pypi-server
+        /usr/bin/pypi-server
+    )
+
+    for c in "${candidates[@]}"; do
+        [[ -n "$c" ]] || continue
+        if [[ -x "$c" ]]; then
+            printf '%s' "$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
 _write_pypiserver_unit() {
     local backup_id="$1"
     local base_dir="$2"
     local pip_port="$3"
 
-    local pypi_bin
-    pypi_bin="$(command -v pypi-server 2>/dev/null || echo /usr/local/bin/pypi-server)"
+    # Same failure mode as verdaccio: a bare `command -v` plus a hardcoded
+    # fallback can write a nonexistent path into the unit, which then fails
+    # with status=203/EXEC on every restart. Resolve and verify.
+    local pypi_bin=""
+    pypi_bin="$(_resolve_pypiserver_bin)"
+    if [[ -z "${pypi_bin}" ]]; then
+        die "Cannot locate the pypi-server binary. Expected it in ${MIRRORET_PYPI_VENV:-/opt/mirroret-pypiserver}/bin/."
+    fi
+    info "pypiserver binary: ${pypi_bin}"
 
     # Serve approved/ (standard) or approved/ under the approval workflow root.
     # Both point to the same semantics; approval.sh promotes staging → approved.

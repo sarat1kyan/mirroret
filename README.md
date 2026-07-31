@@ -65,6 +65,31 @@ ls /srv/mirroret/config/
 
 ---
 
+## mirroretctl (control surface)
+
+One command for everything. Interactive menu with no arguments, or a
+subcommand.
+
+```bash
+./mirroretctl                 # interactive menu
+./mirroretctl status          # services, ports, disk, last sync, cron
+./mirroretctl doctor          # full read-only diagnostic
+./mirroretctl serve           # probe every HTTP endpoint locally
+./mirroretctl client verify   # check generated client configs for breakage
+./mirroretctl logs errors     # failures in recent sync logs
+./mirroretctl config diff     # config vs what the generated scripts contain
+
+sudo ./mirroretctl sync rpm   # run one sync now
+sudo ./mirroretctl sync stop  # stop running syncs
+sudo ./mirroretctl clean report  # retention dry run
+sudo ./mirroretctl upgrade    # re-apply config, regenerate managed scripts
+```
+
+Read-only subcommands need no root. Anything that changes state requires
+root and says so. Run `./mirroretctl help` for the full list.
+
+---
+
 ## Updating mirroret itself
 
 Safe upgrade path — never touches your mirror data:

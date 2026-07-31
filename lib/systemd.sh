@@ -54,9 +54,33 @@ enable_and_start() {
         xrun systemctl start "$svc"
     fi
 
-    # Verify it started.
+    # Verify it started. A unit whose ExecStart path does not exist enters
+    # "activating (auto-restart)" and never reaches active, so poll briefly
+    # instead of checking once.
+    local waited=0
+    while [[ "$waited" -lt 10 ]]; do
+        service_is_active "$svc" && break
+        sleep 1
+        waited=$(( waited + 1 ))
+    done
+
     if ! service_is_active "$svc"; then
         error "Service failed to start: ${svc}"
+
+        # status=203/EXEC means systemd could not exec ExecStart at all.
+        # Surface the offending path directly; the generic
+        # "check journalctl" message sent operators on a long detour.
+        local exec_path=""
+        exec_path="$(systemctl show -p ExecStart --value "$svc" 2>/dev/null \
+            | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -1)"
+        if [[ -n "$exec_path" ]] && [[ ! -x "$exec_path" ]]; then
+            error "ExecStart binary is missing or not executable: ${exec_path}"
+            error "The unit cannot start until that path exists (systemd reports 203/EXEC)."
+        fi
+
+        local state
+        state="$(systemctl is-active "$svc" 2>/dev/null || true)"
+        [[ -n "$state" ]] && error "Current state: ${state}"
         error "Check: journalctl -u ${svc} -n 50 --no-pager"
         return 1
     fi

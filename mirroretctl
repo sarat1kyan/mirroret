@@ -1,0 +1,695 @@
+#!/usr/bin/env bash
+# mirroretctl - single control surface for a mirroret server.
+#
+# Wraps install/uninstall/sync/retention/service/client operations behind
+# one verb-noun CLI so operators do not have to remember which script under
+# /srv/mirroret/scripts/ does what.
+#
+# Run with no arguments for an interactive menu, or pass a subcommand.
+#
+# Read-only subcommands work without root. Anything that changes state
+# requires root and says so.
+
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=lib/logging.sh
+source "${SCRIPT_DIR}/lib/logging.sh"
+# shellcheck source=lib/common.sh
+source "${SCRIPT_DIR}/lib/common.sh"
+# shellcheck source=lib/distro.sh
+source "${SCRIPT_DIR}/lib/distro.sh"
+
+# Load operator config so paths/ports match the running install.
+if [[ -f /etc/mirroret/mirroret.conf ]]; then
+    # shellcheck disable=SC1091
+    . /etc/mirroret/mirroret.conf
+fi
+
+BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
+SCRIPTS_DIR="${BASE_DIR}/scripts"
+LOGS_DIR="${BASE_DIR}/logs"
+CONFIG_DIR="${BASE_DIR}/config"
+WEB_PORT="${MIRRORET_WEB_PORT:-8080}"
+PIP_PORT="${MIRRORET_PIP_PORT:-8081}"
+NPM_PORT="${MIRRORET_NPM_PORT:-4873}"
+REG_PORT="${MIRRORET_DOCKER_REGISTRY_PORT:-5000}"
+
+MIRRORET_SERVICES=(nginx pypiserver verdaccio)
+
+# Colors only on a TTY.
+if [[ -t 1 ]]; then
+    C_OK="\033[32m"; C_WARN="\033[33m"; C_ERR="\033[31m"
+    C_HEAD="\033[36m"; C_OFF="\033[0m"
+else
+    C_OK=""; C_WARN=""; C_ERR=""; C_HEAD=""; C_OFF=""
+fi
+
+_h()  { printf "\n${C_HEAD}== %s ==${C_OFF}\n" "$*"; }
+_ok() { printf "${C_OK}ok${C_OFF}    %s\n" "$*"; }
+_wa() { printf "${C_WARN}warn${C_OFF}  %s\n" "$*"; }
+_er() { printf "${C_ERR}fail${C_OFF}  %s\n" "$*"; }
+_in() { printf "      %s\n" "$*"; }
+
+_need_root() {
+    if [[ "$(id -u)" -ne 0 ]]; then
+        _er "This subcommand changes state and needs root."
+        _in "Re-run: sudo $0 $*"
+        exit 1
+    fi
+}
+
+_have_install_tree() {
+    [[ -f "${SCRIPT_DIR}/install.sh" ]]
+}
+
+# _run_script <path> [args...] - run a generated script if it exists.
+_run_script() {
+    local s="$1"; shift || true
+    if [[ ! -x "$s" ]]; then
+        _er "Not found or not executable: $s"
+        _in "Run 'mirroretctl install' (or install.sh --upgrade) to regenerate it."
+        return 1
+    fi
+    "$s" "$@"
+}
+
+# ---------------------------------------------------------------- status ----
+
+cmd_status() {
+    _h "Mirroret status"
+    printf "Base dir : %s\n" "${BASE_DIR}"
+    printf "Host     : %s\n" "$(hostname 2>/dev/null || echo unknown)"
+
+    _h "Services"
+    if ! check_command systemctl; then
+        _wa "systemctl not available"
+    else
+        local svc state
+        for svc in "${MIRRORET_SERVICES[@]}"; do
+            systemctl list-unit-files --full --no-legend "${svc}.service" 2>/dev/null \
+                | grep -q "${svc}.service" || continue
+            state="$(systemctl is-active "$svc" 2>/dev/null || true)"
+            case "$state" in
+                active)   _ok "${svc}: active" ;;
+                inactive) _in "${svc}: inactive" ;;
+                failed)   _er "${svc}: failed"
+                          _in "  journalctl -u ${svc} -n 50 --no-pager" ;;
+                activating)
+                          _er "${svc}: ${state} (restart loop)"
+                          _cli_diagnose_execstart "$svc" ;;
+                *)        _in "${svc}: ${state:-unknown}" ;;
+            esac
+        done
+        # Registry can be native or a podman-managed unit.
+        for svc in docker-distribution docker-registry mirroret-registry; do
+            systemctl list-unit-files --full --no-legend "${svc}.service" 2>/dev/null \
+                | grep -q "${svc}.service" || continue
+            state="$(systemctl is-active "$svc" 2>/dev/null || true)"
+            if [[ "$state" == "active" ]]; then
+                _ok "${svc}: active"
+            else
+                _er "${svc}: ${state:-unknown}"
+            fi
+        done
+    fi
+
+    _h "Ports"
+    local p
+    for p in "${WEB_PORT}" "${PIP_PORT}" "${NPM_PORT}" "${REG_PORT}"; do
+        if check_command ss && ss -H -lnt "sport = :${p}" 2>/dev/null | grep -q LISTEN; then
+            _ok "${p} listening"
+        else
+            _in "${p} free"
+        fi
+    done
+
+    _h "Disk"
+    if [[ -d "${BASE_DIR}" ]]; then
+        df -h "${BASE_DIR}" | tail -1 | awk '{printf "      %s used of %s (%s), %s free\n",$3,$2,$5,$4}'
+        du -sh "${BASE_DIR}"/* 2>/dev/null | sed 's/^/      /' || true
+    else
+        _wa "${BASE_DIR} does not exist. Not installed yet?"
+    fi
+
+    _h "Last sync"
+    cmd_sync_last
+
+    _h "Cron"
+    if check_command crontab; then
+        local block
+        block="$(crontab -l 2>/dev/null | awk '/>>> mirroret managed/{f=1;next}/<<< mirroret managed/{f=0}f' || true)"
+        if [[ -n "$block" ]]; then
+            printf '%s\n' "$block" | sed 's/^/      /'
+        else
+            _wa "no mirroret cron block"
+        fi
+    else
+        _wa "crontab not installed"
+    fi
+}
+
+_cli_diagnose_execstart() {
+    local svc="$1" exec_path
+    exec_path="$(systemctl show -p ExecStart --value "$svc" 2>/dev/null \
+        | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -1)"
+    [[ -z "$exec_path" ]] && return 0
+    if [[ ! -x "$exec_path" ]]; then
+        _in "  ExecStart missing: ${exec_path}"
+        _in "  systemd reports 203/EXEC. Fix the path, then:"
+        _in "    sudo ${SCRIPT_DIR}/install.sh --upgrade"
+    fi
+}
+
+# ------------------------------------------------------------------ sync ----
+
+cmd_sync() {
+    local target="${1:-all}"
+    _need_root sync "$target"
+    case "$target" in
+        all)    _run_script "${SCRIPTS_DIR}/sync-all.sh" ;;
+        rpm)    _run_script "${SCRIPTS_DIR}/sync-redhat-repos.sh" ;;
+        pip)    _run_script "${SCRIPTS_DIR}/sync-pip-packages.sh" ;;
+        npm)    _run_script "${SCRIPTS_DIR}/sync-npm-packages.sh" ;;
+        docker) _run_script "${SCRIPTS_DIR}/sync-docker-images.sh" ;;
+        apt)
+            if [[ -x "${SCRIPTS_DIR}/sync-apt-debmirror.sh" ]]; then
+                _run_script "${SCRIPTS_DIR}/sync-apt-debmirror.sh"
+            else
+                _er "No APT sync script. APT mirroring is only set up on Debian/Ubuntu hosts."
+                return 1
+            fi
+            ;;
+        *) _er "Unknown sync target: ${target}"
+           _in "Valid: all rpm pip npm docker apt"
+           return 1 ;;
+    esac
+}
+
+cmd_sync_status() {
+    _h "Sync locks"
+    local lk lf
+    for lk in redhat pip npm; do
+        lf="/var/lock/mirroret-sync-${lk}.lock"
+        if [[ ! -e "$lf" ]]; then
+            _in "${lk}: idle (no lock file)"
+            continue
+        fi
+        # flock -n succeeds only when nothing holds the lock.
+        if flock -n "$lf" true 2>/dev/null; then
+            _in "${lk}: idle"
+        else
+            _ok "${lk}: RUNNING"
+        fi
+    done
+
+    _h "Running sync processes"
+    local found=0
+    local pat
+    for pat in reposync debmirror 'sync-all.sh' 'sync-redhat' 'sync-pip' 'sync-npm' 'sync-docker'; do
+        if pgrep -af "$pat" 2>/dev/null | grep -v mirroretctl | sed 's/^/      /'; then
+            found=1
+        fi
+    done
+    [[ "$found" -eq 0 ]] && _in "none"
+}
+
+cmd_sync_last() {
+    if [[ ! -d "${LOGS_DIR}" ]]; then
+        _in "no logs yet"
+        return 0
+    fi
+    local f
+    # Newest 5 sync logs, with their final line (which carries the counts).
+    while IFS= read -r f; do
+        [[ -z "$f" ]] && continue
+        printf "      %-38s %s\n" "$(basename "$f")" "$(tail -1 "$f" 2>/dev/null | cut -c1-70)"
+    done < <(ls -1t "${LOGS_DIR}"/sync-*.log 2>/dev/null | head -5)
+}
+
+cmd_sync_stop() {
+    _need_root sync-stop
+    _h "Stopping sync processes"
+    local pat killed=0
+    for pat in reposync debmirror 'sync-all.sh' 'sync-redhat-repos' 'sync-pip-packages' 'sync-npm-packages' 'sync-docker-images'; do
+        if pkill -f "$pat" 2>/dev/null; then
+            _ok "signalled: ${pat}"
+            killed=1
+        fi
+    done
+    [[ "$killed" -eq 0 ]] && _in "nothing running"
+    _in "Locks release automatically when the holding process exits."
+}
+
+# ------------------------------------------------------------- retention ----
+
+cmd_clean() {
+    local mode="${1:-report}"
+    _need_root clean "$mode"
+    case "$mode" in
+        report) _run_script_or_install --cleanup-report ;;
+        prune)  _run_script_or_install --cleanup ;;
+        *) _er "Unknown clean mode: ${mode}"
+           _in "Valid: report (dry run, default) | prune (delete)"
+           return 1 ;;
+    esac
+}
+
+_run_script_or_install() {
+    if _have_install_tree; then
+        "${SCRIPT_DIR}/install.sh" "$@"
+    else
+        _er "install.sh not found next to mirroretctl."
+        return 1
+    fi
+}
+
+# --------------------------------------------------------------- install ----
+
+cmd_install() {
+    _need_root install "$@"
+    _run_script_or_install "$@"
+}
+
+cmd_upgrade() {
+    _need_root upgrade
+    _run_script_or_install --upgrade
+}
+
+cmd_check() {
+    _need_root check
+    _run_script_or_install --check
+}
+
+cmd_uninstall() {
+    _need_root uninstall "$@"
+    if [[ ! -x "${SCRIPT_DIR}/uninstall.sh" ]]; then
+        _er "uninstall.sh not found next to mirroretctl."
+        return 1
+    fi
+    "${SCRIPT_DIR}/uninstall.sh" "$@"
+}
+
+# --------------------------------------------------------------- service ----
+
+cmd_service() {
+    local action="${1:-}" svc="${2:-}"
+    case "$action" in
+        list)
+            _h "Mirroret units"
+            local s state
+            for s in "${MIRRORET_SERVICES[@]}" docker-distribution docker-registry mirroret-registry; do
+                systemctl list-unit-files --full --no-legend "${s}.service" 2>/dev/null \
+                    | grep -q "${s}.service" || continue
+                state="$(systemctl is-active "$s" 2>/dev/null || true)"
+                printf "      %-22s %s\n" "$s" "${state:-unknown}"
+            done
+            ;;
+        restart|start|stop)
+            _need_root service "$action" "$svc"
+            [[ -z "$svc" ]] && { _er "Usage: mirroretctl service ${action} <unit>"; return 1; }
+            systemctl "$action" "$svc" && _ok "${action} ${svc}" || { _er "${action} ${svc} failed"; return 1; }
+            ;;
+        logs)
+            [[ -z "$svc" ]] && { _er "Usage: mirroretctl service logs <unit>"; return 1; }
+            journalctl -u "$svc" -n "${3:-100}" --no-pager
+            ;;
+        *)
+            _er "Usage: mirroretctl service {list|start|stop|restart|logs} [unit]"
+            return 1 ;;
+    esac
+}
+
+# ---------------------------------------------------------------- client ----
+
+cmd_client() {
+    local what="${1:-list}"
+    case "$what" in
+        list)
+            _h "Generated client configs"
+            if [[ ! -d "${CONFIG_DIR}" ]]; then
+                _wa "${CONFIG_DIR} does not exist"
+                return 0
+            fi
+            ls -1 "${CONFIG_DIR}" 2>/dev/null | sed 's/^/      /'
+            _h "Serve URLs"
+            local ip="${MIRRORET_SERVER_IP:-$(get_server_ip 2>/dev/null || echo '<server-ip>')}"
+            _in "rpm  : http://${ip}:${WEB_PORT}/config/redhat-client.repo"
+            _in "apt  : http://${ip}:${WEB_PORT}/config/debian-client.list"
+            _in "pip  : http://${ip}:${WEB_PORT}/config/pip.conf"
+            _in "npm  : http://${ip}:${WEB_PORT}/config/.npmrc"
+            ;;
+        show)
+            local f="${2:-}"
+            [[ -z "$f" ]] && { _er "Usage: mirroretctl client show <filename>"; return 1; }
+            if [[ ! -f "${CONFIG_DIR}/${f}" ]]; then
+                _er "No such client config: ${CONFIG_DIR}/${f}"
+                return 1
+            fi
+            cat "${CONFIG_DIR}/${f}"
+            ;;
+        verify)
+            _cli_verify_client_configs
+            ;;
+        *)
+            _er "Usage: mirroretctl client {list|show <file>|verify}"
+            return 1 ;;
+    esac
+}
+
+# _cli_verify_client_configs - catch the mistakes that break real clients.
+_cli_verify_client_configs() {
+    local rc=0
+    _h "Client config sanity"
+
+    local repo="${CONFIG_DIR}/redhat-client.repo"
+    if [[ -f "$repo" ]]; then
+        if grep -q '^gpgcheck=1' "$repo" && ! grep -qE '^gpgkey=' "$repo"; then
+            _er "redhat-client.repo: gpgcheck=1 with no gpgkey. Every client dnf call will fail."
+            _in "  Set MIRRORET_RPM_GPGKEY_URL or re-run install.sh --upgrade."
+            rc=1
+        else
+            _ok "redhat-client.repo: gpgcheck/gpgkey consistent"
+        fi
+        # baseurl paths must exist on disk or clients get 404.
+        local url path missing=0
+        while IFS= read -r url; do
+            path="${url#*://*/}"
+            path="${BASE_DIR}/${path#*/}"
+            [[ -d "$path" ]] || { _in "  baseurl not yet on disk: ${url}"; missing=1; }
+        done < <(grep -E '^baseurl=' "$repo" | sed 's/^baseurl=//')
+        if [[ "$missing" -eq 1 ]]; then
+            _wa "redhat-client.repo: some baseurl paths are empty. Run a sync first."
+        else
+            _ok "redhat-client.repo: all baseurl paths present"
+        fi
+    else
+        _in "redhat-client.repo: not generated (RPM disabled or non-RHEL host)"
+    fi
+
+    local list="${CONFIG_DIR}/debian-client.list"
+    if [[ -f "$list" ]]; then
+        if grep -q 'signed-by=.*mirroret.gpg' "$list" && [[ "${MIRRORET_APT_RESIGN:-0}" != "1" ]]; then
+            _er "debian-client.list: signed-by points at mirroret.gpg but MIRRORET_APT_RESIGN is not 1."
+            _in "  Mirrored Release files carry the UPSTREAM signature. apt update will fail."
+            rc=1
+        else
+            _ok "debian-client.list: signed-by configuration consistent"
+        fi
+    fi
+
+    local dj="${CONFIG_DIR}/docker-daemon.json"
+    if [[ -f "$dj" ]]; then
+        if check_command python3 && ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$dj" 2>/dev/null; then
+            _er "docker-daemon.json: not valid JSON"
+            rc=1
+        else
+            _ok "docker-daemon.json: valid JSON"
+        fi
+        if [[ "${MIRRORET_DOCKER_MODE:-cache}" == "hosted" ]] && grep -q 'registry-mirrors' "$dj"; then
+            _wa "docker-daemon.json: registry-mirrors set but mode is hosted. Clients should pull explicitly."
+        fi
+    fi
+
+    return "$rc"
+}
+
+# ------------------------------------------------------------------ serve ----
+
+# cmd_serve - prove the mirror answers over HTTP the way a client will see it.
+cmd_serve() {
+    _h "Endpoint reachability (localhost)"
+    if ! check_command curl; then
+        _wa "curl not installed; skipping"
+        return 0
+    fi
+    local rc=0
+    _cli_probe "nginx  /"          "http://127.0.0.1:${WEB_PORT}/"            || rc=1
+    _cli_probe "nginx  /config/"   "http://127.0.0.1:${WEB_PORT}/config/"     || rc=1
+    _cli_probe "pip    /simple/"   "http://127.0.0.1:${PIP_PORT}/simple/"     || rc=1
+    _cli_probe "npm    /"          "http://127.0.0.1:${NPM_PORT}/"            || rc=1
+    _cli_probe "docker /v2/"       "http://127.0.0.1:${REG_PORT}/v2/"         || rc=1
+
+    _h "Blocked paths (must NOT be served)"
+    local code
+    for p in logs scripts; do
+        code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
+            "http://127.0.0.1:${WEB_PORT}/${p}/" 2>/dev/null || echo 000)"
+        if [[ "$code" == "403" || "$code" == "404" ]]; then
+            _ok "/${p}/ blocked (HTTP ${code})"
+        else
+            _er "/${p}/ is reachable (HTTP ${code}). It should be denied."
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
+_cli_probe() {
+    local label="$1" url="$2" code
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo 000)"
+    case "$code" in
+        000) _er "${label}: no response (${url})"; return 1 ;;
+        200|301|302|401|403) _ok "${label}: HTTP ${code}" ;;
+        *)   _wa "${label}: HTTP ${code}" ;;
+    esac
+    return 0
+}
+
+# ------------------------------------------------------------------- logs ----
+
+cmd_logs() {
+    local what="${1:-list}"
+    case "$what" in
+        list)
+            _h "Sync logs (newest first)"
+            [[ -d "${LOGS_DIR}" ]] || { _wa "no log dir"; return 0; }
+            ls -1lht "${LOGS_DIR}" 2>/dev/null | head -20 | sed 's/^/      /'
+            _h "Disk used by logs"
+            du -sh "${LOGS_DIR}" 2>/dev/null | sed 's/^/      /' || true
+            ;;
+        tail)
+            local f
+            f="$(ls -1t "${LOGS_DIR}"/sync-*.log 2>/dev/null | head -1 || true)"
+            [[ -z "$f" ]] && { _wa "no sync logs"; return 0; }
+            _in "tailing: $f"
+            tail -f "$f"
+            ;;
+        show)
+            local f
+            f="$(ls -1t "${LOGS_DIR}"/sync-*.log 2>/dev/null | head -1 || true)"
+            [[ -z "$f" ]] && { _wa "no sync logs"; return 0; }
+            "${PAGER:-less}" "$f"
+            ;;
+        errors)
+            _h "Failures in the most recent logs"
+            [[ -d "${LOGS_DIR}" ]] || { _wa "no log dir"; return 0; }
+            local f
+            while IFS= read -r f; do
+                [[ -z "$f" ]] && continue
+                if grep -nE '^(FAIL|ERROR|ABORT)|FAILED:|PULL FAILED|PUBLISH FAILED' "$f" >/dev/null 2>&1; then
+                    printf "\n      %s\n" "$(basename "$f")"
+                    grep -nE '^(FAIL|ERROR|ABORT)|FAILED:|PULL FAILED|PUBLISH FAILED' "$f" \
+                        | head -15 | sed 's/^/        /'
+                fi
+            done < <(ls -1t "${LOGS_DIR}"/*.log 2>/dev/null | head -8)
+            ;;
+        *) _er "Usage: mirroretctl logs {list|tail|show|errors}"; return 1 ;;
+    esac
+}
+
+# ------------------------------------------------------------------ doctor ----
+
+cmd_doctor() {
+    if [[ -x "${SCRIPT_DIR}/scripts/mirroret-debug.sh" ]]; then
+        "${SCRIPT_DIR}/scripts/mirroret-debug.sh" "$@"
+    else
+        _er "scripts/mirroret-debug.sh not found"
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------------ config ----
+
+cmd_config() {
+    local what="${1:-show}"
+    local conf="/etc/mirroret/mirroret.conf"
+    case "$what" in
+        show)
+            if [[ ! -f "$conf" ]]; then
+                _wa "${conf} does not exist"
+                _in "Create it: sudo cp ${SCRIPT_DIR}/config/mirroret.conf.example ${conf}"
+                return 0
+            fi
+            _h "Active settings in ${conf}"
+            grep -vE '^\s*(#|$)' "$conf" | sed 's/^/      /'
+            ;;
+        edit)
+            _need_root config edit
+            [[ -f "$conf" ]] || { mkdir -p /etc/mirroret; cp "${SCRIPT_DIR}/config/mirroret.conf.example" "$conf"; }
+            "${EDITOR:-vi}" "$conf"
+            _in "Apply with: sudo mirroretctl upgrade"
+            ;;
+        path)
+            printf '%s\n' "$conf"
+            ;;
+        diff)
+            # Show where the running generated scripts disagree with the conf.
+            _h "Config vs generated scripts"
+            local s="${SCRIPTS_DIR}/sync-redhat-repos.sh"
+            if [[ -f "$s" ]]; then
+                _in "sync-redhat-repos.sh:"
+                grep -E '^(FLAVOR|ARCH|NEWEST_ONLY|INCLUDE_SOURCE|DELETE_REMOVED|MIN_FREE_GB|REPOS)=' "$s" \
+                    | sed 's/^/        /'
+                _in "conf:"
+                grep -E '^MIRRORET_RPM_(FLAVOR|ARCH|NEWEST_ONLY|SOURCE|DELETE|REPOS)|^MIRRORET_SYNC_MIN_FREE_GB' \
+                    "$conf" 2>/dev/null | sed 's/^/        /' || _in "        (none set)"
+                _in "If these disagree, run: sudo mirroretctl upgrade"
+            else
+                _wa "no generated RPM sync script"
+            fi
+            ;;
+        *) _er "Usage: mirroretctl config {show|edit|path|diff}"; return 1 ;;
+    esac
+}
+
+# -------------------------------------------------------------------- menu ----
+
+cmd_menu() {
+    while true; do
+        printf "\n${C_HEAD}mirroretctl${C_OFF}  base=%s\n" "${BASE_DIR}"
+        cat <<'MENU'
+   1) status            show services, ports, disk, last sync
+   2) doctor            full read-only diagnostic
+   3) sync all          run every sync now
+   4) sync status       what is running / locks
+   5) sync stop         stop running syncs
+   6) clean report      retention dry run
+   7) clean prune       retention delete
+   8) serve             probe HTTP endpoints
+   9) client verify     check generated client configs
+  10) logs errors       failures in recent logs
+  11) logs tail         follow newest sync log
+  12) config show       active settings
+  13) config edit       edit and then upgrade
+  14) upgrade           re-apply config, regenerate scripts
+  15) check             validate installation
+   q) quit
+MENU
+        printf "select> "
+        local choice
+        read -r choice || return 0
+        case "$choice" in
+            1)  cmd_status ;;
+            2)  cmd_doctor ;;
+            3)  cmd_sync all ;;
+            4)  cmd_sync_status ;;
+            5)  cmd_sync_stop ;;
+            6)  cmd_clean report ;;
+            7)  cmd_clean prune ;;
+            8)  cmd_serve ;;
+            9)  cmd_client verify ;;
+            10) cmd_logs errors ;;
+            11) cmd_logs tail ;;
+            12) cmd_config show ;;
+            13) cmd_config edit ;;
+            14) cmd_upgrade ;;
+            15) cmd_check ;;
+            q|Q|quit|exit) return 0 ;;
+            "") ;;
+            *)  _er "unknown selection: ${choice}" ;;
+        esac
+    done
+}
+
+# -------------------------------------------------------------------- help ----
+
+cmd_help() {
+    cat <<'USAGE'
+mirroretctl - control surface for a mirroret mirror server
+
+Usage:
+  mirroretctl                        interactive menu
+  mirroretctl <command> [args]
+
+Inspect (no root needed):
+  status                    services, ports, disk, last sync, cron
+  doctor [--net] [--bundle] full read-only diagnostic
+  sync status               which syncs are running, lock state
+  sync last                 final line of the newest sync logs
+  serve                     probe every HTTP endpoint locally
+  client list               generated client configs and their URLs
+  client show <file>        print one client config
+  client verify             check client configs for breaking mistakes
+  logs list|tail|show|errors
+  config show|path|diff
+  service list              unit states
+
+Change state (root):
+  install [install.sh args] run the installer
+  upgrade                   re-apply config, regenerate managed scripts
+  check                     validate the installation
+  uninstall [args]          run the uninstaller (see uninstall.sh --help)
+  sync all|rpm|pip|npm|docker|apt
+  sync stop                 stop running syncs
+  clean report              retention dry run (default)
+  clean prune               retention delete
+  config edit               edit /etc/mirroret/mirroret.conf
+  service start|stop|restart <unit>
+  service logs <unit> [n]
+
+Examples:
+  mirroretctl status
+  sudo mirroretctl sync rpm
+  sudo mirroretctl clean report
+  mirroretctl client verify
+  mirroretctl serve
+USAGE
+}
+
+# -------------------------------------------------------------------- main ----
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        if [[ -t 0 ]]; then
+            cmd_menu
+        else
+            cmd_help
+        fi
+        return 0
+    fi
+
+    local cmd="$1"; shift || true
+    case "$cmd" in
+        status)              cmd_status ;;
+        doctor|debug)        cmd_doctor "$@" ;;
+        sync)
+            case "${1:-all}" in
+                status) cmd_sync_status ;;
+                last)   _h "Last sync"; cmd_sync_last ;;
+                stop)   cmd_sync_stop ;;
+                *)      cmd_sync "${1:-all}" ;;
+            esac
+            ;;
+        clean|cleanup)       cmd_clean "${1:-report}" ;;
+        install)             cmd_install "$@" ;;
+        upgrade)             cmd_upgrade ;;
+        check|validate)      cmd_check ;;
+        uninstall)           cmd_uninstall "$@" ;;
+        service|svc)         cmd_service "$@" ;;
+        client)              cmd_client "$@" ;;
+        serve|endpoints)     cmd_serve ;;
+        logs|log)            cmd_logs "$@" ;;
+        config|conf)         cmd_config "$@" ;;
+        menu)                cmd_menu ;;
+        help|-h|--help)      cmd_help ;;
+        *)
+            _er "Unknown command: ${cmd}"
+            _in "Run 'mirroretctl help' for the command list."
+            return 2
+            ;;
+    esac
+}
+
+main "$@"
