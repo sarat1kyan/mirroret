@@ -343,3 +343,37 @@
 # writes a NEW timestamped filename. cleanup-all.sh deletes older ones.
 # Default: 30 days. 0 disables.
 #MIRRORET_LOG_KEEP_DAYS=30
+
+# ---- Sync pre-flight / politeness ------------------------------------------
+
+# Estimate download size (metadata only) before syncing and abort if the
+# estimate would leave less than MIRRORET_SYNC_MIN_FREE_GB free.
+# Default: 1 (on). Set 0 to skip the estimate.
+#MIRRORET_SYNC_ESTIMATE=1
+
+# After syncing, ask dnf to read each repo straight off disk. A mirror with
+# unreadable metadata is worse than none, because clients only find out at
+# install time. Default: 1 (on).
+#MIRRORET_SYNC_SMOKE_TEST=1
+
+# nice level for reposync/createrepo. createrepo over tens of thousands of
+# packages otherwise pegs every core. ionice idle class is applied too when
+# available. Default: 10
+#MIRRORET_SYNC_NICE=10
+
+# Wall-clock cap on a single container image pull. Default: 30m
+#MIRRORET_DOCKER_PULL_TIMEOUT=30m
+
+# ---- Retention safety ------------------------------------------------------
+
+# Allow retention to delete .tgz files directly out of Verdaccio's storage
+# root. OFF by default: raw deletion leaves Verdaccio metadata advertising
+# versions that then 404 for clients. Prune properly with npm unpublish.
+#MIRRORET_NPM_PRUNE_STORAGE=0
+
+# ---- Install tree location -------------------------------------------------
+
+# cleanup-all.sh needs the mirroret source tree to load lib/retention.sh.
+# It records the path at generation time and falls back to a search, but you
+# can pin it here if you keep the tree somewhere unusual.
+#MIRRORET_INSTALL_DIR=/opt/mirroret

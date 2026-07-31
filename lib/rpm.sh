@@ -114,6 +114,25 @@ configure_createrepo() {
     local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
     local sync_timeout="${MIRRORET_SYNC_TIMEOUT:-6h}"
 
+    # Catch the config mistake that silently mirrors into the wrong tree:
+    # naming ol9_* repos while the flavor is still the host's OS_ID (rhel).
+    local _first_repo="${repos%% *}"
+    case "${_first_repo}" in
+        ol[0-9]*)
+            if [[ "${flavor}" != "ol" ]]; then
+                warn "MIRRORET_RPM_REPOS names Oracle repos (${_first_repo}) but flavor is '${flavor}'."
+                warn "Data will land under redhat/mirror/${flavor}/ and client URLs will not match."
+                warn "Set MIRRORET_RPM_FLAVOR=ol in /etc/mirroret/mirroret.conf."
+            fi
+            ;;
+        rhel-*)
+            if [[ "${flavor}" != "rhel" ]]; then
+                warn "MIRRORET_RPM_REPOS names RHEL repos but flavor is '${flavor}'."
+                warn "Set MIRRORET_RPM_FLAVOR=rhel."
+            fi
+            ;;
+    esac
+
     section "Configuring createrepo (${flavor} ${rhel_ver})"
     info "Repo tree:     ${base_dir}/redhat/mirror/${flavor}/${rhel_ver}/"
     info "Repos to sync: ${repos}"
@@ -239,6 +258,49 @@ _check_disk || exit 4
 # 400-600 MB each. That is the single most destructive default here.
 REPOSYNC_ARGS=(--download-metadata --arch "\${ARCH}" --arch noarch
     --setopt=timeout=60 --setopt=minrate=1000 --setopt=retries=3)
+
+# Estimate the download before committing to it. reposync gives no size
+# preview, so a 4-repo OL9 sync could silently need more than the volume
+# has. repoquery is cheap (metadata only) and turns a multi-hour surprise
+# into a one-line decision.
+_estimate_gb() {
+    local repo="\$1" bytes
+    command -v dnf >/dev/null 2>&1 || { printf '0'; return 0; }
+    bytes="\$(dnf repoquery --repo="\${repo}" --arch="\${ARCH},noarch" \
+        \${NEWEST_ONLY:+--latest-limit=1} \
+        --queryformat='%{downloadsize}\\n' 2>/dev/null \
+        | awk '/^[0-9]+\$/ {t+=\$1} END {print t+0}')"
+    [[ -z "\$bytes" ]] && bytes=0
+    printf '%s' "\$(( bytes / 1024 / 1024 / 1024 ))"
+}
+
+if [[ "\${MIRRORET_SYNC_ESTIMATE:-1}" == "1" ]]; then
+    echo "--- Estimating download size (metadata only)"
+    est_total=0
+    for repo in \${REPOS[@]+"\${REPOS[@]}"}; do
+        est="\$(_estimate_gb "\$repo")"
+        echo "    \${repo}: ~\${est} GB"
+        est_total=\$(( est_total + est ))
+    done
+    free_now="\$(_free_gb)"
+    echo "    total: ~\${est_total} GB   free: \${free_now:-?} GB"
+    if [[ -n "\${free_now}" ]] && [[ "\${est_total}" -gt 0 ]] \
+       && [[ \$(( free_now - est_total )) -lt "\${MIN_FREE_GB}" ]]; then
+        echo "ABORT: estimated \${est_total} GB would leave less than \${MIN_FREE_GB} GB free."
+        echo "Free space, reduce MIRRORET_RPM_REPOS, or set MIRRORET_SYNC_ESTIMATE=0 to skip this check."
+        exit 5
+    fi
+fi
+
+# Be a good neighbour: a 44k-package createrepo at 02:00 otherwise pegs
+# every core and saturates the proxy.
+NICE=""
+if command -v nice >/dev/null 2>&1; then
+    NICE="nice -n \${MIRRORET_SYNC_NICE:-10}"
+    if command -v ionice >/dev/null 2>&1; then
+        NICE="ionice -c 2 -n 7 \${NICE}"
+    fi
+fi
 [[ "\${NEWEST_ONLY}"   == "1" ]] && REPOSYNC_ARGS+=(--newest-only)
 [[ "\${DELETE_REMOVED}" == "1" ]] && REPOSYNC_ARGS+=(--delete)
 [[ "\${INCLUDE_SOURCE}" == "1" ]] && REPOSYNC_ARGS+=(--source)
@@ -258,8 +320,9 @@ for repo in "\${REPOS[@]}"; do
     target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
     mkdir -p "\$target"
     echo "--- reposync \${repo} (free: \$(_free_gb) GB)"
+    # shellcheck disable=SC2086  # NICE must word-split
     if ! timeout -k 60 "\${SYNC_TIMEOUT}" \\
-            reposync -p "\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}" \\
+            \${NICE} reposync -p "\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}" \\
             "\${REPOSYNC_ARGS[@]}" --repo "\${repo}"; then
         echo "FAIL: reposync \${repo}"
         sync_failed=\$(( sync_failed + 1 ))
@@ -280,15 +343,40 @@ for repo in "\${REPOS[@]}"; do
         continue
     fi
     echo "--- createrepo \${repo} (no upstream repodata found)"
-    if ! ${createrepo_cmd} "\$target"; then
+    # shellcheck disable=SC2086
+    if ! \${NICE} ${createrepo_cmd} "\$target"; then
         echo "FAIL: createrepo \${repo}"
         metadata_failed=\$(( metadata_failed + 1 ))
     fi
 done
 
-echo "RPM sync completed: \$(date) (sync_failed=\${sync_failed} metadata_failed=\${metadata_failed} aborted=\${aborted})"
+# Smoke test: a mirror with unreadable metadata is worse than no mirror,
+# because clients only find out at install time. Ask dnf to parse each
+# repo straight off disk.
+smoke_failed=0
+if [[ "\${MIRRORET_SYNC_SMOKE_TEST:-1}" == "1" ]] && command -v dnf >/dev/null 2>&1; then
+    echo "--- Smoke testing generated repodata"
+    _tmpcache="\$(mktemp -d)"
+    for repo in \${REPOS[@]+"\${REPOS[@]}"}; do
+        target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
+        [[ -d "\${target}/repodata" ]] || continue
+        if dnf --quiet --disablerepo='*' \
+               --repofrompath="smoke-\${repo},file://\${target}" \
+               --repo="smoke-\${repo}" \
+               --setopt=cachedir="\${_tmpcache}" \
+               repoquery --queryformat='%{name}' 2>/dev/null | head -1 | grep -q .; then
+            echo "    OK: \${repo} is readable by dnf"
+        else
+            echo "    FAIL: \${repo} repodata is not readable by dnf"
+            smoke_failed=\$(( smoke_failed + 1 ))
+        fi
+    done
+    rm -rf "\${_tmpcache}"
+fi
+
+echo "RPM sync completed: \$(date) (sync_failed=\${sync_failed} metadata_failed=\${metadata_failed} aborted=\${aborted} smoke_failed=\${smoke_failed})"
 echo "Free space now: \$(_free_gb) GB"
-total=\$(( sync_failed + metadata_failed + aborted ))
+total=\$(( sync_failed + metadata_failed + aborted + smoke_failed ))
 if [[ \$total -ne 0 ]]; then
     exit 1
 fi

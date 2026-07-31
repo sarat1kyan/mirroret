@@ -29,9 +29,26 @@ MIRRORET_PIP_KEEP_VERSIONS="${MIRRORET_PIP_KEEP_VERSIONS:-3}"
 MIRRORET_NPM_KEEP_DAYS="${MIRRORET_NPM_KEEP_DAYS:-180}"
 MIRRORET_DOCKER_GC="${MIRRORET_DOCKER_GC:-0}"
 
+# Set to 1 by retention_rpm_prune when packages were deleted but repodata
+# could not be rebuilt. run_retention turns this into a non-zero exit.
+RETENTION_METADATA_BROKEN=0
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-# _ret_mode — return the effective mode: prune | report. Anything unrecognised
+# _ret_int <name> <value> <default> - validate a numeric knob. A non-numeric
+# value used to make `[[ "$keep" -le 0 ]]` evaluate true, silently disabling
+# retention with no warning. Now it warns and falls back to the default.
+_ret_int() {
+    local name="$1" val="$2" def="$3"
+    if [[ "$val" =~ ^[0-9]+$ ]]; then
+        printf '%s' "$val"
+        return 0
+    fi
+    warn "${name}='${val}' is not a number. Using default ${def}."
+    printf '%s' "$def"
+}
+
+# _ret_mode - return the effective mode: prune | report. Anything unrecognised
 # collapses to report (safest).
 _ret_mode() {
     case "${MIRRORET_RETENTION_MODE:-report}" in
@@ -59,7 +76,8 @@ _ret_do() {
 # ── RPM: keep N newest of each package name ──────────────────────────────────
 
 retention_rpm_prune() {
-    local keep="${MIRRORET_RPM_KEEP_VERSIONS:-3}"
+    local keep
+    keep="$(_ret_int MIRRORET_RPM_KEEP_VERSIONS "${MIRRORET_RPM_KEEP_VERSIONS:-3}" 3)"
     [[ "$keep" -le 0 ]] && { debug "RPM retention disabled (keep=0)."; return 0; }
 
     local base_dir="${MIRRORET_BASE_DIR:-/srv/mirroret}"
@@ -100,8 +118,19 @@ retention_rpm_prune() {
 
         if [[ "$(_ret_mode)" == "prune" ]]; then
             printf '%s\n' "$old_list" | xargs -r rm -f
-            "${createrepo_cmd}" --update "$repo_dir" >/dev/null 2>&1 || \
-                warn "  createrepo --update failed after prune"
+            # Metadata MUST be rebuilt after deleting packages, otherwise
+            # repomd.xml still advertises files that are gone and every
+            # client dnf call hard-fails. Retry once, then surface loudly.
+            if ! "${createrepo_cmd}" --update "$repo_dir" >/dev/null 2>&1; then
+                warn "  createrepo --update failed; retrying without --update"
+                if ! "${createrepo_cmd}" "$repo_dir" >/dev/null 2>&1; then
+                    error "  METADATA STALE for ${repo_dir}"
+                    error "  Packages were deleted but repodata was not rebuilt."
+                    error "  Clients will fail until you run: ${createrepo_cmd} ${repo_dir}"
+                    RETENTION_METADATA_BROKEN=1
+                    continue
+                fi
+            fi
             info "  [pruned] ${count} RPM(s) removed, metadata refreshed"
         else
             info "  [report] would remove ${count} RPM(s) — sample:"
@@ -115,7 +144,8 @@ retention_rpm_prune() {
 # ── pip: keep N newest wheels/sdists per package ─────────────────────────────
 
 retention_pip_prune() {
-    local keep="${MIRRORET_PIP_KEEP_VERSIONS:-3}"
+    local keep
+    keep="$(_ret_int MIRRORET_PIP_KEEP_VERSIONS "${MIRRORET_PIP_KEEP_VERSIONS:-3}" 3)"
     [[ "$keep" -le 0 ]] && { debug "pip retention disabled (keep=0)."; return 0; }
 
     local base_dir="${MIRRORET_BASE_DIR:-/srv/mirroret}"
@@ -140,16 +170,19 @@ retention_pip_prune() {
         while IFS= read -r pkg; do
             [[ -z "$pkg" ]] && continue
 
-            # List matching files newest-first via `ls -t`. Portable, and
-            # simpler than dodging BSD vs GNU stat/find differences.
+            # Order by VERSION, newest last, then reverse. Ordering by mtime
+            # (the old `ls -t`) deleted genuinely newer releases whenever an
+            # older one happened to be re-downloaded more recently.
+            # `sort -V` understands dotted version strings.
             local -a all=()
             while IFS= read -r f; do
                 [[ -z "$f" ]] && continue
                 all+=("$f")
             done < <(
                 cd "$dir" 2>/dev/null || return 0
-                # shellcheck disable=SC2012  # ls is fine for mtime sort here
-                ls -t "${pkg}"-[0-9]*.whl "${pkg}"-[0-9]*.tar.gz "${pkg}"-[0-9]*.zip 2>/dev/null
+                # shellcheck disable=SC2012
+                ls -1 "${pkg}"-[0-9]*.whl "${pkg}"-[0-9]*.tar.gz "${pkg}"-[0-9]*.zip 2>/dev/null \
+                    | sort -V -r
             )
 
             local total="${#all[@]}"
@@ -178,8 +211,17 @@ retention_pip_prune() {
 
 # ── npm: delete tarballs older than N days ───────────────────────────────────
 
+# _npm_storage_is_verdaccio <dir> - true when <dir> looks like a live
+# Verdaccio storage root (it keeps a package.json per package dir).
+_npm_storage_is_verdaccio() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 1
+    find "$dir" -maxdepth 2 -name 'package.json' -print -quit 2>/dev/null | grep -q .
+}
+
 retention_npm_prune() {
-    local days="${MIRRORET_NPM_KEEP_DAYS:-180}"
+    local days
+    days="$(_ret_int MIRRORET_NPM_KEEP_DAYS "${MIRRORET_NPM_KEEP_DAYS:-180}" 180)"
     [[ "$days" -le 0 ]] && { debug "npm retention disabled (days=0)."; return 0; }
 
     local base_dir="${MIRRORET_BASE_DIR:-/srv/mirroret}"
@@ -194,6 +236,22 @@ retention_npm_prune() {
     for dir in "${candidates[@]}"; do
         [[ -d "$dir" ]] || continue
         info "Directory: ${dir}"
+
+        # Verdaccio keeps a package.json alongside each package's tarballs.
+        # Deleting .tgz files underneath it leaves the metadata advertising
+        # versions that then 404 for every client. Refuse to touch it unless
+        # the operator has explicitly accepted that.
+        if _npm_storage_is_verdaccio "$dir"; then
+            if [[ "${MIRRORET_NPM_PRUNE_STORAGE:-0}" != "1" ]]; then
+                warn "  ${dir} is a live Verdaccio storage root - skipping."
+                warn "  Raw .tgz deletion desyncs Verdaccio metadata (clients get 404)."
+                warn "  Prune properly with: npm unpublish <pkg>@<ver> --registry http://localhost:${MIRRORET_NPM_PORT:-4873}"
+                warn "  Or set MIRRORET_NPM_PRUNE_STORAGE=1 to override (not recommended)."
+                continue
+            fi
+            warn "  MIRRORET_NPM_PRUNE_STORAGE=1 - pruning a live Verdaccio store."
+            warn "  Verdaccio metadata may advertise removed versions afterwards."
+        fi
 
         local count
         count="$(find "$dir" -type f -name '*.tgz' -mtime "+${days}" 2>/dev/null | wc -l | tr -d ' ')"
@@ -294,10 +352,17 @@ run_retention() {
     info "npm keep-days       : ${MIRRORET_NPM_KEEP_DAYS}"
     info "Docker GC           : ${MIRRORET_DOCKER_GC}"
 
+    RETENTION_METADATA_BROKEN=0
     retention_rpm_prune    || true
     retention_pip_prune    || true
     retention_npm_prune    || true
     retention_docker_gc    || true
+
+    if [[ "${RETENTION_METADATA_BROKEN}" == "1" ]]; then
+        error "Retention finished but at least one repo has STALE METADATA."
+        error "Clients will fail against those repos until createrepo is re-run."
+        return 1
+    fi
 
     success "Retention complete (mode: ${mode})."
 }

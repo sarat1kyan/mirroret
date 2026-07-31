@@ -55,10 +55,12 @@ warn_insecure() {
     echo "!! SECURITY WARNING: $*" >&2
     echo "$border" >&2
     echo "" >&2
+    # Fail-soft like _log: a permission/disk error here must not abort a
+    # caller running under set -e.
     if [[ -n "${MIRRORET_LOG_FILE:-}" ]]; then
-        echo "" >> "$MIRRORET_LOG_FILE"
-        echo "$border" >> "$MIRRORET_LOG_FILE"
-        echo "!! SECURITY WARNING: $*" >> "$MIRRORET_LOG_FILE"
-        echo "$border" >> "$MIRRORET_LOG_FILE"
+        {
+            printf '\n%s\n!! SECURITY WARNING: %s\n%s\n' \
+                "$border" "$*" "$border"
+        } >> "$MIRRORET_LOG_FILE" 2>/dev/null || true
     fi
 }
