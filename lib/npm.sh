@@ -169,13 +169,70 @@ VERD_EOF
     success "Verdaccio config written."
 }
 
+# _resolve_verdaccio_bin - print an ABSOLUTE, EXISTING, EXECUTABLE path to
+# the verdaccio binary, or print nothing.
+#
+# Search order:
+#   1. PATH (covers the common case)
+#   2. `npm bin -g` (npm < 9)
+#   3. `npm prefix -g`/bin (npm >= 9 dropped `npm bin -g`)
+#   4. `npm root -g`/verdaccio/bin/verdaccio (the package's own bin)
+#   5. Well-known prefixes as a last resort
+#
+# Every candidate is checked with -x so we never emit a path that systemd
+# will fail to exec.
+_resolve_verdaccio_bin() {
+    local c
+    local -a candidates=()
+
+    c="$(command -v verdaccio 2>/dev/null || true)"
+    [[ -n "$c" ]] && candidates+=("$c")
+
+    if check_command npm; then
+        c="$(npm bin -g 2>/dev/null || true)"
+        [[ -n "$c" ]] && candidates+=("${c}/verdaccio")
+
+        c="$(npm prefix -g 2>/dev/null || true)"
+        [[ -n "$c" ]] && candidates+=("${c}/bin/verdaccio")
+
+        c="$(npm root -g 2>/dev/null || true)"
+        [[ -n "$c" ]] && candidates+=("${c}/verdaccio/bin/verdaccio")
+    fi
+
+    candidates+=(
+        /usr/local/bin/verdaccio
+        /usr/bin/verdaccio
+        /usr/lib/node_modules/verdaccio/bin/verdaccio
+        /usr/local/lib/node_modules/verdaccio/bin/verdaccio
+        /opt/node/bin/verdaccio
+    )
+
+    for c in "${candidates[@]}"; do
+        [[ -n "$c" ]] || continue
+        if [[ -x "$c" ]]; then
+            printf '%s' "$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
 _write_verdaccio_unit() {
     local backup_id="$1"
     local base_dir="$2"
     local npm_port="$3"
 
-    local verdaccio_bin
-    verdaccio_bin="$(command -v verdaccio 2>/dev/null || echo /usr/bin/verdaccio)"
+    # Resolve the real verdaccio binary. `command -v` alone is not enough:
+    # npm -g installs into a prefix that is often absent from root's PATH
+    # (on RHEL with the nodejs module it lands in /usr/local/bin), so the
+    # old `|| echo /usr/bin/verdaccio` fallback wrote a path that does not
+    # exist and the unit failed with status=203/EXEC on every restart.
+    local verdaccio_bin=""
+    verdaccio_bin="$(_resolve_verdaccio_bin)"
+    if [[ -z "${verdaccio_bin}" ]]; then
+        die "Cannot locate the verdaccio binary. Install it with: npm install -g verdaccio"
+    fi
+    info "Verdaccio binary: ${verdaccio_bin}"
 
     # Verdaccio needs a writable HOME. The mirroret-npm user is created
     # with --no-create-home, and ProtectSystem=strict makes most of the

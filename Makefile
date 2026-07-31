@@ -5,7 +5,7 @@ SHELL := /bin/bash
 # Production scripts (linted strictly).
 # mirroret.sh and mirroret-unified.sh are legacy reference files — kept for
 # comparison, not actively maintained, so excluded from strict lint.
-SCRIPTS := install.sh uninstall.sh $(wildcard lib/*.sh) $(wildcard scripts/*.sh)
+SCRIPTS := install.sh uninstall.sh mirroretctl $(wildcard lib/*.sh) $(wildcard scripts/*.sh)
 TEST_DIR := tests
 
 .PHONY: all lint format test test-integration test-all validate check-deps help dry-run clean uninstall
