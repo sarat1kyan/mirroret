@@ -5,9 +5,9 @@
 
 MIRRORET_BACKUP_BASE="${MIRRORET_BACKUP_BASE:-/var/backups/mirroret}"
 
-# ── Backup ID ────────────────────────────────────────────────────────────────
+# -- Backup ID ----------------------------------------------------------------
 
-# new_backup_id — create a new timestamped backup directory and print its ID.
+# new_backup_id - create a new timestamped backup directory and print its ID.
 new_backup_id() {
     local ts
     ts="$(date '+%Y%m%d-%H%M%S')"
@@ -21,9 +21,9 @@ new_backup_id() {
     echo "$ts"
 }
 
-# ── File backup ──────────────────────────────────────────────────────────────
+# -- File backup --------------------------------------------------------------
 
-# backup_file <backup_id> <filepath> — copy filepath into the backup directory.
+# backup_file <backup_id> <filepath> - copy filepath into the backup directory.
 # If filepath does not exist, records a note but does not fail.
 backup_file() {
     local backup_id="$1"
@@ -52,7 +52,7 @@ backup_file() {
     debug "Backed up ${filepath} -> ${dest_path}"
 }
 
-# ── List backups ─────────────────────────────────────────────────────────────
+# -- List backups -------------------------------------------------------------
 
 list_backups() {
     if [[ ! -d "${MIRRORET_BACKUP_BASE}" ]]; then
@@ -67,15 +67,15 @@ list_backups() {
         local manifest="${d}/backup.manifest"
         local count=0
         [[ -f "$manifest" ]] && count=$(wc -l < "$manifest")
-        echo "  ${id}  (${count} files)"
+        echo " ${id} (${count} files)"
         found=1
     done
     [[ "$found" == "0" ]] && info "No backups found."
 }
 
-# ── Rollback ─────────────────────────────────────────────────────────────────
+# -- Rollback -----------------------------------------------------------------
 
-# rollback <backup_id> — restore files from a backup directory.
+# rollback <backup_id> - restore files from a backup directory.
 # Files that were MISSING at backup time are skipped.
 # This is best-effort: individual failures are logged but do not abort.
 rollback() {

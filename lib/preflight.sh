@@ -14,7 +14,7 @@ MIRRORET_MIN_DISK_GB="${MIRRORET_MIN_DISK_GB:-50}"
 # during install (off by default for fast/offline installs).
 MIRRORET_PREFLIGHT_NETWORK="${MIRRORET_PREFLIGHT_NETWORK:-0}"
 
-# run_preflight — execute all preflight checks.
+# run_preflight - execute all preflight checks.
 # Exits with an error if any mandatory check fails. Warnings do not abort.
 run_preflight() {
     section "Running Pre-flight Checks"
@@ -36,7 +36,7 @@ run_preflight() {
     success "Pre-flight checks complete."
 }
 
-# ── individual checks ───────────────────────────────────────────────────────
+# -- individual checks -------------------------------------------------------
 
 _pf_check_distro_detected() {
     if [[ -z "${DISTRO_TYPE:-}" ]]; then
@@ -108,7 +108,7 @@ _pf_check_disk_space() {
 
     if [[ "${MIRRORET_MIN_DISK_GB}" -gt 0 ]] && [[ "$avail_gb" -lt "${MIRRORET_MIN_DISK_GB}" ]]; then
         warn "Available disk space (${avail_gb} GB) is below minimum (${MIRRORET_MIN_DISK_GB} GB)."
-        warn "A full mirror requires 200–500 GB. Set MIRRORET_MIN_DISK_GB=0 to skip this check."
+        warn "A full mirror requires 200-500 GB. Set MIRRORET_MIN_DISK_GB=0 to skip this check."
         if ! confirm "Continue anyway?"; then
             die "Aborted: insufficient disk space."
         fi
@@ -143,8 +143,8 @@ _pf_check_required_network_tools() {
     fi
 }
 
-# _pf_resolve_one <host> — try to resolve a hostname via getent (which uses
-# nsswitch — works with /etc/hosts, mDNS, systemd-resolved, etc).
+# _pf_resolve_one <host> - try to resolve a hostname via getent (which uses
+# nsswitch - works with /etc/hosts, mDNS, systemd-resolved, etc).
 _pf_resolve_one() {
     local host="$1"
     if check_command getent; then
@@ -164,18 +164,18 @@ _pf_check_dns() {
     # Pick the hosts we'll actually need based on what's enabled.
     [[ "${MIRRORET_ENABLE_APT:-1}" == "1" ]] && case "${OS_ID:-}" in
         debian) hosts+=(deb.debian.org security.debian.org) ;;
-        *)      hosts+=(archive.ubuntu.com) ;;
+        *) hosts+=(archive.ubuntu.com) ;;
     esac
     [[ "${MIRRORET_ENABLE_RPM:-1}" == "1" ]] && case "${OS_ID:-}" in
         rocky|almalinux) hosts+=(dl.rockylinux.org repo.almalinux.org) ;;
         rhel) hosts+=(cdn.redhat.com) ;;
-        ol)   hosts+=(yum.oracle.com) ;;
+        ol) hosts+=(yum.oracle.com) ;;
         centos) hosts+=(mirror.stream.centos.org) ;;
         fedora) hosts+=(dl.fedoraproject.org) ;;
     esac
-    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && hosts+=(pypi.org files.pythonhosted.org)
+    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]] && hosts+=(pypi.org files.pythonhosted.org)
     [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && hosts+=(registry-1.docker.io)
-    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && hosts+=(registry.npmjs.org)
+    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]] && hosts+=(registry.npmjs.org)
 
     [[ ${#hosts[@]} -eq 0 ]] && return 0
 
@@ -203,7 +203,7 @@ _pf_check_proxy_env() {
     if [[ ${#set_vars[@]} -gt 0 ]]; then
         info "Proxy environment detected: ${set_vars[*]}"
         info "These variables WILL propagate to apt-get / dnf / pip / npm in this shell."
-        info "They will NOT propagate to cron-driven sync jobs — see docs/PROXY_AND_CA.md."
+        info "They will NOT propagate to cron-driven sync jobs - see docs/PROXY_AND_CA.md."
         return 0
     fi
 
@@ -237,11 +237,11 @@ _pf_check_ca_hints() {
 
 _pf_check_port_conflicts() {
     local ports=("${MIRRORET_WEB_PORT:-8080}")
-    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && ports+=("${MIRRORET_PIP_PORT:-8081}")
+    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]] && ports+=("${MIRRORET_PIP_PORT:-8081}")
     [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && ports+=("${MIRRORET_DOCKER_REGISTRY_PORT:-5000}")
-    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && ports+=("${MIRRORET_NPM_PORT:-4873}")
+    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]] && ports+=("${MIRRORET_NPM_PORT:-4873}")
     [[ "${MIRRORET_TLS_SELF_SIGNED:-0}" == "1" ]] && ports+=("${MIRRORET_TLS_PORT:-8443}")
-    [[ -n "${MIRRORET_TLS_CERT:-}" ]]             && ports+=("${MIRRORET_TLS_PORT:-8443}")
+    [[ -n "${MIRRORET_TLS_CERT:-}" ]] && ports+=("${MIRRORET_TLS_PORT:-8443}")
 
     local conflicts=()
     if check_command ss; then
@@ -257,7 +257,7 @@ _pf_check_port_conflicts() {
             fi
         done
     else
-        debug "Neither ss nor netstat available — skipping port-conflict probe."
+        debug "Neither ss nor netstat available - skipping port-conflict probe."
         return 0
     fi
 
@@ -270,7 +270,7 @@ _pf_check_port_conflicts() {
 
 _pf_check_rhel_subscription() {
     [[ "${DISTRO_TYPE:-}" == "rhel" ]] || return 0
-    [[ "${OS_ID:-}" == "rhel" ]]      || return 0
+    [[ "${OS_ID:-}" == "rhel" ]] || return 0
 
     if ! check_command subscription-manager; then
         warn "OS_ID=rhel but subscription-manager not found."
@@ -282,10 +282,10 @@ _pf_check_rhel_subscription() {
     status="$(subscription-manager status 2>/dev/null | grep -E '^Overall Status:' | awk -F: '{print $2}' | xargs || true)"
     case "${status}" in
         Current|"Simple Content Access"|Disabled)
-            # `Current`             = classic entitlements OK
+            # `Current` = classic entitlements OK
             # `Simple Content Access` = SCA org, no entitlements needed
-            # `Disabled`            = subscription checks are turned off (SCA on some newer
-            #                         RHEL builds)
+            # `Disabled` = subscription checks are turned off (SCA on some newer
+            # RHEL builds)
             success "RHEL subscription: ${status}"
             ;;
         Registered)
@@ -309,10 +309,10 @@ _pf_check_rhel_subscription() {
     esac
 }
 
-# _pf_probe_https <host> <path> — true if we get ANY HTTP response from the
-# host's TLS endpoint. 200/301/401/403/404 all count as "reachable" — only
+# _pf_probe_https <host> <path> - true if we get ANY HTTP response from the
+# host's TLS endpoint. 200/301/401/403/404 all count as "reachable" - only
 # a TLS handshake failure or connection refusal counts as "unreachable",
-# because some upstreams legitimately serve 401 or 404 at /  (Docker
+# because some upstreams legitimately serve 401 or 404 at / (Docker
 # registry returns 401 at /v2/, 404 at /; npm registry-side healthcheck is
 # also picky). We do NOT use curl -f for that reason.
 _pf_probe_https() {
@@ -328,13 +328,13 @@ _pf_check_outbound_https() {
     # Each entry is "host|path". Path defaults to / but we override for
     # endpoints that legitimately don't serve content at /.
     local targets=()
-    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && targets+=("pypi.org|/")
-    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && targets+=("registry.npmjs.org|/")
+    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]] && targets+=("pypi.org|/")
+    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]] && targets+=("registry.npmjs.org|/")
     [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && targets+=("registry-1.docker.io|/v2/")
     [[ ${#targets[@]} -eq 0 ]] && return 0
 
     if ! check_command curl; then
-        warn "curl not available — skipping outbound HTTPS probe."
+        warn "curl not available - skipping outbound HTTPS probe."
         return 0
     fi
 
@@ -364,7 +364,7 @@ _check_disk_space() { _pf_check_disk_space; }
 _check_write_permissions() { _pf_check_write_permissions; }
 _check_required_network_tools() { _pf_check_required_network_tools; }
 
-# check_optional_commands — non-fatal check for optional tools.
+# check_optional_commands - non-fatal check for optional tools.
 check_optional_commands() {
     local optional=(shellcheck shfmt bats tree)
     for cmd in "${optional[@]}"; do

@@ -11,7 +11,7 @@ live install (upgrade safety).
 ### The default: keep everything forever
 
 Retention is **off** by default. That's the right choice for most mirror
-operators — old package versions are the rollback path. Enable retention
+operators - old package versions are the rollback path. Enable retention
 only when you're confident disk pressure justifies it.
 
 ### How to enable
@@ -20,11 +20,11 @@ Add to `/etc/mirroret/mirroret.conf`:
 
 ```bash
 MIRRORET_RETENTION_ENABLE=1
-MIRRORET_RETENTION_MODE=report      # start here — dry-run
-MIRRORET_RPM_KEEP_VERSIONS=3        # keep 3 newest of each RPM
-MIRRORET_PIP_KEEP_VERSIONS=3        # keep 3 newest wheels per package
-MIRRORET_NPM_KEEP_DAYS=180          # drop npm tarballs older than 6 months
-MIRRORET_DOCKER_GC=0                # 1 = weekly registry garbage-collect
+MIRRORET_RETENTION_MODE=report # start here - dry-run
+MIRRORET_RPM_KEEP_VERSIONS=3 # keep 3 newest of each RPM
+MIRRORET_PIP_KEEP_VERSIONS=3 # keep 3 newest wheels per package
+MIRRORET_NPM_KEEP_DAYS=180 # drop npm tarballs older than 6 months
+MIRRORET_DOCKER_GC=0 # 1 = weekly registry garbage-collect
 ```
 
 Then run a dry-run to see what would be removed:
@@ -54,16 +54,16 @@ will delete for real.
 
 ### Modes
 
-- `MIRRORET_RETENTION_MODE=report` — logs `[report]` lines and a summary of what *would* be removed. **No files are deleted.** Safe to run.
-- `MIRRORET_RETENTION_MODE=prune` — actually deletes.
+- `MIRRORET_RETENTION_MODE=report` - logs `[report]` lines and a summary of what *would* be removed. **No files are deleted.** Safe to run.
+- `MIRRORET_RETENTION_MODE=prune` - actually deletes.
 
-Any other value collapses to `report`. The retention library never errors out on individual failures — it warns and continues.
+Any other value collapses to `report`. The retention library never errors out on individual failures - it warns and continues.
 
 ### CLI
 
 ```bash
-sudo ./install.sh --cleanup-report      # dry-run
-sudo ./install.sh --cleanup             # real run (honors MODE)
+sudo ./install.sh --cleanup-report # dry-run
+sudo ./install.sh --cleanup # real run (honors MODE)
 ```
 
 Both are equivalent to invoking `/srv/mirroret/scripts/cleanup-all.sh`
@@ -88,7 +88,7 @@ Cleanup runs Sundays at 03:00 by default. Change the timing with
 
 ```bash
 sudo du -sh /srv/mirroret/*
-sudo /srv/mirroret/scripts/cleanup-all.sh   # manual pass in report or prune mode
+sudo /srv/mirroret/scripts/cleanup-all.sh # manual pass in report or prune mode
 ```
 
 Or add your own alerting cron:
@@ -103,7 +103,7 @@ Or add your own alerting cron:
 - It doesn't touch `/srv/mirroret/logs/`. Add your own logrotate config for that.
 - It doesn't garbage-collect Verdaccio's uplink cache under `/verdaccio/storage/.cache/`. That's Verdaccio-internal state.
 - It doesn't remove backup snapshots under `/var/backups/mirroret/`. Prune those manually.
-- It doesn't check integrity — after a prune, `dnf repolist` etc. work because we refresh metadata, but no crypto verification is done.
+- It doesn't check integrity - after a prune, `dnf repolist` etc. work because we refresh metadata, but no crypto verification is done.
 
 ---
 
@@ -120,8 +120,8 @@ Every `sudo ./install.sh` regenerates:
 - `sync-*-packages.sh` scripts under `/srv/mirroret/scripts/`
 - master `sync-all.sh` and `cleanup-all.sh`
 
-If you edited any of those between installs — say, to add more packages
-to the pip sync list — a naive install run would silently clobber your
+If you edited any of those between installs - say, to add more packages
+to the pip sync list - a naive install run would silently clobber your
 edits. Bad.
 
 ### The mechanism
@@ -140,11 +140,11 @@ On every subsequent install:
 
 1. Before overwriting, install.sh checks whether the existing file still
    contains the sentinel.
-2. If it does → operator hasn't touched it → safe to regenerate.
-3. If it doesn't → operator has replaced or heavily edited the file →
+2. If it does -> operator hasn't touched it -> safe to regenerate.
+3. If it doesn't -> operator has replaced or heavily edited the file ->
    install prints:
    ```
-   WARN  Preserving your customized /srv/mirroret/scripts/sync-pip-packages.sh
+   WARN Preserving your customized /srv/mirroret/scripts/sync-pip-packages.sh
    ```
    and skips regeneration.
 
@@ -152,7 +152,7 @@ That way you can drop the sentinel line from a file you've customized,
 and mirroret will leave your version alone forever.
 
 Config files (nginx, verdaccio, systemd units) are always regenerated
-but always backed up first — you can recover from
+but always backed up first - you can recover from
 `/var/backups/mirroret/<timestamp>/`. Only the generated scripts under
 `/srv/mirroret/scripts/` are subject to the sentinel check.
 
@@ -168,7 +168,7 @@ sudo tee /etc/mirroret/pip-packages.txt <<'EOF'
 requests
 flask
 django
-# add whatever you need — one per line, # for comments
+# add whatever you need - one per line, # for comments
 your-internal-package==1.2.3
 EOF
 
@@ -192,9 +192,9 @@ sudo ./install.sh --upgrade
 Does everything a regular install does, minus the slow / already-done
 pieces:
 
-- Skips `install_system_packages` — assumes packages are current
-- Skips directory creation — assumes `/srv/mirroret/` exists
-- Skips `useradd` — assumes `mirroret-pip` / `mirroret-npm` exist
+- Skips `install_system_packages` - assumes packages are current
+- Skips directory creation - assumes `/srv/mirroret/` exists
+- Skips `useradd` - assumes `mirroret-pip` / `mirroret-npm` exist
 - Still regenerates configs (nginx, systemd units, verdaccio.yaml)
 - Still regenerates managed scripts (respecting the sentinel)
 - Still refreshes the cron block
@@ -207,7 +207,7 @@ Typical `--upgrade` takes ~10 seconds vs ~60 seconds for a full install.
 ```bash
 cd ~/mirroret-main
 git fetch origin
-git reset --hard origin/main    # or git pull --ff-only
+git reset --hard origin/main # or git pull --ff-only
 
 # Optional: preview the differences first
 sudo ./install.sh --upgrade --dry-run
@@ -228,7 +228,7 @@ sudo ./scripts/mirroret-debug.sh
 
 ### Sanity check: your data is always safe
 
-`install.sh` — with or without `--upgrade` — **never touches**:
+`install.sh` - with or without `--upgrade` - **never touches**:
 
 - `/srv/mirroret/` mirror data (RPMs, wheels, tarballs, Docker blobs)
 - `/var/backups/mirroret/` snapshots
@@ -248,7 +248,7 @@ older version and you prune it mid-install, the client's pull will 404
 mid-transfer. Schedule cleanup during low-traffic windows.
 
 **What if I set MIRRORET_RPM_KEEP_VERSIONS=0?**
-Disabled — RPM retention is skipped entirely. Same for PIP=0 and
+Disabled - RPM retention is skipped entirely. Same for PIP=0 and
 NPM_KEEP_DAYS=0.
 
 **What if repomanage is missing?**

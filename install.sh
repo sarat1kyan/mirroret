@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
-# mirroret installer — unified package repository server
+# mirroret installer - unified package repository server
 # Usage: sudo ./install.sh [options]
 #
 # Options:
-#   --config <path>        Load config from file
-#   --dry-run              Show what would be done without making changes
-#   --non-interactive      Suppress all prompts (auto-decline confirmations)
-#   --check                Validate existing installation and exit
-#   --status               Print service status and exit
-#   --validate             Alias for --check
-#   --backup-only          Create a backup of current state and exit
-#   --rollback <id>        Roll back to a specific backup
-#   --list-backups         List available backups
-#   --no-apt               Skip APT mirror setup
-#   --no-rpm               Skip RPM mirror setup
-#   --no-pip               Skip pip/pypiserver setup
-#   --no-docker            Skip Docker registry setup
-#   --no-npm               Skip npm/Verdaccio setup
-#   --no-firewall          Skip firewall configuration
-#   --insecure             Enable all insecure modes (LAB ONLY — see below)
-#   --debug                Enable debug logging
-#   --help                 Show this help
+# --config <path> Load config from file
+# --dry-run Show what would be done without making changes
+# --non-interactive Suppress all prompts (auto-decline confirmations)
+# --check Validate existing installation and exit
+# --status Print service status and exit
+# --validate Alias for --check
+# --backup-only Create a backup of current state and exit
+# --rollback <id> Roll back to a specific backup
+# --list-backups List available backups
+# --no-apt Skip APT mirror setup
+# --no-rpm Skip RPM mirror setup
+# --no-pip Skip pip/pypiserver setup
+# --no-docker Skip Docker registry setup
+# --no-npm Skip npm/Verdaccio setup
+# --no-firewall Skip firewall configuration
+# --insecure Enable all insecure modes (LAB ONLY - see below)
+# --debug Enable debug logging
+# --help Show this help
 
 set -Eeuo pipefail
 
-# ── Script location ───────────────────────────────────────────────────────────
+# -- Script location -----------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Load library modules ──────────────────────────────────────────────────────
+# -- Load library modules ------------------------------------------------------
 # shellcheck source=lib/logging.sh
 source "${SCRIPT_DIR}/lib/logging.sh"
 # shellcheck source=lib/common.sh
@@ -67,7 +67,7 @@ source "${SCRIPT_DIR}/lib/uninstall.sh"
 # shellcheck source=lib/retention.sh
 source "${SCRIPT_DIR}/lib/retention.sh"
 
-# ── Defaults ──────────────────────────────────────────────────────────────────
+# -- Defaults ------------------------------------------------------------------
 MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
 MIRRORET_WEB_PORT="${MIRRORET_WEB_PORT:-8080}"
 MIRRORET_PIP_PORT="${MIRRORET_PIP_PORT:-8081}"
@@ -107,15 +107,15 @@ MIRRORET_RPM_REPOS="${MIRRORET_RPM_REPOS:-}"
 # Preflight network probe (off by default; on means outbound HTTPS).
 MIRRORET_PREFLIGHT_NETWORK="${MIRRORET_PREFLIGHT_NETWORK:-0}"
 
-# Retention (off by default — most operators want "keep everything").
+# Retention (off by default - most operators want "keep everything").
 MIRRORET_RETENTION_ENABLE="${MIRRORET_RETENTION_ENABLE:-0}"
 MIRRORET_RETENTION_MODE="${MIRRORET_RETENTION_MODE:-report}"
 MIRRORET_RPM_KEEP_VERSIONS="${MIRRORET_RPM_KEEP_VERSIONS:-3}"
 MIRRORET_PIP_KEEP_VERSIONS="${MIRRORET_PIP_KEEP_VERSIONS:-3}"
 MIRRORET_NPM_KEEP_DAYS="${MIRRORET_NPM_KEEP_DAYS:-180}"
 MIRRORET_DOCKER_GC="${MIRRORET_DOCKER_GC:-0}"
-MIRRORET_CLEANUP_HOUR="${MIRRORET_CLEANUP_HOUR:-3}"        # weekly Sun @03:00
-MIRRORET_CLEANUP_DOW="${MIRRORET_CLEANUP_DOW:-0}"           # Sunday
+MIRRORET_CLEANUP_HOUR="${MIRRORET_CLEANUP_HOUR:-3}" # weekly Sun @03:00
+MIRRORET_CLEANUP_DOW="${MIRRORET_CLEANUP_DOW:-0}" # Sunday
 MIRRORET_UPGRADE_MODE="${MIRRORET_UPGRADE_MODE:-0}"
 
 # Approval workflow.
@@ -156,7 +156,7 @@ MODE_CLEANUP=0
 MODE_CLEANUP_REPORT=0
 MODE_UPGRADE=0
 
-# ── Argument parsing ──────────────────────────────────────────────────────────
+# -- Argument parsing ----------------------------------------------------------
 parse_args() {
     # Auto-load /etc/mirroret/mirroret.conf if present and --config not
     # given. Explicit --config overrides.
@@ -316,48 +316,48 @@ load_config() {
 
 usage() {
     cat <<'USAGE'
-mirroret installer — unified package repository server
+mirroret installer - unified package repository server
 
 Usage: sudo ./install.sh [options]
 
 Options:
-  --config <path>        Load config from file (see config/mirroret.conf.example)
-  --dry-run              Show what would be done without making changes
-  --non-interactive      Suppress all prompts
-  --check | --validate   Validate existing installation and exit
-  --status               Print service status and exit
-  --backup-only          Create a backup of current state and exit
-  --rollback <id>        Roll back to a specific backup (see --list-backups)
-  --list-backups         List available backups
-  --no-apt               Skip APT mirror setup
-  --no-rpm               Skip RPM mirror setup
-  --no-pip               Skip pip/pypiserver setup
-  --no-docker            Skip Docker registry setup
-  --no-npm               Skip npm/Verdaccio setup
-  --no-firewall          Skip firewall configuration
-  --insecure             Enable all insecure modes (LAB ONLY)
-  --docker-mode <cache|hosted>  cache: pull-through proxy (default).
+  --config <path> Load config from file (see config/mirroret.conf.example)
+  --dry-run Show what would be done without making changes
+  --non-interactive Suppress all prompts
+  --check | --validate Validate existing installation and exit
+  --status Print service status and exit
+  --backup-only Create a backup of current state and exit
+  --rollback <id> Roll back to a specific backup (see --list-backups)
+  --list-backups List available backups
+  --no-apt Skip APT mirror setup
+  --no-rpm Skip RPM mirror setup
+  --no-pip Skip pip/pypiserver setup
+  --no-docker Skip Docker registry setup
+  --no-npm Skip npm/Verdaccio setup
+  --no-firewall Skip firewall configuration
+  --insecure Enable all insecure modes (LAB ONLY)
+  --docker-mode <cache|hosted> cache: pull-through proxy (default).
                                 hosted: accept docker push, no proxy.
-  --apt-flavor <auto|ubuntu|debian>  override APT upstream flavor
-  --network-preflight    run optional outbound HTTPS preflight probe
-  --upgrade              Fast re-install: skip pkg install + user create; refresh
+  --apt-flavor <auto|ubuntu|debian> override APT upstream flavor
+  --network-preflight run optional outbound HTTPS preflight probe
+  --upgrade Fast re-install: skip pkg install + user create; refresh
                          configs + systemd units + regenerated sync scripts
-                         (managed files only — user-customized ones are preserved).
-  --cleanup              Run mirror retention now (needs MIRRORET_RETENTION_ENABLE=1)
-  --cleanup-report       Show what --cleanup would remove without deleting anything
-  --tls-self-signed      Generate a self-signed TLS certificate during install
-  --gpg-auto             Auto-generate a GPG signing key if none exists
-  --approval-mode        Enable staging/approved workflow for pip and npm
-  --list-staging         List packages awaiting approval and exit
-  --approve-all-pip      Promote all staged pip packages to approved
-  --approve-all-npm      Promote all staged npm packages to approved
-  --approve-package <n>  Promote a specific staged pip package by name fragment
-  --exclude-pip <n>      Remove a staged pip package (decline it)
-  --exclude-npm <n>      Remove a staged npm package (decline it)
-  --debug                Enable debug logging
-  --uninstall [opts]     Run the uninstaller. Passes remaining args through
+                         (managed files only - user-customized ones are preserved).
+  --cleanup Run mirror retention now (needs MIRRORET_RETENTION_ENABLE=1)
+  --cleanup-report Show what --cleanup would remove without deleting anything
+  --tls-self-signed Generate a self-signed TLS certificate during install
+  --gpg-auto Auto-generate a GPG signing key if none exists
+  --approval-mode Enable staging/approved workflow for pip and npm
+  --list-staging List packages awaiting approval and exit
+  --approve-all-pip Promote all staged pip packages to approved
+  --approve-all-npm Promote all staged npm packages to approved
+  --approve-package <n> Promote a specific staged pip package by name fragment
+  --exclude-pip <n> Remove a staged pip package (decline it)
+  --exclude-npm <n> Remove a staged npm package (decline it)
+  --debug Enable debug logging
+  --uninstall [opts] Run the uninstaller. Passes remaining args through
                          to ./uninstall.sh (see ./uninstall.sh --help).
-  --help                 Show this help
+  --help Show this help
 
 Environment variables:
   See config/mirroret.conf.example for all supported variables.
@@ -386,7 +386,7 @@ Examples:
 USAGE
 }
 
-# ── Error trap ────────────────────────────────────────────────────────────────
+# -- Error trap ----------------------------------------------------------------
 _on_error() {
     local exit_code=$?
     local line_no=${BASH_LINENO[0]}
@@ -396,7 +396,7 @@ _on_error() {
 }
 trap '_on_error' ERR
 
-# ── Directory setup ───────────────────────────────────────────────────────────
+# -- Directory setup -----------------------------------------------------------
 create_directory_structure() {
     section "Creating Directory Structure"
 
@@ -427,7 +427,7 @@ create_directory_structure() {
     success "Directory structure ready at ${MIRRORET_BASE_DIR}."
 }
 
-# ── Package installation ──────────────────────────────────────────────────────
+# -- Package installation ------------------------------------------------------
 install_system_packages() {
     section "Installing System Packages"
 
@@ -474,14 +474,14 @@ install_system_packages() {
         # nodejs and npm: in AppStream on RHEL 8/9. RHEL 8 may need the module stream enabled first.
         if [[ "${MIRRORET_ENABLE_NPM}" == "1" ]]; then
             if ! ${PKG_MGR_INSTALL} nodejs npm 2>/dev/null; then
-                info "nodejs install failed — trying AppStream module enable..."
+                info "nodejs install failed - trying AppStream module enable..."
                 dnf module enable nodejs -y 2>/dev/null || true
                 xrun ${PKG_MGR_INSTALL} nodejs npm
             fi
         fi
         if [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]]; then
             # docker-distribution (native registry) is in RHEL 8/Rocky 8 extras.
-            # On RHEL 9/Rocky 9 it may not be available — fall back to container backend.
+            # On RHEL 9/Rocky 9 it may not be available - fall back to container backend.
             ${PKG_MGR_INSTALL} docker-distribution 2>/dev/null \
                 || warn "docker-distribution not in repos; container backend will be used."
             # Podman is the RHEL-native container runtime (BaseOS on RHEL 8/9).
@@ -495,7 +495,7 @@ install_system_packages() {
     success "System packages installed."
 }
 
-# ── Cron setup ────────────────────────────────────────────────────────────────
+# -- Cron setup ----------------------------------------------------------------
 # We bracket our cron lines with sentinel comments. Re-runs replace only
 # the bracketed region, so unrelated operator cron lines are preserved
 # even if they mention "mirroret" or "sync" by coincidence.
@@ -518,7 +518,7 @@ setup_cron() {
     fi
 
     if ! check_command crontab; then
-        warn "crontab not found — skipping cron setup. Schedule ${sync_script} manually."
+        warn "crontab not found - skipping cron setup. Schedule ${sync_script} manually."
         return 0
     fi
 
@@ -549,7 +549,7 @@ setup_cron() {
     success "Cron: daily sync at ${MIRRORET_SYNC_HOUR}:00, weekly cleanup on DOW=${MIRRORET_CLEANUP_DOW} at ${MIRRORET_CLEANUP_HOUR}:00."
 }
 
-# ── Master sync script ────────────────────────────────────────────────────────
+# -- Master sync script --------------------------------------------------------
 write_master_sync_script() {
     local sync_script="${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
 
@@ -568,9 +568,9 @@ write_master_sync_script() {
     local apt_sync_cmd=""
     if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
         case "${MIRRORET_APT_RESOLVED_TOOL:-apt-mirror}" in
-            debmirror)   apt_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-apt-debmirror.sh" ;;
+            debmirror) apt_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-apt-debmirror.sh" ;;
             apt-mirror2) apt_sync_cmd="/usr/local/bin/apt-mirror2" ;;
-            *)           apt_sync_cmd="/usr/bin/apt-mirror" ;;
+            *) apt_sync_cmd="/usr/bin/apt-mirror" ;;
         esac
     fi
 
@@ -643,11 +643,11 @@ _run_step() {
     fi
 }
 
-_run_step "apt"         "${apt_sync_cmd}"
-_run_step "RHEL repos"  "\${BASE_DIR}/scripts/sync-redhat-repos.sh"
-_run_step "pip"         "\${BASE_DIR}/scripts/sync-pip-packages.sh"
-_run_step "Docker"      "${docker_sync_cmd}"
-_run_step "npm"         "\${BASE_DIR}/scripts/sync-npm-packages.sh"
+_run_step "apt" "${apt_sync_cmd}"
+_run_step "RHEL repos" "\${BASE_DIR}/scripts/sync-redhat-repos.sh"
+_run_step "pip" "\${BASE_DIR}/scripts/sync-pip-packages.sh"
+_run_step "Docker" "${docker_sync_cmd}"
+_run_step "npm" "\${BASE_DIR}/scripts/sync-npm-packages.sh"
 
 echo "=== Mirroret sync completed: \$(date) (failures: \${FAILED}) ==="
 exit "\${FAILED}"
@@ -657,7 +657,7 @@ SYNC_EOF
     success "Master sync script: ${sync_script}"
 }
 
-# ── Master cleanup script ────────────────────────────────────────────────────
+# -- Master cleanup script ----------------------------------------------------
 # Generates a self-contained /srv/mirroret/scripts/cleanup-all.sh that
 # performs retention (per-ecosystem prune + optional Docker GC). Weekly
 # cron entry set up alongside the daily sync entry.
@@ -684,12 +684,12 @@ ${MIRRORET_MANAGED_MARKER}
 # Also invokable manually: sudo ./install.sh --cleanup [--cleanup-report]
 #
 # All retention is OFF by default. Enable in /etc/mirroret/mirroret.conf:
-#   MIRRORET_RETENTION_ENABLE=1
-#   MIRRORET_RETENTION_MODE=prune       # (or 'report' for dry-run)
-#   MIRRORET_RPM_KEEP_VERSIONS=3
-#   MIRRORET_PIP_KEEP_VERSIONS=3
-#   MIRRORET_NPM_KEEP_DAYS=180
-#   MIRRORET_DOCKER_GC=0                # (1 needs brief registry restart)
+# MIRRORET_RETENTION_ENABLE=1
+# MIRRORET_RETENTION_MODE=prune # (or 'report' for dry-run)
+# MIRRORET_RPM_KEEP_VERSIONS=3
+# MIRRORET_PIP_KEEP_VERSIONS=3
+# MIRRORET_NPM_KEEP_DAYS=180
+# MIRRORET_DOCKER_GC=0 # (1 needs brief registry restart)
 
 BASE_DIR="${MIRRORET_BASE_DIR}"
 LOG_DIR="\${BASE_DIR}/logs"
@@ -769,7 +769,7 @@ CLEANUP_EOF
     success "Master cleanup script: ${cleanup_script}"
 }
 
-# ── Log rotation ─────────────────────────────────────────────────────────────
+# -- Log rotation -------------------------------------------------------------
 # Sync scripts write one timestamped log per run into BASE_DIR/logs/.
 # Without rotation that directory grows without bound (npm logs alone can
 # be thousands of lines per run). Drop in a logrotate config.
@@ -786,7 +786,7 @@ write_logrotate_config() {
     fi
 
     if [[ ! -d /etc/logrotate.d ]]; then
-        warn "logrotate.d not present — skipping log rotation setup."
+        warn "logrotate.d not present - skipping log rotation setup."
         warn "Sync logs in ${MIRRORET_BASE_DIR}/logs/ will grow unbounded."
         return 0
     fi
@@ -795,7 +795,7 @@ write_logrotate_config() {
 ${MIRRORET_MANAGED_MARKER}
 # Rotates sync/cleanup logs. Note: sync scripts create a NEW timestamped
 # file per run, so cleanup-all.sh also age-deletes by
-# MIRRORET_LOG_KEEP_DAYS — logrotate alone cannot bound the file count.
+# MIRRORET_LOG_KEEP_DAYS - logrotate alone cannot bound the file count.
 ${MIRRORET_BASE_DIR}/logs/*.log {
     weekly
     rotate 8
@@ -829,7 +829,7 @@ LOGROTATE_EOF
     success "Log rotation configured: ${conf}"
 }
 
-# ── Client config generation ──────────────────────────────────────────────────
+# -- Client config generation --------------------------------------------------
 generate_all_client_configs() {
     section "Generating Client Configuration Files"
 
@@ -838,7 +838,7 @@ generate_all_client_configs() {
 
     # APT and RPM client configs only make sense when this server actually
     # mirrors that ecosystem. Since configure_apt_mirror / configure_createrepo
-    # are gated on DISTRO_TYPE, the client-config side must be too — otherwise
+    # are gated on DISTRO_TYPE, the client-config side must be too - otherwise
     # you get either a nonsense config or a hard fail (e.g. asking for the
     # Ubuntu codename of "9.8" on a RHEL host).
     if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
@@ -861,34 +861,34 @@ generate_all_client_configs() {
     success "Client configs written to ${config_dir}/"
 }
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# -- Summary -------------------------------------------------------------------
 print_summary() {
     local server_ip="${MIRRORET_SERVER_IP}"
     section "Installation Complete"
 
     echo ""
-    echo "Server (HTTP):   http://${server_ip}:${MIRRORET_WEB_PORT}/"
-    is_tls_ready && echo "Server (HTTPS):  https://${server_ip}:${MIRRORET_TLS_PORT}/"
-    [[ "${MIRRORET_ENABLE_PIP}"    == "1" ]] && echo "pip index:       http://${server_ip}:${MIRRORET_PIP_PORT}/simple/"
+    echo "Server (HTTP): http://${server_ip}:${MIRRORET_WEB_PORT}/"
+    is_tls_ready && echo "Server (HTTPS): https://${server_ip}:${MIRRORET_TLS_PORT}/"
+    [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && echo "pip index: http://${server_ip}:${MIRRORET_PIP_PORT}/simple/"
     [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && echo "Docker registry: ${server_ip}:${MIRRORET_DOCKER_REGISTRY_PORT}"
-    [[ "${MIRRORET_ENABLE_NPM}"    == "1" ]] && echo "npm registry:    http://${server_ip}:${MIRRORET_NPM_PORT}/"
-    [[ "${MIRRORET_APPROVAL_ENABLED}" == "1" ]] && echo "Approval mode:   ON  (use --list-staging / --approve-all-pip etc.)"
-    [[ -n "${MIRRORET_GPG_KEYID:-}" ]] && echo "GPG key:         ${MIRRORET_GPG_KEYID}"
+    [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && echo "npm registry: http://${server_ip}:${MIRRORET_NPM_PORT}/"
+    [[ "${MIRRORET_APPROVAL_ENABLED}" == "1" ]] && echo "Approval mode: ON (use --list-staging / --approve-all-pip etc.)"
+    [[ -n "${MIRRORET_GPG_KEYID:-}" ]] && echo "GPG key: ${MIRRORET_GPG_KEYID}"
     echo ""
-    echo "Base directory:  ${MIRRORET_BASE_DIR}"
-    echo "Client configs:  ${MIRRORET_BASE_DIR}/config/"
-    echo "Sync scripts:    ${MIRRORET_BASE_DIR}/scripts/"
-    echo "Logs:            ${MIRRORET_BASE_DIR}/logs/"
+    echo "Base directory: ${MIRRORET_BASE_DIR}"
+    echo "Client configs: ${MIRRORET_BASE_DIR}/config/"
+    echo "Sync scripts: ${MIRRORET_BASE_DIR}/scripts/"
+    echo "Logs: ${MIRRORET_BASE_DIR}/logs/"
     echo ""
     echo "Next steps:"
-    echo "  1. Run initial sync:  ${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
-    echo "  2. Verify:            $0 --check"
-    echo "  3. Distribute client configs from ${MIRRORET_BASE_DIR}/config/"
+    echo " 1. Run initial sync: ${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
+    echo " 2. Verify: $0 --check"
+    echo " 3. Distribute client configs from ${MIRRORET_BASE_DIR}/config/"
     echo ""
     list_required_ports
 }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 main() {
     parse_args "$@"
 
@@ -991,7 +991,7 @@ main() {
     fi
 
     # --upgrade fast-path assumes a prior install exists. Refuse if the
-    # base directory doesn't yet exist — otherwise downstream steps
+    # base directory doesn't yet exist - otherwise downstream steps
     # (nginx config, service start) fail with cryptic errors.
     if [[ "${MODE_UPGRADE}" == "1" ]] && [[ ! -d "${MIRRORET_BASE_DIR}" ]]; then
         die "--upgrade requires an existing install. ${MIRRORET_BASE_DIR} not found. Run a full install first: sudo ./install.sh"
@@ -999,7 +999,7 @@ main() {
 
     # Install system packages. In --upgrade mode we skip this because
     # dnf/apt-get with `-y` on already-installed packages is a slow no-op
-    # (and can hit repo issues) — the operator is on the same code path
+    # (and can hit repo issues) - the operator is on the same code path
     # they already installed with, they just want configs refreshed.
     if [[ "${MODE_UPGRADE}" == "1" ]]; then
         info "Upgrade mode: skipping system package install."
@@ -1055,9 +1055,9 @@ main() {
     fi
 
     # Configure additional services.
-    [[ "${MIRRORET_ENABLE_PIP}"    == "1" ]] && setup_pip_repository    "$backup_id"
-    [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && setup_docker_registry   "$backup_id"
-    [[ "${MIRRORET_ENABLE_NPM}"    == "1" ]] && setup_npm_registry      "$backup_id"
+    [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && setup_pip_repository "$backup_id"
+    [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && setup_docker_registry "$backup_id"
+    [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && setup_npm_registry "$backup_id"
 
     # Configure SELinux contexts on RHEL.
     if [[ "${DISTRO_TYPE}" == "rhel" ]]; then
@@ -1080,9 +1080,9 @@ main() {
     if [[ "${MODE_NO_FIREWALL}" == "0" ]]; then
         local ports=("${MIRRORET_WEB_PORT}")
         is_tls_ready && ports+=("${MIRRORET_TLS_PORT}")
-        [[ "${MIRRORET_ENABLE_PIP}"    == "1" ]] && ports+=("${MIRRORET_PIP_PORT}")
+        [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && ports+=("${MIRRORET_PIP_PORT}")
         [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && ports+=("${MIRRORET_DOCKER_REGISTRY_PORT}")
-        [[ "${MIRRORET_ENABLE_NPM}"    == "1" ]] && ports+=("${MIRRORET_NPM_PORT}")
+        [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && ports+=("${MIRRORET_NPM_PORT}")
         configure_firewall "${ports[@]}"
     fi
 

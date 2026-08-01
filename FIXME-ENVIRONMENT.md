@@ -1,4 +1,4 @@
-# Environment fixes — things mirroret cannot fix for you
+# Environment fixes - things mirroret cannot fix for you
 
 These are problems in **your infrastructure**, not bugs in the tool. Work
 through them in order. Each has a verification step.
@@ -9,7 +9,7 @@ that performs TLS inspection.
 
 ---
 
-## BLOCKER 1 — Corporate TLS inspection breaks all upstream sync
+## BLOCKER 1 - Corporate TLS inspection breaks all upstream sync
 
 ### Symptom
 
@@ -32,7 +32,7 @@ differently-signed) response.
 `No custom CA anchors detected` in `mirroret-debug.sh` output confirms
 the CA was never installed.
 
-### Fix A (preferred) — trust the corporate CA
+### Fix A (preferred) - trust the corporate CA
 
 Get the root CA certificate from your IT/security team. It will be a
 `.crt` or `.pem` file. Then:
@@ -41,7 +41,7 @@ Get the root CA certificate from your IT/security team. It will be a
 sudo cp corp-root-ca.crt /etc/pki/ca-trust/source/anchors/
 sudo update-ca-trust extract
 
-# Verify — all three must print 200 (or 401 for the docker one):
+# Verify - all three must print 200 (or 401 for the docker one):
 curl -sS -o /dev/null -w '%{http_code}\n' https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/repodata/repomd.xml
 curl -sS -o /dev/null -w '%{http_code}\n' https://cdn.redhat.com/
 curl -sS -o /dev/null -w '%{http_code}\n' https://registry-1.docker.io/v2/
@@ -60,12 +60,12 @@ EOF
 # npm
 sudo npm config set cafile /etc/pki/tls/cert.pem --location=global
 
-# podman / docker — per upstream registry
+# podman / docker - per upstream registry
 sudo mkdir -p /etc/containers/certs.d/registry-1.docker.io
 sudo cp corp-root-ca.crt /etc/containers/certs.d/registry-1.docker.io/ca.crt
 ```
 
-### Fix B — ask for a proxy allow-list
+### Fix B - ask for a proxy allow-list
 
 If IT will not release the CA, ask them to **bypass TLS inspection** for
 these hosts:
@@ -89,7 +89,7 @@ packages were already cached locally from an earlier successful run.
 
 ---
 
-## BLOCKER 2 — Oracle repo file contains unexpanded variables
+## BLOCKER 2 - Oracle repo file contains unexpanded variables
 
 ### Symptom
 
@@ -103,7 +103,7 @@ SSL connect error for https://yum$ociregion.$ocidomain/repo/...
 variables. Those are defined by the `oraclelinux-release-el9` package,
 which is **not installed on a RHEL host**. dnf leaves them literal.
 
-Note: `sed 's|yum$ociregion...|'` does **not** work — `$` is a regex
+Note: `sed 's|yum$ociregion...|'` does **not** work - `$` is a regex
 anchor. It has to be escaped or the file rewritten.
 
 ### Fix
@@ -148,7 +148,7 @@ sudo dnf clean all
 sudo dnf makecache
 ```
 
-Verify — no `$` should appear:
+Verify - no `$` should appear:
 
 ```bash
 grep baseurl /etc/yum.repos.d/oracle-linux-ol9.repo
@@ -156,7 +156,7 @@ grep baseurl /etc/yum.repos.d/oracle-linux-ol9.repo
 
 ---
 
-## HIGH 3 — Clock skew
+## HIGH 3 - Clock skew
 
 ### Symptom
 
@@ -197,7 +197,7 @@ sudo systemctl restart chronyd
 
 ---
 
-## HIGH 4 — Mirror server is RHEL but you want to serve Oracle Linux
+## HIGH 4 - Mirror server is RHEL but you want to serve Oracle Linux
 
 ### Situation
 
@@ -229,7 +229,7 @@ MIRRORET_SYNC_MIN_FREE_GB=15
 # Quiet the npm publish failures.
 MIRRORET_NPM_ALLOW_ANON_PUBLISH=1
 
-# Retention — start in report mode, review, then switch to prune.
+# Retention - start in report mode, review, then switch to prune.
 MIRRORET_RETENTION_ENABLE=1
 MIRRORET_RETENTION_MODE=report
 MIRRORET_RPM_KEEP_VERSIONS=3
@@ -270,12 +270,12 @@ sudo rm -rf /srv/mirroret/redhat/mirror/rhel
 
 ---
 
-## BLOCKER 5 — Source-RPM runaway (FIXED in the tool, but clean up)
+## BLOCKER 5 - Source-RPM runaway (FIXED in the tool, but clean up)
 
 ### What happened
 
-A sync pulled `getPackageSource/*.src.rpm` — 44,335 packages at
-400–600 MB each. That is multiple terabytes. It was still running when
+A sync pulled `getPackageSource/*.src.rpm` - 44,335 packages at
+400-600 MB each. That is multiple terabytes. It was still running when
 you caught it.
 
 ### Tool-side status
@@ -306,7 +306,7 @@ df -h /srv/mirroret
 
 ---
 
-## MED 6 — Verdaccio stuck in `activating`
+## MED 6 - Verdaccio stuck in `activating`
 
 ### Symptom
 
@@ -333,7 +333,7 @@ Send me the journalctl output if none of these match.
 
 ---
 
-## MED 7 — npm publish `ENEEDAUTH`
+## MED 7 - npm publish `ENEEDAUTH`
 
 ### Symptom
 
@@ -352,7 +352,7 @@ sync runs unauthenticated.
 
 ### Impact
 
-Cosmetic for pull-through caching — clients installing via the mirror
+Cosmetic for pull-through caching - clients installing via the mirror
 still work through Verdaccio's npmjs uplink. Only pre-seeding fails.
 
 ### Fix
@@ -368,7 +368,7 @@ the block from item 4) so `--upgrade` keeps it that way.
 
 ---
 
-## MED 8 — Clients still reaching upstream directly
+## MED 8 - Clients still reaching upstream directly
 
 ### Symptom (on the OL client)
 
@@ -401,7 +401,7 @@ sudo dnf repolist
 
 ---
 
-## LOW 9 — RHEL subscription not receiving updates
+## LOW 9 - RHEL subscription not receiving updates
 
 ### Symptom
 
@@ -437,7 +437,7 @@ sudo timedatectl set-ntp true
 sudo systemctl enable --now chronyd
 sudo chronyc makestep
 
-# 3. Corporate CA  <-- get the cert from IT first
+# 3. Corporate CA <-- get the cert from IT first
 sudo cp corp-root-ca.crt /etc/pki/ca-trust/source/anchors/
 sudo update-ca-trust extract
 
@@ -472,22 +472,22 @@ CA (or a proxy allow-list) no upstream sync can succeed at all.
 
 ---
 
-## Appendix — Transferring mirroret when the server has no GitHub access
+## Appendix - Transferring mirroret when the server has no GitHub access
 
 The mirror server cannot reach github.com. Move the code in as a zip from
 a machine that can.
 
-### Step 1 — on a machine WITH internet (your laptop/workstation)
+### Step 1 - on a machine WITH internet (your laptop/workstation)
 
 ```bash
 curl -L -o mirroret.zip \
     https://github.com/sarat1kyan/mirroret/archive/refs/heads/main.zip
 ```
 
-Or in a browser: `https://github.com/sarat1kyan/mirroret` → Code →
+Or in a browser: `https://github.com/sarat1kyan/mirroret` -> Code ->
 Download ZIP.
 
-### Step 2 — copy it to the mirror server
+### Step 2 - copy it to the mirror server
 
 Pick whichever you have:
 
@@ -500,7 +500,7 @@ scp mirroret.zip serob@192.168.30.110:~/
 # USB / shared drive: copy the file, then move it to ~ on the server
 ```
 
-### Step 3 — on the mirror server
+### Step 3 - on the mirror server
 
 ```bash
 cd ~
@@ -514,24 +514,24 @@ cd mirroret-main
 chmod +x install.sh uninstall.sh scripts/*.sh
 
 # Confirm you got the version you expect:
-grep -c 'mirroret_script_preamble' lib/common.sh   # expect >= 1
-grep -c 'logs|scripts|staging'      lib/nginx.sh   # expect >= 1
+grep -c 'mirroret_script_preamble' lib/common.sh # expect >= 1
+grep -c 'logs|scripts|staging' lib/nginx.sh # expect >= 1
 ```
 
-### Step 4 — apply
+### Step 4 - apply
 
 ```bash
 sudo ./install.sh --upgrade
 sudo ./scripts/mirroret-debug.sh
 ```
 
-### Step 5 — once verified, drop the old tree
+### Step 5 - once verified, drop the old tree
 
 ```bash
 rm -rf ~/mirroret-main.prev ~/mirroret.zip
 ```
 
-### Important — do not delete the old tree before running `--upgrade`
+### Important - do not delete the old tree before running `--upgrade`
 
 `cleanup-all.sh` embeds the install-tree path as `INSTALL_DIR`. If you
 delete or rename the directory it was generated from without re-running
@@ -549,5 +549,5 @@ ls tests/*.bats | wc -l
 bash install.sh --help | grep -E 'upgrade|cleanup'
 ```
 
-If `lib/` is short or `--help` errors, the zip extracted partially —
+If `lib/` is short or `--help` errors, the zip extracted partially -
 re-download and repeat.

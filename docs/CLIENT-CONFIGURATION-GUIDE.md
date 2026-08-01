@@ -11,11 +11,11 @@ This guide covers configuring clients to use your unified local repository for:
 
 ---
 
-## 🔧 Prerequisites
+## Prerequisites
 
 **Replace these values with your actual server details:**
 ```bash
-REPO_SERVER="192.168.1.100"  # Your repository server IP
+REPO_SERVER="192.168.1.100" # Your repository server IP
 WEB_PORT="8080"
 DOCKER_PORT="5000"
 PIP_PORT="8081"
@@ -24,7 +24,7 @@ NPM_PORT="4873"
 
 ---
 
-## 1️⃣ Debian/Ubuntu Clients (APT)
+## 1 Debian/Ubuntu Clients (APT)
 
 ### Complete Configuration Script
 ```bash
@@ -56,7 +56,7 @@ EOF
 sudo apt clean
 sudo apt update
 
-echo "✓ APT configured successfully!"
+echo "[ok] APT configured successfully!"
 echo "Test with: sudo apt install htop"
 ```
 
@@ -89,7 +89,7 @@ sudo apt update
 
 ---
 
-## 2️⃣ RHEL/CentOS/Fedora Clients (YUM/DNF)
+## 2 RHEL/CentOS/Fedora Clients (YUM/DNF)
 
 ### Complete Configuration Script
 ```bash
@@ -145,7 +145,7 @@ else
     sudo yum repolist
 fi
 
-echo "✓ YUM/DNF configured successfully!"
+echo "[ok] YUM/DNF configured successfully!"
 echo "Test with: sudo dnf install htop"
 ```
 
@@ -179,7 +179,7 @@ sudo dnf clean all && sudo dnf makecache
 
 ---
 
-## 3️⃣ Python pip Configuration
+## 3 Python pip Configuration
 
 ### Method 1: Global Configuration (Recommended)
 ```bash
@@ -212,7 +212,7 @@ index-url = http://${REPO_SERVER}:${PIP_PORT}/simple/
 trusted-host = ${REPO_SERVER}
 EOF
 
-echo "✓ pip configured successfully!"
+echo "[ok] pip configured successfully!"
 echo "Test with: pip install requests"
 ```
 
@@ -256,7 +256,7 @@ pip install requests
 
 ---
 
-## 4️⃣ Docker Registry Configuration
+## 4 Docker Registry Configuration
 
 ### Method 1: Daemon Configuration (Recommended)
 ```bash
@@ -287,7 +287,7 @@ sudo systemctl restart docker
 # Wait for Docker to start
 sleep 3
 
-echo "✓ Docker configured successfully!"
+echo "[ok] Docker configured successfully!"
 echo "Test with: docker pull ${REPO_SERVER}:${DOCKER_PORT}/ubuntu:22.04"
 ```
 
@@ -332,7 +332,7 @@ curl http://REPO_SERVER:5000/v2/_catalog
 
 ---
 
-## 5️⃣ npm Registry Configuration
+## 5 npm Registry Configuration
 
 ### Method 1: Global Configuration (Recommended)
 ```bash
@@ -355,7 +355,7 @@ EOF
 # Verify configuration
 npm config get registry
 
-echo "✓ npm configured successfully!"
+echo "[ok] npm configured successfully!"
 echo "Test with: npm install express"
 ```
 
@@ -404,7 +404,7 @@ npm view express --registry http://REPO_SERVER:4873/
 
 ---
 
-## 📋 Complete Client Setup Script (All Package Types)
+## Complete Client Setup Script (All Package Types)
 
 ```bash
 #!/bin/bash
@@ -413,7 +413,7 @@ npm view express --registry http://REPO_SERVER:4873/
 # Configures ALL package managers to use local repository
 #######################################################################
 
-REPO_SERVER="192.168.1.100"  # CHANGE THIS
+REPO_SERVER="192.168.1.100" # CHANGE THIS
 WEB_PORT="8080"
 DOCKER_PORT="5000"
 PIP_PORT="8081"
@@ -424,9 +424,9 @@ GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo "════════════════════════════════════════════════════════"
-echo "  Unified Repository Client Configuration"
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
+echo " Unified Repository Client Configuration"
+echo "========================================================"
 echo ""
 
 # Detect OS
@@ -446,7 +446,7 @@ deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy
 deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy-security main restricted universe multiverse
 EOF
     sudo apt update
-    echo -e "${GREEN}✓ APT configured${NC}"
+    echo -e "${GREEN}[ok] APT configured${NC}"
 fi
 
 # Configure YUM/DNF (RHEL/CentOS/Fedora)
@@ -472,7 +472,7 @@ EOF
     else
         sudo yum clean all && sudo yum makecache
     fi
-    echo -e "${GREEN}✓ YUM/DNF configured${NC}"
+    echo -e "${GREEN}[ok] YUM/DNF configured${NC}"
 fi
 
 # Configure pip
@@ -483,7 +483,7 @@ cat > ~/.pip/pip.conf << EOF
 index-url = http://${REPO_SERVER}:${PIP_PORT}/simple/
 trusted-host = ${REPO_SERVER}
 EOF
-echo -e "${GREEN}✓ pip configured${NC}"
+echo -e "${GREEN}[ok] pip configured${NC}"
 
 # Configure Docker
 echo -e "${BLUE}[3/5] Configuring Docker...${NC}"
@@ -495,37 +495,37 @@ if command -v docker &> /dev/null; then
 }
 EOF
     sudo systemctl restart docker 2>/dev/null || true
-    echo -e "${GREEN}✓ Docker configured${NC}"
+    echo -e "${GREEN}[ok] Docker configured${NC}"
 else
-    echo -e "${GREEN}⊘ Docker not installed, skipping${NC}"
+    echo -e "${GREEN}[skip] Docker not installed, skipping${NC}"
 fi
 
 # Configure npm
 echo -e "${BLUE}[4/5] Configuring npm...${NC}"
 if command -v npm &> /dev/null; then
     npm set registry http://${REPO_SERVER}:${NPM_PORT}/
-    echo -e "${GREEN}✓ npm configured${NC}"
+    echo -e "${GREEN}[ok] npm configured${NC}"
 else
-    echo -e "${GREEN}⊘ npm not installed, skipping${NC}"
+    echo -e "${GREEN}[skip] npm not installed, skipping${NC}"
 fi
 
 # Verify configuration
 echo -e "${BLUE}[5/5] Verifying configuration...${NC}"
 echo ""
 echo "Package Manager Configurations:"
-echo "  • APT/YUM: Configured to use ${REPO_SERVER}:${WEB_PORT}"
-echo "  • pip: http://${REPO_SERVER}:${PIP_PORT}"
-echo "  • Docker: ${REPO_SERVER}:${DOCKER_PORT}"
-echo "  • npm: http://${REPO_SERVER}:${NPM_PORT}"
+echo " * APT/YUM: Configured to use ${REPO_SERVER}:${WEB_PORT}"
+echo " * pip: http://${REPO_SERVER}:${PIP_PORT}"
+echo " * Docker: ${REPO_SERVER}:${DOCKER_PORT}"
+echo " * npm: http://${REPO_SERVER}:${NPM_PORT}"
 echo ""
-echo "════════════════════════════════════════════════════════"
-echo -e "${GREEN}  Configuration Complete!${NC}"
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
+echo -e "${GREEN} Configuration Complete!${NC}"
+echo "========================================================"
 ```
 
 ---
 
-## 🔍 Verification & Testing
+## Verification & Testing
 
 ### Test APT (Debian/Ubuntu)
 ```bash
@@ -595,7 +595,7 @@ npm view express
 
 ---
 
-## 🔄 Switching Back to Official Repositories
+## Switching Back to Official Repositories
 
 ### APT (Debian/Ubuntu)
 ```bash
@@ -631,7 +631,7 @@ npm config delete registry
 
 ---
 
-## 🆘 Troubleshooting
+## Troubleshooting
 
 ### APT Issues
 ```bash

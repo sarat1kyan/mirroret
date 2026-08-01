@@ -23,31 +23,31 @@ _log() {
     fi
 }
 
-info()    { _log "INFO " "$@"; }
-warn()    { _log "WARN " "$@"; }
-error()   { _log "ERROR" "$@"; }
-success() { _log "OK   " "$@"; }
-debug()   {
+info() { _log "INFO " "$@"; }
+warn() { _log "WARN " "$@"; }
+error() { _log "ERROR" "$@"; }
+success() { _log "OK " "$@"; }
+debug() {
     [[ "${LOG_LEVEL}" == "DEBUG" ]] && _log "DEBUG" "$@" || true
 }
 
 # Print a section header so output is scannable.
 section() {
     local msg="$1"
-    local line="──────────────────────────────────────────────"
+    local line="----------------------------------------------"
     _log "INFO " ""
     _log "INFO " "${line}"
-    _log "INFO " "  ${msg}"
+    _log "INFO " " ${msg}"
     _log "INFO " "${line}"
 }
 
-# die <message> — print error then exit 1.
+# die <message> - print error then exit 1.
 die() {
     error "$@"
     exit 1
 }
 
-# warn_insecure <message> — highly visible warning for insecure-mode paths.
+# warn_insecure <message> - highly visible warning for insecure-mode paths.
 warn_insecure() {
     local border="!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
     echo "" >&2

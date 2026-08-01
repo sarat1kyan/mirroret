@@ -20,7 +20,7 @@ teardown() {
     rm -rf "${TMPDIR}"
 }
 
-# ── Default state ────────────────────────────────────────────────────────────
+# -- Default state ------------------------------------------------------------
 
 @test "retention: MIRRORET_RETENTION_ENABLE defaults to 0" {
     [[ "${MIRRORET_RETENTION_ENABLE}" == "0" ]]
@@ -42,7 +42,7 @@ teardown() {
     [[ "${MIRRORET_DOCKER_GC}" == "0" ]]
 }
 
-# ── Mode gating ──────────────────────────────────────────────────────────────
+# -- Mode gating --------------------------------------------------------------
 
 @test "retention: run_retention is a no-op when disabled" {
     MIRRORET_RETENTION_ENABLE=0
@@ -61,7 +61,7 @@ teardown() {
     [ "$(_ret_mode)" = "prune" ]
 }
 
-# ── pip retention actually keeps N newest ────────────────────────────────────
+# -- pip retention actually keeps N newest ------------------------------------
 
 @test "retention: pip prune keeps N newest wheels per package (report mode)" {
     local dir="${MIRRORET_BASE_DIR}/pip/approved"
@@ -119,13 +119,13 @@ teardown() {
     [ -f "${dir}/singleton-1.0.0-py3-none-any.whl" ]
 }
 
-# ── npm retention drops old tarballs ─────────────────────────────────────────
+# -- npm retention drops old tarballs -----------------------------------------
 
 @test "retention: npm prune drops tarballs older than N days" {
     local dir="${MIRRORET_BASE_DIR}/npm/approved"
     mkdir -p "$dir"
-    touch -t 202001010000 "${dir}/express-1.0.0.tgz"    # very old
-    touch                   "${dir}/express-2.0.0.tgz"  # today
+    touch -t 202001010000 "${dir}/express-1.0.0.tgz" # very old
+    touch "${dir}/express-2.0.0.tgz" # today
     MIRRORET_NPM_KEEP_DAYS=30
     MIRRORET_RETENTION_MODE=prune
     retention_npm_prune
@@ -145,7 +145,7 @@ teardown() {
     [[ "$output" == *"would remove"* ]]
 }
 
-# ── Docker GC is opt-in even if RETENTION_ENABLE=1 ───────────────────────────
+# -- Docker GC is opt-in even if RETENTION_ENABLE=1 ---------------------------
 
 @test "retention: Docker GC skipped when MIRRORET_DOCKER_GC=0" {
     MIRRORET_DOCKER_GC=0
@@ -153,7 +153,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-# ── MIRRORET-MANAGED sentinel ────────────────────────────────────────────────
+# -- MIRRORET-MANAGED sentinel ------------------------------------------------
 
 @test "sentinel: is_managed_file returns true when file is absent" {
     source "${SCRIPT_DIR}/lib/common.sh"
@@ -197,7 +197,7 @@ teardown() {
     [[ "$output" == *"Preserving your customized"* ]]
 }
 
-# ── Generated sync scripts must carry the sentinel ───────────────────────────
+# -- Generated sync scripts must carry the sentinel ---------------------------
 
 @test "sentinel: pip sync script generator inserts the marker" {
     grep -q 'MIRRORET_MANAGED_MARKER' "${SCRIPT_DIR}/lib/pip.sh"
@@ -219,7 +219,7 @@ teardown() {
     grep -q 'MIRRORET_MANAGED_MARKER' "${SCRIPT_DIR}/install.sh"
 }
 
-# ── install.sh --cleanup / --cleanup-report / --upgrade CLI flags ────────────
+# -- install.sh --cleanup / --cleanup-report / --upgrade CLI flags ------------
 
 @test "install.sh --help mentions --cleanup" {
     run bash "${SCRIPT_DIR}/install.sh" --help
@@ -236,7 +236,7 @@ teardown() {
     [[ "$output" == *"--upgrade"* ]]
 }
 
-# ── cleanup-all.sh generation ─────────────────────────────────────────────────
+# -- cleanup-all.sh generation -------------------------------------------------
 
 @test "install.sh writes a cleanup-all.sh generator" {
     grep -q 'write_master_cleanup_script' "${SCRIPT_DIR}/install.sh"

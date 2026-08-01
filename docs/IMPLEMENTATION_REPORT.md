@@ -1,6 +1,6 @@
 # Implementation Report
 
-**Date:** 2026-06-04  
+**Date:** 2026-06-04
 **Scope:** Deep review and refactor of mirroret v1.5.2
 
 ---
@@ -86,10 +86,10 @@ Created `install.sh` as the unified orchestrator with:
 
 ### Phase 6: Tests and linting
 
-- `tests/test_distro.bats` — 11 tests for distro detection and codename logic
-- `tests/test_config.bats` — 8 tests for DRY_RUN, backup, config parsing
-- `tests/test_security.bats` — 11 tests for insecure mode defaults and warnings
-- `tests/test_dryrun.bats` — 6 tests for dry-run behaviour
+- `tests/test_distro.bats` - 11 tests for distro detection and codename logic
+- `tests/test_config.bats` - 8 tests for DRY_RUN, backup, config parsing
+- `tests/test_security.bats` - 11 tests for insecure mode defaults and warnings
+- `tests/test_dryrun.bats` - 6 tests for dry-run behaviour
 
 **Test results: 36/36 passing.**
 
@@ -101,13 +101,13 @@ Created `install.sh` as the unified orchestrator with:
 
 | File | Status |
 |------|--------|
-| `README.md` | Rewritten — accurate quick-start, no "enterprise-ready" claims |
-| `docs/SECURITY.md` | New — GPG setup, TLS config, auth, privilege |
-| `docs/CONFIGURATION.md` | New — full variable reference table |
-| `docs/OPERATIONS.md` | New — daily ops, sync, disk management |
-| `docs/ROLLBACK.md` | New — backup and rollback procedures |
-| `docs/TROUBLESHOOTING.md` | Replaced TROUBLESHOOTING-GUIDE.md — matches actual implementation |
-| `docs/DEEP_REVIEW.md` | New — full technical security review |
+| `README.md` | Rewritten - accurate quick-start, no "enterprise-ready" claims |
+| `docs/SECURITY.md` | New - GPG setup, TLS config, auth, privilege |
+| `docs/CONFIGURATION.md` | New - full variable reference table |
+| `docs/OPERATIONS.md` | New - daily ops, sync, disk management |
+| `docs/ROLLBACK.md` | New - backup and rollback procedures |
+| `docs/TROUBLESHOOTING.md` | Replaced TROUBLESHOOTING-GUIDE.md - matches actual implementation |
+| `docs/DEEP_REVIEW.md` | New - full technical security review |
 
 Removed misleading claims ("enterprise-ready", "production-ready") from README.md. Added honest limitations section.
 
@@ -130,12 +130,12 @@ Removed misleading claims ("enterprise-ready", "production-ready") from README.m
 - `docs/IMPLEMENTATION_REPORT.md`
 
 **Modified files (1):**
-- `README.md` — rewritten
+- `README.md` - rewritten
 
 **Preserved unchanged:**
-- `mirroret.sh` — original basic installer kept for reference
-- `mirroret-unified.sh` — original unified installer kept for reference
-- All original `*.md` docs — kept for historical reference (superseded by `docs/`)
+- `mirroret.sh` - original basic installer kept for reference
+- `mirroret-unified.sh` - original unified installer kept for reference
+- All original `*.md` docs - kept for historical reference (superseded by `docs/`)
 
 ---
 
@@ -169,7 +169,7 @@ These are known limitations that are documented but not fully solved in this imp
 
 5. **npm sync uses `npm pack` (downloads tarballs) but doesn't auto-publish.** The script downloads tarballs to a staging directory and prints the command to publish them. A fully automated npm mirroring workflow would require additional tooling (e.g., `verdaccio-mirroring-plugin`).
 
-6. **apt-mirror mirrors full Ubuntu distribution** — hundreds of GB. Operators should tune `mirror.list` for their actual needs. The config now uses configurable codename/arch.
+6. **apt-mirror mirrors full Ubuntu distribution** - hundreds of GB. Operators should tune `mirror.list` for their actual needs. The config now uses configurable codename/arch.
 
 7. **The original `mirroret.sh` and `mirroret-unified.sh`** still have all their original issues and are preserved unchanged. They are superseded by `install.sh` but not removed to avoid breaking any existing automation.
 
@@ -231,8 +231,8 @@ make check-deps
 make lint && make test
 
 # 3. Install on a test machine:
-sudo ./install.sh --dry-run    # preview first
-sudo ./install.sh --insecure   # lab mode
+sudo ./install.sh --dry-run # preview first
+sudo ./install.sh --insecure # lab mode
 
 # 4. For production hardening:
 # a. Generate a GPG key (see docs/SECURITY.md)

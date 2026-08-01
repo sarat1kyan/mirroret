@@ -29,7 +29,7 @@ teardown() {
     rm -rf "$TMPDIR"
 }
 
-# ── APT ───────────────────────────────────────────────────────────────────────
+# -- APT -----------------------------------------------------------------------
 
 @test "APT client config: default does NOT contain trusted=yes" {
     MIRRORET_APT_INSECURE=0
@@ -97,7 +97,7 @@ teardown() {
     unset MIRRORET_APT_KEYRING MIRRORET_APT_RESIGN
 }
 
-# ── RPM ───────────────────────────────────────────────────────────────────────
+# -- RPM -----------------------------------------------------------------------
 
 @test "RPM client config: default has gpgcheck=1" {
     mock_os_release "rocky" "9.3"
@@ -136,7 +136,7 @@ teardown() {
     [[ "$output" == *"SECURITY WARNING"* ]]
 }
 
-# ── Docker ────────────────────────────────────────────────────────────────────
+# -- Docker --------------------------------------------------------------------
 
 @test "Docker client config: default does NOT contain insecure-registries" {
     MIRRORET_DOCKER_INSECURE=0
@@ -160,7 +160,7 @@ teardown() {
     grep -q "insecure-registries" "${TMPDIR}/insecure_daemon.json"
 }
 
-# ── pip ───────────────────────────────────────────────────────────────────────
+# -- pip -----------------------------------------------------------------------
 
 @test "pip client config: default does NOT contain trusted-host" {
     MIRRORET_PIP_INSECURE=0

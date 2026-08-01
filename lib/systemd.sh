@@ -20,10 +20,10 @@ write_systemd_unit() {
 
     printf '%s\n' "$unit_content" > "$unit_file"
     info "Wrote unit file: ${unit_file}"
-    # Deferred daemon-reload — call systemd_daemon_reload once after all units are written.
+    # Deferred daemon-reload - call systemd_daemon_reload once after all units are written.
 }
 
-# systemd_daemon_reload — run daemon-reload only when unit files have changed.
+# systemd_daemon_reload - run daemon-reload only when unit files have changed.
 systemd_daemon_reload() {
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would run: systemctl daemon-reload"
@@ -33,7 +33,7 @@ systemd_daemon_reload() {
     debug "systemd daemon-reload complete."
 }
 
-# enable_and_start <service> — enable and start a systemd service.
+# enable_and_start <service> - enable and start a systemd service.
 # Idempotent: skips start if already running.
 enable_and_start() {
     local svc="$1"
@@ -88,7 +88,7 @@ enable_and_start() {
     success "Service ${svc} is running."
 }
 
-# check_service_status <service> — print human-readable status.
+# check_service_status <service> - print human-readable status.
 check_service_status() {
     local svc="$1"
     if service_is_active "$svc"; then

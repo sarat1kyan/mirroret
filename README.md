@@ -10,7 +10,7 @@ Local package repository server for Linux. Mirrors APT, RPM, pip, Docker, and np
 
 - Linux: Ubuntu 20.04+, Debian 11+, or RHEL/CentOS/Rocky/AlmaLinux 8+
 - Root access on the mirror server
-- 50 GB free disk space minimum (200–500 GB recommended for a full APT mirror)
+- 50 GB free disk space minimum (200-500 GB recommended for a full APT mirror)
 - Outbound internet access during installation and sync (see [docs/NETWORK_ACCESS.md](docs/NETWORK_ACCESS.md))
 
 ### Installation
@@ -25,7 +25,7 @@ sudo ./install.sh --dry-run
 # Standard install (Docker as pull-through cache by default):
 sudo ./install.sh
 
-# Hosted Docker mode — accepts `docker push` for curated pre-seeding:
+# Hosted Docker mode - accepts `docker push` for curated pre-seeding:
 sudo ./install.sh --docker-mode hosted
 
 # Standalone APT-only mirror, restricted to a corporate subnet:
@@ -35,23 +35,23 @@ sudo MIRRORET_FIREWALL_SOURCE=10.0.0.0/8 ./install.sh \
 # Force-treat the host as Debian even if /etc/os-release says otherwise:
 sudo ./install.sh --apt-flavor debian
 
-# Native mode — no Docker daemon required:
+# Native mode - no Docker daemon required:
 sudo MIRRORET_DOCKER_BACKEND=native ./install.sh
 
-# Lab / air-gapped install (no GPG, no TLS — INSECURE; warning printed):
+# Lab / air-gapped install (no GPG, no TLS - INSECURE; warning printed):
 sudo ./install.sh --insecure
 
 # Run the read-only diagnostic snapshot at any time:
 sudo ./scripts/mirroret-debug.sh
-sudo ./scripts/mirroret-debug.sh --net      # also probe outbound HTTPS
-sudo ./scripts/mirroret-debug.sh --bundle   # write a /tmp tarball for support
+sudo ./scripts/mirroret-debug.sh --net # also probe outbound HTTPS
+sudo ./scripts/mirroret-debug.sh --bundle # write a /tmp tarball for support
 ```
 
 ### After installation
 
 ```bash
 # 1. Open firewall ports for clients (if not done automatically):
-#    See docs/NETWORK_ACCESS.md for firewall commands.
+# See docs/NETWORK_ACCESS.md for firewall commands.
 
 # 2. Run the initial sync (takes minutes to hours depending on what you mirror):
 sudo /srv/mirroret/scripts/sync-all.sh
@@ -71,18 +71,18 @@ One command for everything. Interactive menu with no arguments, or a
 subcommand.
 
 ```bash
-./mirroretctl                 # interactive menu
-./mirroretctl status          # services, ports, disk, last sync, cron
-./mirroretctl doctor          # full read-only diagnostic
-./mirroretctl serve           # probe every HTTP endpoint locally
-./mirroretctl client verify   # check generated client configs for breakage
-./mirroretctl logs errors     # failures in recent sync logs
-./mirroretctl config diff     # config vs what the generated scripts contain
+./mirroretctl # interactive menu
+./mirroretctl status # services, ports, disk, last sync, cron
+./mirroretctl doctor # full read-only diagnostic
+./mirroretctl serve # probe every HTTP endpoint locally
+./mirroretctl client verify # check generated client configs for breakage
+./mirroretctl logs errors # failures in recent sync logs
+./mirroretctl config diff # config vs what the generated scripts contain
 
-sudo ./mirroretctl sync rpm   # run one sync now
-sudo ./mirroretctl sync stop  # stop running syncs
-sudo ./mirroretctl clean report  # retention dry run
-sudo ./mirroretctl upgrade    # re-apply config, regenerate managed scripts
+sudo ./mirroretctl sync rpm # run one sync now
+sudo ./mirroretctl sync stop # stop running syncs
+sudo ./mirroretctl clean report # retention dry run
+sudo ./mirroretctl upgrade # re-apply config, regenerate managed scripts
 ```
 
 Read-only subcommands need no root. Anything that changes state requires
@@ -92,14 +92,14 @@ root and says so. Run `./mirroretctl help` for the full list.
 
 ## Updating mirroret itself
 
-Safe upgrade path — never touches your mirror data:
+Safe upgrade path - never touches your mirror data:
 
 ```bash
-cd ~/mirroret-main         # or wherever you cloned it
+cd ~/mirroret-main # or wherever you cloned it
 git fetch origin
-git reset --hard origin/main   # or `git pull --ff-only`
-sudo ./install.sh --upgrade    # fast path: refresh configs + services only
-sudo ./scripts/mirroret-debug.sh   # verify
+git reset --hard origin/main # or `git pull --ff-only`
+sudo ./install.sh --upgrade # fast path: refresh configs + services only
+sudo ./scripts/mirroret-debug.sh # verify
 ```
 
 `--upgrade` skips package install and directory creation (already done),
@@ -145,29 +145,29 @@ sudo ./install.sh --config /etc/mirroret/mirroret.conf
 Key settings:
 
 ```bash
-MIRRORET_SERVER_IP=192.168.1.10        # IP written into client configs
-MIRRORET_FIREWALL_SOURCE=10.0.0.0/8    # Restrict inbound access by subnet
+MIRRORET_SERVER_IP=192.168.1.10 # IP written into client configs
+MIRRORET_FIREWALL_SOURCE=10.0.0.0/8 # Restrict inbound access by subnet
 
 # Docker
-MIRRORET_DOCKER_MODE=cache             # cache (default, pull-through) | hosted
-MIRRORET_DOCKER_BACKEND=native         # Use OS-native registry (no Docker daemon)
-MIRRORET_DOCKER_UPSTREAM_URL=https://registry-1.docker.io   # cache-mode upstream
+MIRRORET_DOCKER_MODE=cache # cache (default, pull-through) | hosted
+MIRRORET_DOCKER_BACKEND=native # Use OS-native registry (no Docker daemon)
+MIRRORET_DOCKER_UPSTREAM_URL=https://registry-1.docker.io # cache-mode upstream
 
 # APT
-MIRRORET_APT_FLAVOR=auto               # auto | ubuntu | debian
-MIRRORET_APT_UPSTREAM_HOST=            # override upstream archive host
-MIRRORET_APT_MIRROR_TOOL=debmirror     # Required on Debian 12 (apt-mirror removed)
-MIRRORET_APT_RESIGN=0                  # See docs/SECURITY.md before enabling
+MIRRORET_APT_FLAVOR=auto # auto | ubuntu | debian
+MIRRORET_APT_UPSTREAM_HOST= # override upstream archive host
+MIRRORET_APT_MIRROR_TOOL=debmirror # Required on Debian 12 (apt-mirror removed)
+MIRRORET_APT_RESIGN=0 # See docs/SECURITY.md before enabling
 
 # RPM
-MIRRORET_RPM_FLAVOR=                   # Override OS_ID-based directory name
-MIRRORET_RPM_REPOS=                    # Space-separated repo names to sync
+MIRRORET_RPM_FLAVOR= # Override OS_ID-based directory name
+MIRRORET_RPM_REPOS= # Space-separated repo names to sync
 
 # Other
-MIRRORET_TLS_SELF_SIGNED=1             # Auto-generate a self-signed TLS cert
-MIRRORET_GPG_AUTO=1                    # Auto-generate a GPG signing key
-MIRRORET_APPROVAL_ENABLED=1            # Require admin approval before serving pip/npm
-MIRRORET_PREFLIGHT_NETWORK=1           # Probe outbound HTTPS during preflight
+MIRRORET_TLS_SELF_SIGNED=1 # Auto-generate a self-signed TLS cert
+MIRRORET_GPG_AUTO=1 # Auto-generate a GPG signing key
+MIRRORET_APPROVAL_ENABLED=1 # Require admin approval before serving pip/npm
+MIRRORET_PREFLIGHT_NETWORK=1 # Probe outbound HTTPS during preflight
 ```
 
 See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full variable reference.
@@ -195,50 +195,50 @@ See [docs/SECURITY.md](docs/SECURITY.md) for:
 
 ```bash
 # Installation and checks:
-sudo ./install.sh                          # full install (all components)
-sudo ./install.sh --dry-run                # preview changes without applying
-sudo ./install.sh --check                  # validate an existing installation
-sudo ./install.sh --status                 # print service status
-sudo ./install.sh --backup-only            # snapshot current state
+sudo ./install.sh # full install (all components)
+sudo ./install.sh --dry-run # preview changes without applying
+sudo ./install.sh --check # validate an existing installation
+sudo ./install.sh --status # print service status
+sudo ./install.sh --backup-only # snapshot current state
 
 # Feature flags (can be combined):
-sudo ./install.sh --tls-self-signed        # enable HTTPS with auto-generated cert
-sudo ./install.sh --gpg-auto               # auto-generate GPG signing key
-sudo ./install.sh --approval-mode          # enable staging/approval workflow for pip/npm
-sudo ./install.sh --insecure               # disable all security checks (LAB ONLY)
+sudo ./install.sh --tls-self-signed # enable HTTPS with auto-generated cert
+sudo ./install.sh --gpg-auto # auto-generate GPG signing key
+sudo ./install.sh --approval-mode # enable staging/approval workflow for pip/npm
+sudo ./install.sh --insecure # disable all security checks (LAB ONLY)
 
 # Skip components:
-sudo ./install.sh --no-apt                 # skip APT mirror
-sudo ./install.sh --no-rpm                 # skip RPM mirror
-sudo ./install.sh --no-pip                 # skip pypiserver
-sudo ./install.sh --no-docker              # skip Docker registry
-sudo ./install.sh --no-npm                 # skip Verdaccio / npm
-sudo ./install.sh --no-firewall            # skip firewall rule setup
+sudo ./install.sh --no-apt # skip APT mirror
+sudo ./install.sh --no-rpm # skip RPM mirror
+sudo ./install.sh --no-pip # skip pypiserver
+sudo ./install.sh --no-docker # skip Docker registry
+sudo ./install.sh --no-npm # skip Verdaccio / npm
+sudo ./install.sh --no-firewall # skip firewall rule setup
 
 # Approval workflow (requires MIRRORET_APPROVAL_ENABLED=1 during install):
-sudo ./install.sh --list-staging           # show packages awaiting approval
-sudo ./install.sh --approve-all-pip        # approve all staged pip packages
-sudo ./install.sh --approve-all-npm        # approve all staged npm packages
-sudo ./install.sh --approve-package flask  # approve a specific package by name fragment
-sudo ./install.sh --exclude-pip badpkg     # decline (remove) a staged pip package
-sudo ./install.sh --exclude-npm oldlib     # decline a staged npm package
+sudo ./install.sh --list-staging # show packages awaiting approval
+sudo ./install.sh --approve-all-pip # approve all staged pip packages
+sudo ./install.sh --approve-all-npm # approve all staged npm packages
+sudo ./install.sh --approve-package flask # approve a specific package by name fragment
+sudo ./install.sh --exclude-pip badpkg # decline (remove) a staged pip package
+sudo ./install.sh --exclude-npm oldlib # decline a staged npm package
 
 # Rollback:
 sudo ./install.sh --list-backups
 sudo ./install.sh --rollback <backup-id>
 
 # Uninstall (selective or full):
-sudo ./uninstall.sh --list                # preview, change nothing
-sudo ./uninstall.sh --docker              # remove only the Docker registry
-sudo ./uninstall.sh --pip --npm           # remove pip + npm only
-sudo ./uninstall.sh --all --purge --yes   # full wipe incl. data + GPG
+sudo ./uninstall.sh --list # preview, change nothing
+sudo ./uninstall.sh --docker # remove only the Docker registry
+sudo ./uninstall.sh --pip --npm # remove pip + npm only
+sudo ./uninstall.sh --all --purge --yes # full wipe incl. data + GPG
 
 # Development and testing:
-make lint                            # shellcheck install.sh + lib/*.sh + scripts/*.sh
-make test                            # run every BATS file in tests/
-make format                          # auto-format scripts with shfmt
-make check-deps                      # check for required tools
-make dry-run                         # run install.sh --dry-run
+make lint # shellcheck install.sh + lib/*.sh + scripts/*.sh
+make test # run every BATS file in tests/
+make format # auto-format scripts with shfmt
+make check-deps # check for required tools
+make dry-run # run install.sh --dry-run
 ```
 
 ---
@@ -247,7 +247,7 @@ make dry-run                         # run install.sh --dry-run
 
 | Document | Contents |
 |----------|---------|
-| [docs/NETWORK_ACCESS.md](docs/NETWORK_ACCESS.md) | **Firewall rules** — inbound ports for clients, outbound ports for sync, firewall commands for ufw/firewalld/iptables |
+| [docs/NETWORK_ACCESS.md](docs/NETWORK_ACCESS.md) | **Firewall rules** - inbound ports for clients, outbound ports for sync, firewall commands for ufw/firewalld/iptables |
 | [docs/PROXY_AND_CA.md](docs/PROXY_AND_CA.md) | HTTP/HTTPS proxy setup and corporate TLS-inspection CA trust (sudo, apt/dnf, pip, npm, docker, podman, systemd, cron) |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Full variable reference: TLS, GPG, approval, Docker mode, APT tool |
 | [docs/SECURITY.md](docs/SECURITY.md) | TLS setup, GPG automation, nginx auth, privilege model |
@@ -272,44 +272,44 @@ make dry-run                         # run install.sh --dry-run
 
 ```
 mirroret/
-├── install.sh                  Main installer entry point
-├── Makefile                    lint / test / format / check-deps targets
-├── config/
-│   └── mirroret.conf.example   Documented config file template
-├── lib/
-│   ├── logging.sh              Logging: section/info/warn/error/success/die
-│   ├── common.sh               xrun() DRY_RUN wrapper, atomic_write, helpers
-│   ├── distro.sh               Distro detection (DISTRO_TYPE, PKG_MGR, etc.)
-│   ├── preflight.sh            Pre-install checks (disk, root, commands)
-│   ├── backup.sh               Timestamped backups and rollback
-│   ├── nginx.sh                nginx config (HTTP + optional TLS block)
-│   ├── systemd.sh              systemd unit writing and enable/start
-│   ├── firewall.sh             Firewall rules (ufw / firewalld / iptables)
-│   ├── apt.sh                  APT mirror: apt-mirror / apt-mirror2 / debmirror
-│   ├── rpm.sh                  RPM mirror: createrepo, reposync
-│   ├── docker_registry.sh      Docker registry: native or container backend
-│   ├── pip.sh                  pypiserver: install, unit, sync script
-│   ├── npm.sh                  Verdaccio: install, config, sync script
-│   ├── tls.sh                  TLS cert provisioning and nginx block helper
-│   ├── gpg.sh                  GPG key management and client distribution
-│   ├── approval.sh             Package staging/approval workflow
-│   └── validation.sh           Post-install checks and status reporting
-├── tests/
-│   ├── test_helpers.bash       Shared BATS setup helpers
-│   ├── test_distro.bats        11 tests — distro detection
-│   ├── test_config.bats        8 tests  — config loading, backup IDs
-│   ├── test_security.bats      11 tests — security defaults, insecure flags
-│   ├── test_dryrun.bats        6 tests  — DRY_RUN behaviour
-│   └── test_integration.bats  TLS, GPG, approval, Docker backend
-└── docs/
-    ├── NETWORK_ACCESS.md       Firewall rules — inbound and outbound
-    ├── CONFIGURATION.md        Config variable reference
-    ├── SECURITY.md             TLS, GPG, auth, privilege
-    ├── OPERATIONS.md           Daily ops, sync, approval, Docker
-    ├── NATIVE_MODE.md          Running without Docker
-    ├── ROLLBACK.md             Backup and rollback guide
-    ├── TROUBLESHOOTING.md      Diagnostic steps
-    └── DEEP_REVIEW.md          Technical security review
++-- install.sh Main installer entry point
++-- Makefile lint / test / format / check-deps targets
++-- config/
+| +-- mirroret.conf.example Documented config file template
++-- lib/
+| +-- logging.sh Logging: section/info/warn/error/success/die
+| +-- common.sh xrun() DRY_RUN wrapper, atomic_write, helpers
+| +-- distro.sh Distro detection (DISTRO_TYPE, PKG_MGR, etc.)
+| +-- preflight.sh Pre-install checks (disk, root, commands)
+| +-- backup.sh Timestamped backups and rollback
+| +-- nginx.sh nginx config (HTTP + optional TLS block)
+| +-- systemd.sh systemd unit writing and enable/start
+| +-- firewall.sh Firewall rules (ufw / firewalld / iptables)
+| +-- apt.sh APT mirror: apt-mirror / apt-mirror2 / debmirror
+| +-- rpm.sh RPM mirror: createrepo, reposync
+| +-- docker_registry.sh Docker registry: native or container backend
+| +-- pip.sh pypiserver: install, unit, sync script
+| +-- npm.sh Verdaccio: install, config, sync script
+| +-- tls.sh TLS cert provisioning and nginx block helper
+| +-- gpg.sh GPG key management and client distribution
+| +-- approval.sh Package staging/approval workflow
+| +-- validation.sh Post-install checks and status reporting
++-- tests/
+| +-- test_helpers.bash Shared BATS setup helpers
+| +-- test_distro.bats 11 tests - distro detection
+| +-- test_config.bats 8 tests - config loading, backup IDs
+| +-- test_security.bats 11 tests - security defaults, insecure flags
+| +-- test_dryrun.bats 6 tests - DRY_RUN behaviour
+| +-- test_integration.bats TLS, GPG, approval, Docker backend
++-- docs/
+    +-- NETWORK_ACCESS.md Firewall rules - inbound and outbound
+    +-- CONFIGURATION.md Config variable reference
+    +-- SECURITY.md TLS, GPG, auth, privilege
+    +-- OPERATIONS.md Daily ops, sync, approval, Docker
+    +-- NATIVE_MODE.md Running without Docker
+    +-- ROLLBACK.md Backup and rollback guide
+    +-- TROUBLESHOOTING.md Diagnostic steps
+    +-- DEEP_REVIEW.md Technical security review
 ```
 
 ---
@@ -319,11 +319,11 @@ mirroret/
 - Mirroret has not been end-to-end validated against every real upstream;
   installs are tested under DRY_RUN and with mocked `/etc/os-release` only.
   Treat the first real sync as a smoke test, not a guarantee.
-- Full APT mirror requires 200–500 GB and several hours on first sync.
-  Sizes grow over time — there is no automatic retention/cleanup.
+- Full APT mirror requires 200-500 GB and several hours on first sync.
+  Sizes grow over time - there is no automatic retention/cleanup.
 - Docker registry has two operating modes (see `MIRRORET_DOCKER_MODE`):
     - `cache` (default): pull-through proxy. Clients pull through the
-      mirror and layers are cached on demand. Pushes are rejected — this
+      mirror and layers are cached on demand. Pushes are rejected - this
       is a registry-level restriction, not a mirroret choice.
     - `hosted`: the registry accepts `docker push`. `sync-docker-images.sh`
       pre-seeds a curated list using a local `docker` or `podman` CLI.
@@ -345,8 +345,8 @@ mirroret/
 - Clean uninstall: `./uninstall.sh` (or `./install.sh --uninstall`)
   removes services, users, configs, and optionally data + GPG. It does
   NOT remove OS packages like nginx/Docker/Podman that the operator may
-  use for other things — strip those by hand if desired. See
+  use for other things - strip those by hand if desired. See
   [docs/UNINSTALL.md](docs/UNINSTALL.md).
 - Mirroring more than one distro family on a single host concurrently
-  (e.g. Rocky AND AlmaLinux) is possible but largely untested — set
+  (e.g. Rocky AND AlmaLinux) is possible but largely untested - set
   `MIRRORET_RPM_FLAVOR` explicitly per install.

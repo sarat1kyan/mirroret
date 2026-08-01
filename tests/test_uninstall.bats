@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Tests for lib/uninstall.sh and the uninstall.sh entry point.
 #
-# All tests run as a non-root user inside a tmp tree — they exercise the
+# All tests run as a non-root user inside a tmp tree - they exercise the
 # planner, the helper functions, and idempotency. They never actually
 # touch system services, /etc, or /srv.
 
@@ -26,10 +26,10 @@ teardown() {
     rm -rf "$TMPDIR"
 }
 
-# ── plan + flag handling ──────────────────────────────────────────────────────
+# -- plan + flag handling ------------------------------------------------------
 
 @test "uninstall: --list with no targets defaults to all" {
-    # Default behaviour: no --apt / --docker / etc. → target everything.
+    # Default behaviour: no --apt / --docker / etc. -> target everything.
     run bash -c "
         source '${SCRIPT_DIR}/lib/logging.sh'
         source '${SCRIPT_DIR}/lib/common.sh'
@@ -115,7 +115,7 @@ teardown() {
     [[ "$output" == *"Unknown uninstall flag"* ]]
 }
 
-# ── purge gating ──────────────────────────────────────────────────────────────
+# -- purge gating --------------------------------------------------------------
 
 @test "uninstall: --list without --purge does NOT plan data deletion" {
     run bash -c "
@@ -145,7 +145,7 @@ teardown() {
 
 @test "uninstall: dry-run never touches an existing data dir" {
     mkdir -p "${MIRRORET_BASE_DIR}/redhat/mirror"
-    touch    "${MIRRORET_BASE_DIR}/canary"
+    touch "${MIRRORET_BASE_DIR}/canary"
     run bash -c "
         source '${SCRIPT_DIR}/lib/logging.sh'
         source '${SCRIPT_DIR}/lib/common.sh'
@@ -158,7 +158,7 @@ teardown() {
     [ -f "${MIRRORET_BASE_DIR}/canary" ]
 }
 
-# ── idempotent removers (run on tmp filesystem) ──────────────────────────────
+# -- idempotent removers (run on tmp filesystem) ------------------------------
 
 @test "uninstall: uninst_remove_file is a no-op for missing files" {
     DRY_RUN=0
@@ -191,7 +191,7 @@ teardown() {
     [ ! -d "$d" ]
 }
 
-# ── cron managed-block awk strip ─────────────────────────────────────────────
+# -- cron managed-block awk strip ---------------------------------------------
 
 @test "uninstall: cron strip removes only the managed block" {
     local existing="0 1 * * * /usr/local/bin/keep-me.sh
@@ -214,7 +214,7 @@ teardown() {
     echo "$stripped" | grep -qvF "/srv/mirroret/scripts/sync-all.sh"
 }
 
-# ── safety guards: do not delete users when --keep-users ─────────────────────
+# -- safety guards: do not delete users when --keep-users ---------------------
 
 @test "uninstall: --keep-users prevents user removal" {
     UNINST_KEEP_USERS=1
@@ -224,7 +224,7 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-# ── install.sh --uninstall integration ────────────────────────────────────────
+# -- install.sh --uninstall integration ----------------------------------------
 
 @test "install.sh --uninstall --list defaults to all components" {
     run bash "${SCRIPT_DIR}/install.sh" --uninstall --list
@@ -241,7 +241,7 @@ teardown() {
     [[ "$output" != *"remove Verdaccio"* ]]
 }
 
-# ── detection of components present on host ──────────────────────────────────
+# -- detection of components present on host ----------------------------------
 
 @test "uninstall: components_present reports nothing on a clean tmp tree" {
     run bash -c "
@@ -256,7 +256,7 @@ teardown() {
     [[ "$output" == *"not found"* ]]
 }
 
-# ── _has_unit returns false when systemctl absent ────────────────────────────
+# -- _has_unit returns false when systemctl absent ----------------------------
 
 @test "uninstall: _has_unit returns false when systemctl absent (PATH stripped)" {
     PATH_OLD="$PATH"
@@ -267,7 +267,7 @@ teardown() {
     rm -rf "$stub"
 }
 
-# ── audit fixes (round 2) ────────────────────────────────────────────────────
+# -- audit fixes (round 2) ----------------------------------------------------
 
 @test "uninstall: cron strip handles CRLF line endings" {
     # A crontab edited on Windows / pulled through Outlook has \r\n.
@@ -300,7 +300,7 @@ teardown() {
 }
 
 @test "uninstall: uninst_remove_file failure does NOT abort under set -e" {
-    # uninst_remove_file must tolerate rm failures — otherwise a single
+    # uninst_remove_file must tolerate rm failures - otherwise a single
     # immutable-bit / busy-mount entry breaks idempotency for everything
     # downstream.
     DRY_RUN=0
@@ -315,11 +315,11 @@ EOF
     target="${TMPDIR}/file-that-exists"
     /usr/bin/touch "$target" || touch "$target"
     set -e
-    uninst_remove_file "$target"   # must NOT abort the test
+    uninst_remove_file "$target" # must NOT abort the test
     set +e
     PATH="${PATH_OLD}"
     rm -rf "$stub"
-    # The file is still here because our stubbed rm failed — that's fine.
+    # The file is still here because our stubbed rm failed - that's fine.
     # The point of the test is that the script kept going.
     [ -f "$target" ]
 }

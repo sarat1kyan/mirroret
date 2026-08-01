@@ -4,15 +4,15 @@
 # Requires logging.sh, common.sh.
 #
 # Variables:
-#   MIRRORET_GPG_AUTO=1           auto-generate a signing key if none exists
-#   MIRRORET_GPG_NAME             Real Name field for generated key (default: mirroret)
-#   MIRRORET_GPG_EMAIL            Email field for generated key (default: mirroret@localhost)
-#   MIRRORET_GPG_HOMEDIR          gpg home dir (default: /etc/mirroret/gnupg)
-#   MIRRORET_GPG_KEYID            fingerprint/id of key to use; auto-detected when empty
+# MIRRORET_GPG_AUTO=1 auto-generate a signing key if none exists
+# MIRRORET_GPG_NAME Real Name field for generated key (default: mirroret)
+# MIRRORET_GPG_EMAIL Email field for generated key (default: mirroret@localhost)
+# MIRRORET_GPG_HOMEDIR gpg home dir (default: /etc/mirroret/gnupg)
+# MIRRORET_GPG_KEYID fingerprint/id of key to use; auto-detected when empty
 #
 # After setup_gpg() succeeds:
-#   MIRRORET_GPG_KEYID            set to the key fingerprint in use
-#   MIRRORET_APT_KEYRING          set to BASE_DIR/config/mirroret.gpg (for apt.sh)
+# MIRRORET_GPG_KEYID set to the key fingerprint in use
+# MIRRORET_APT_KEYRING set to BASE_DIR/config/mirroret.gpg (for apt.sh)
 
 MIRRORET_GPG_AUTO="${MIRRORET_GPG_AUTO:-0}"
 MIRRORET_GPG_NAME="${MIRRORET_GPG_NAME:-mirroret}"
@@ -20,7 +20,7 @@ MIRRORET_GPG_EMAIL="${MIRRORET_GPG_EMAIL:-mirroret@localhost}"
 MIRRORET_GPG_HOMEDIR="${MIRRORET_GPG_HOMEDIR:-/etc/mirroret/gnupg}"
 MIRRORET_GPG_KEYID="${MIRRORET_GPG_KEYID:-}"
 
-# setup_gpg — provision GPG key and export public key for clients.
+# setup_gpg - provision GPG key and export public key for clients.
 setup_gpg() {
     section "Setting Up GPG Signing"
 
@@ -75,7 +75,7 @@ _gpg_find_or_generate_key() {
 }
 
 _gpg_generate_key() {
-    info "Generating GPG key (4096-bit RSA, no passphrase)…"
+    info "Generating GPG key (4096-bit RSA, no passphrase)..."
     _gpg --gen-key <<GPG_PARAMS
 %no-protection
 Key-Type: RSA
@@ -92,7 +92,7 @@ GPG_PARAMS
         | awk -F: '$1=="fpr"{print $10; exit}')
 
     [[ -n "${MIRRORET_GPG_KEYID}" ]] \
-        || die "GPG key generation failed — no key found after generation."
+        || die "GPG key generation failed - no key found after generation."
     success "Generated GPG key: ${MIRRORET_GPG_KEYID}"
 }
 
@@ -122,10 +122,10 @@ _gpg_export_public_key() {
 
     MIRRORET_APT_KEYRING="${gpg_file}"
     info "Public key exported: ${armored_file}"
-    info "APT keyring:         ${gpg_file}"
+    info "APT keyring: ${gpg_file}"
 }
 
-# get_gpg_apt_keyring — print the path to the binary GPG keyring for APT.
+# get_gpg_apt_keyring - print the path to the binary GPG keyring for APT.
 get_gpg_apt_keyring() {
     echo "${MIRRORET_APT_KEYRING:-${MIRRORET_BASE_DIR}/config/mirroret.gpg}"
 }

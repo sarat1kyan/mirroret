@@ -1,59 +1,59 @@
 # Unified Repository Server - Architecture & Management Guide
 
-## 🏗️ System Architecture
+## System Architecture
 
 ### Overview
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│           UNIFIED LOCAL REPOSITORY SERVER                       │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Nginx Web Server (Port 8080)                            │  │
-│  │  ├─ /debian/       → Debian/Ubuntu packages              │  │
-│  │  ├─ /redhat/       → RHEL/CentOS packages                │  │
-│  │  ├─ /pip/ (proxy)  → Python packages (8081)              │  │
-│  │  ├─ /npm/ (proxy)  → Node.js packages (4873)             │  │
-│  │  └─ /v2/ (proxy)   → Docker registry (5000)              │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  PyPI Server (pypiserver) - Port 8081                    │  │
-│  │  Storage: /srv/localrepo/pip/approved                    │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Docker Registry - Port 5000                             │  │
-│  │  Storage: /srv/localrepo/docker/registry                 │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Verdaccio (npm) - Port 4873                             │  │
-│  │  Storage: /srv/localrepo/npm/approved                    │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Cron Jobs - Automated Sync                              │  │
-│  │  Daily at 2:00 AM - sync-all-repos.sh                    │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
++-----------------------------------------------------------------+
+| UNIFIED LOCAL REPOSITORY SERVER |
+| |
+| +----------------------------------------------------------+ |
+| | Nginx Web Server (Port 8080) | |
+| | +- /debian/ -> Debian/Ubuntu packages | |
+| | +- /redhat/ -> RHEL/CentOS packages | |
+| | +- /pip/ (proxy) -> Python packages (8081) | |
+| | +- /npm/ (proxy) -> Node.js packages (4873) | |
+| | +- /v2/ (proxy) -> Docker registry (5000) | |
+| +----------------------------------------------------------+ |
+| |
+| +----------------------------------------------------------+ |
+| | PyPI Server (pypiserver) - Port 8081 | |
+| | Storage: /srv/localrepo/pip/approved | |
+| +----------------------------------------------------------+ |
+| |
+| +----------------------------------------------------------+ |
+| | Docker Registry - Port 5000 | |
+| | Storage: /srv/localrepo/docker/registry | |
+| +----------------------------------------------------------+ |
+| |
+| +----------------------------------------------------------+ |
+| | Verdaccio (npm) - Port 4873 | |
+| | Storage: /srv/localrepo/npm/approved | |
+| +----------------------------------------------------------+ |
+| |
+| +----------------------------------------------------------+ |
+| | Cron Jobs - Automated Sync | |
+| | Daily at 2:00 AM - sync-all-repos.sh | |
+| +----------------------------------------------------------+ |
++-----------------------------------------------------------------+
+                              |
                    Network (LAN/WAN)
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        │                     │                     │
-        ▼                     ▼                     ▼
-   ┌─────────┐          ┌─────────┐          ┌─────────┐
-   │ Ubuntu  │          │ CentOS  │          │ Debian  │
-   │ Client  │          │ Client  │          │ Client  │
-   ├─────────┤          ├─────────┤          ├─────────┤
-   │ apt     │          │ dnf     │          │ apt     │
-   │ pip     │          │ pip     │          │ pip     │
-   │ docker  │          │ docker  │          │ docker  │
-   │ npm     │          │ npm     │          │ npm     │
-   └─────────┘          └─────────┘          └─────────┘
+                              |
+        +---------------------+---------------------+
+        | | |
+        v v v
+   +---------+ +---------+ +---------+
+   | Ubuntu | | CentOS | | Debian |
+   | Client | | Client | | Client |
+   +---------| +---------| +---------|
+   | apt | | dnf | | apt |
+   | pip | | pip | | pip |
+   | docker | | docker | | docker |
+   | npm | | npm | | npm |
+   +---------+ +---------+ +---------+
 ```
 
-## 📊 Port Allocation
+## Port Allocation
 
 | Port | Service | Purpose | Protocol |
 |------|---------|---------|----------|
@@ -63,116 +63,116 @@
 | 4873 | Verdaccio | npm package registry | HTTP |
 | 22 | SSH | Server management | SSH |
 
-## 📁 Directory Structure
+## Directory Structure
 
 ```
 /srv/localrepo/
-│
-├── debian/                          # Debian/Ubuntu packages
-│   ├── mirror/                      # Downloaded from official repos
-│   │   ├── mirror/                  # apt-mirror structure
-│   │   │   └── archive.ubuntu.com/
-│   │   │       └── ubuntu/
-│   │   │           ├── dists/
-│   │   │           └── pool/
-│   │   ├── var/                     # apt-mirror working directory
-│   │   └── skel/
-│   └── approved/                    # Packages approved for client use
-│       ├── Packages.gz              # Package index
-│       └── [.deb files]
-│
-├── redhat/                          # RHEL/CentOS/Fedora packages
-│   ├── mirror/                      # Downloaded from official repos
-│   │   ├── rocky/
-│   │   │   └── 9/
-│   │   │       ├── baseos/
-│   │   │       ├── appstream/
-│   │   │       └── extras/
-│   │   ├── centos/
-│   │   └── fedora/
-│   └── approved/                    # Packages approved for client use
-│       └── rocky/
-│           └── 9/
-│               ├── baseos/
-│               │   └── repodata/    # Repository metadata
-│               └── appstream/
-│
-├── pip/                             # Python packages
-│   ├── mirror/                      # Downloaded .whl and .tar.gz files
-│   ├── approved/                    # Approved packages (served by pypiserver)
-│   └── cache/                       # pip cache directory
-│
-├── docker/                          # Docker images
-│   ├── registry/                    # Docker registry storage
-│   │   └── docker/
-│   │       └── registry/
-│   │           └── v2/
-│   ├── mirror/                      # Images downloaded from Docker Hub
-│   └── approved/                    # Approved images
-│
-├── npm/                             # Node.js packages
-│   ├── mirror/                      # Downloaded packages
-│   ├── approved/                    # Approved packages (Verdaccio storage)
-│   └── cache/                       # npm cache
-│
-├── staging/                         # Temporary area for package review
-│   ├── debian/
-│   ├── redhat/
-│   ├── pip/
-│   ├── docker/
-│   └── npm/
-│
-├── approved/                        # Central approved packages
-│   ├── debian/
-│   ├── redhat/
-│   ├── pip/
-│   ├── docker/
-│   └── npm/
-│
-├── logs/                            # All system logs
-│   ├── sync-debian-YYYYMMDD-HHMMSS.log
-│   ├── sync-redhat-YYYYMMDD-HHMMSS.log
-│   ├── sync-pip-YYYYMMDD-HHMMSS.log
-│   ├── sync-docker-YYYYMMDD-HHMMSS.log
-│   └── sync-npm-YYYYMMDD-HHMMSS.log
-│
-├── scripts/                         # Management scripts
-│   ├── sync-all-repos.sh           # Master sync script
-│   ├── sync-redhat-repos.sh        # RHEL-specific sync
-│   ├── sync-pip-packages.sh        # pip packages sync
-│   ├── sync-docker-images.sh       # Docker images sync
-│   ├── sync-npm-packages.sh        # npm packages sync
-│   └── approve-all-packages.sh     # Approval script
-│
-├── config/                          # Client configuration files
-│   ├── debian-client.list          # APT sources for clients
-│   ├── redhat-client.repo          # YUM/DNF repo for clients
-│   ├── pip.conf                    # pip configuration
-│   ├── .npmrc                      # npm configuration
-│   └── docker-daemon.json          # Docker daemon config
-│
-└── README.md                        # Server documentation
+|
++-- debian/ # Debian/Ubuntu packages
+| +-- mirror/ # Downloaded from official repos
+| | +-- mirror/ # apt-mirror structure
+| | | +-- archive.ubuntu.com/
+| | | +-- ubuntu/
+| | | +-- dists/
+| | | +-- pool/
+| | +-- var/ # apt-mirror working directory
+| | +-- skel/
+| +-- approved/ # Packages approved for client use
+| +-- Packages.gz # Package index
+| +-- [.deb files]
+|
++-- redhat/ # RHEL/CentOS/Fedora packages
+| +-- mirror/ # Downloaded from official repos
+| | +-- rocky/
+| | | +-- 9/
+| | | +-- baseos/
+| | | +-- appstream/
+| | | +-- extras/
+| | +-- centos/
+| | +-- fedora/
+| +-- approved/ # Packages approved for client use
+| +-- rocky/
+| +-- 9/
+| +-- baseos/
+| | +-- repodata/ # Repository metadata
+| +-- appstream/
+|
++-- pip/ # Python packages
+| +-- mirror/ # Downloaded .whl and .tar.gz files
+| +-- approved/ # Approved packages (served by pypiserver)
+| +-- cache/ # pip cache directory
+|
++-- docker/ # Docker images
+| +-- registry/ # Docker registry storage
+| | +-- docker/
+| | +-- registry/
+| | +-- v2/
+| +-- mirror/ # Images downloaded from Docker Hub
+| +-- approved/ # Approved images
+|
++-- npm/ # Node.js packages
+| +-- mirror/ # Downloaded packages
+| +-- approved/ # Approved packages (Verdaccio storage)
+| +-- cache/ # npm cache
+|
++-- staging/ # Temporary area for package review
+| +-- debian/
+| +-- redhat/
+| +-- pip/
+| +-- docker/
+| +-- npm/
+|
++-- approved/ # Central approved packages
+| +-- debian/
+| +-- redhat/
+| +-- pip/
+| +-- docker/
+| +-- npm/
+|
++-- logs/ # All system logs
+| +-- sync-debian-YYYYMMDD-HHMMSS.log
+| +-- sync-redhat-YYYYMMDD-HHMMSS.log
+| +-- sync-pip-YYYYMMDD-HHMMSS.log
+| +-- sync-docker-YYYYMMDD-HHMMSS.log
+| +-- sync-npm-YYYYMMDD-HHMMSS.log
+|
++-- scripts/ # Management scripts
+| +-- sync-all-repos.sh # Master sync script
+| +-- sync-redhat-repos.sh # RHEL-specific sync
+| +-- sync-pip-packages.sh # pip packages sync
+| +-- sync-docker-images.sh # Docker images sync
+| +-- sync-npm-packages.sh # npm packages sync
+| +-- approve-all-packages.sh # Approval script
+|
++-- config/ # Client configuration files
+| +-- debian-client.list # APT sources for clients
+| +-- redhat-client.repo # YUM/DNF repo for clients
+| +-- pip.conf # pip configuration
+| +-- .npmrc # npm configuration
+| +-- docker-daemon.json # Docker daemon config
+|
++-- README.md # Server documentation
 ```
 
-## 🔄 Package Workflow
+## Package Workflow
 
 ### 1. Debian/Ubuntu Packages (.deb)
 
 ```
 Official Ubuntu Repos
-        ↓
+        v
    [apt-mirror sync]
-        ↓
+        v
 /srv/localrepo/debian/mirror/
-        ↓
+        v
    [Manual Review]
-        ↓
+        v
 /srv/localrepo/debian/approved/
-        ↓
+        v
 [dpkg-scanpackages to generate index]
-        ↓
+        v
    Served via Nginx
-        ↓
+        v
     Client APT
 ```
 
@@ -180,19 +180,19 @@ Official Ubuntu Repos
 
 ```
 Official Rocky/CentOS Repos
-        ↓
+        v
    [reposync]
-        ↓
+        v
 /srv/localrepo/redhat/mirror/
-        ↓
+        v
    [Manual Review]
-        ↓
+        v
 /srv/localrepo/redhat/approved/
-        ↓
+        v
 [createrepo to generate metadata]
-        ↓
+        v
    Served via Nginx
-        ↓
+        v
    Client DNF/YUM
 ```
 
@@ -200,17 +200,17 @@ Official Rocky/CentOS Repos
 
 ```
     PyPI.org
-        ↓
+        v
   [pip download]
-        ↓
+        v
 /srv/localrepo/pip/mirror/
-        ↓
+        v
    [Manual Review]
-        ↓
+        v
 /srv/localrepo/pip/approved/
-        ↓
+        v
   [pypiserver serves]
-        ↓
+        v
     Client pip
 ```
 
@@ -218,19 +218,19 @@ Official Rocky/CentOS Repos
 
 ```
   Docker Hub
-        ↓
+        v
   [docker pull]
-        ↓
+        v
 /srv/localrepo/docker/mirror/
-        ↓
+        v
    [Manual Review]
-        ↓
+        v
   [docker push to local registry]
-        ↓
+        v
 /srv/localrepo/docker/registry/
-        ↓
+        v
    Docker Registry (port 5000)
-        ↓
+        v
     Client docker
 ```
 
@@ -238,17 +238,17 @@ Official Rocky/CentOS Repos
 
 ```
    npmjs.org
-        ↓
+        v
 [Verdaccio proxy/cache]
-        ↓
+        v
 /srv/localrepo/npm/approved/
-        ↓
+        v
    Verdaccio serves
-        ↓
+        v
     Client npm
 ```
 
-## 🛠️ Management Operations
+## Management Operations
 
 ### Daily Operations
 
@@ -365,7 +365,7 @@ docker push localhost:5000/ubuntu:22.04
 # Manual approval through Verdaccio web interface at http://SERVER:4873
 ```
 
-## 📊 Monitoring & Maintenance
+## Monitoring & Maintenance
 
 ### Service Health Checks
 
@@ -374,10 +374,10 @@ docker push localhost:5000/ubuntu:22.04
 # health-check.sh
 
 echo "Service Status:"
-echo "├─ Nginx: $(systemctl is-active nginx)"
-echo "├─ pypiserver: $(systemctl is-active pypiserver)"
-echo "├─ Verdaccio: $(systemctl is-active verdaccio)"
-echo "└─ Docker Registry: $(docker inspect -f '{{.State.Running}}' local-docker-registry)"
+echo "+- Nginx: $(systemctl is-active nginx)"
+echo "+- pypiserver: $(systemctl is-active pypiserver)"
+echo "+- Verdaccio: $(systemctl is-active verdaccio)"
+echo "+- Docker Registry: $(docker inspect -f '{{.State.Running}}' local-docker-registry)"
 
 echo ""
 echo "Port Availability:"
@@ -389,10 +389,10 @@ df -h /srv/localrepo | tail -1
 
 echo ""
 echo "Package Counts:"
-echo "  Debian: $(find /srv/localrepo/debian/approved -name '*.deb' 2>/dev/null | wc -l)"
-echo "  RHEL: $(find /srv/localrepo/redhat/approved -name '*.rpm' 2>/dev/null | wc -l)"
-echo "  pip: $(ls /srv/localrepo/pip/approved 2>/dev/null | wc -l)"
-echo "  Docker: $(curl -s http://localhost:5000/v2/_catalog 2>/dev/null | jq -r '.repositories | length' || echo 'N/A')"
+echo " Debian: $(find /srv/localrepo/debian/approved -name '*.deb' 2>/dev/null | wc -l)"
+echo " RHEL: $(find /srv/localrepo/redhat/approved -name '*.rpm' 2>/dev/null | wc -l)"
+echo " pip: $(ls /srv/localrepo/pip/approved 2>/dev/null | wc -l)"
+echo " Docker: $(curl -s http://localhost:5000/v2/_catalog 2>/dev/null | jq -r '.repositories | length' || echo 'N/A')"
 ```
 
 ### Log Management
@@ -424,7 +424,7 @@ rm -rf /srv/localrepo/pip/cache/*
 npm cache clean --force
 ```
 
-## 🔧 Customization & Configuration
+## Customization & Configuration
 
 ### Adding More Debian/Ubuntu Versions
 
@@ -479,7 +479,7 @@ IMAGES=(
 )
 ```
 
-## 🔐 Security Hardening
+## Security Hardening
 
 ### Enable HTTPS
 
@@ -494,8 +494,8 @@ sudo openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
 # Change: listen 8080;
 # To: listen 8443 ssl;
 # Add:
-#   ssl_certificate /etc/nginx/ssl/repo.crt;
-#   ssl_certificate_key /etc/nginx/ssl/repo.key;
+# ssl_certificate /etc/nginx/ssl/repo.crt;
+# ssl_certificate_key /etc/nginx/ssl/repo.key;
 
 sudo nginx -t
 sudo systemctl restart nginx
@@ -509,8 +509,8 @@ sudo htpasswd -c /etc/nginx/.htpasswd repouser
 
 # Add to nginx config
 # location / {
-#     auth_basic "Restricted Repository";
-#     auth_basic_user_file /etc/nginx/.htpasswd;
+# auth_basic "Restricted Repository";
+# auth_basic_user_file /etc/nginx/.htpasswd;
 # }
 ```
 
@@ -527,7 +527,7 @@ sudo ufw allow from 192.168.1.0/24 to any port 8080
 sudo ufw allow from 192.168.1.0/24 to any port 5000
 ```
 
-## 📈 Performance Optimization
+## Performance Optimization
 
 ### Nginx Tuning
 

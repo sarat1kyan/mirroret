@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mirroret uninstaller — selective and full removal.
+# mirroret uninstaller - selective and full removal.
 # Run --help for the full flag reference.
 
 set -Eeuo pipefail

@@ -35,10 +35,10 @@ sudo MIRRORET_GPG_NAME="My Org Mirror" \
 **Distribute the key to APT clients:**
 
 ```bash
-# Option A — run the generated helper script on each client (requires curl):
+# Option A - run the generated helper script on each client (requires curl):
 bash <(curl -fsSL http://<mirror-ip>:8080/config/import-mirroret-gpg-key.sh)
 
-# Option B — manually import the binary keyring:
+# Option B - manually import the binary keyring:
 sudo mkdir -p /etc/apt/keyrings
 sudo curl -fsSL http://<mirror-ip>:8080/config/mirroret.gpg \
     -o /etc/apt/keyrings/mirroret.gpg
@@ -74,7 +74,7 @@ ${GPG} -abs -o Release.gpg Release
 ${GPG} --clearsign -o InRelease Release
 ```
 
-### Lab mode (insecure — opt in explicitly)
+### Lab mode (insecure - opt in explicitly)
 
 ```bash
 sudo ./install.sh --insecure
@@ -124,7 +124,7 @@ sudo MIRRORET_RPM_GPGKEY_URL=http://<mirror-ip>:8080/config/RPM-GPG-KEY-mirror \
      ./install.sh
 ```
 
-### Lab mode (insecure — opt in explicitly)
+### Lab mode (insecure - opt in explicitly)
 
 ```bash
 sudo MIRRORET_RPM_INSECURE=1 ./install.sh
@@ -139,7 +139,7 @@ Generates `gpgcheck=0` in client repo files. A security warning is printed.
 mirroret configures an nginx HTTPS listener in addition to the HTTP listener.
 TLS is opt-in; without it only HTTP is served.
 
-### Option A — auto-generate a self-signed certificate
+### Option A - auto-generate a self-signed certificate
 
 ```bash
 sudo ./install.sh --tls-self-signed
@@ -155,7 +155,7 @@ sudo MIRRORET_TLS_SELF_SIGNED=1 ./install.sh
 **Distribute the cert to clients:**
 
 ```bash
-# Debian/Ubuntu clients — trust the cert system-wide:
+# Debian/Ubuntu clients - trust the cert system-wide:
 sudo curl -fsSL http://<mirror-ip>:8080/config/cert.pem \
     -o /usr/local/share/ca-certificates/mirroret.crt
 sudo update-ca-certificates
@@ -165,7 +165,7 @@ sudo curl -fsSL http://<mirror-ip>:8080/config/cert.pem \
     -o /etc/pki/ca-trust/source/anchors/mirroret.crt
 sudo update-ca-trust extract
 
-# Docker clients — trust per-registry:
+# Docker clients - trust per-registry:
 sudo mkdir -p /etc/docker/certs.d/<mirror-ip>:5000
 sudo curl -fsSL http://<mirror-ip>:8080/config/cert.pem \
     -o /etc/docker/certs.d/<mirror-ip>:5000/ca.crt
@@ -176,7 +176,7 @@ sudo systemctl restart docker
 > already having TLS configured. This is acceptable because it is a public
 > certificate, not a secret.
 
-### Option B — bring your own certificate
+### Option B - bring your own certificate
 
 ```bash
 sudo MIRRORET_TLS_CERT=/etc/ssl/certs/server.crt \
@@ -195,7 +195,7 @@ sudo MIRRORET_TLS_PORT=443 MIRRORET_TLS_SELF_SIGNED=1 ./install.sh
 
 Remember to open the custom port in the firewall (see [NETWORK_ACCESS.md](NETWORK_ACCESS.md)).
 
-### No TLS (HTTP only — default)
+### No TLS (HTTP only - default)
 
 Do not pass `--tls-self-signed` or set `MIRRORET_TLS_CERT`/`MIRRORET_TLS_KEY`.
 The HTTP listener on port 8080 is always active.
@@ -228,7 +228,7 @@ sudo systemctl restart docker
 
 Import the mirror's TLS cert into Docker (see cert distribution above).
 
-### Lab mode — insecure registry (opt in)
+### Lab mode - insecure registry (opt in)
 
 ```bash
 sudo MIRRORET_DOCKER_INSECURE=1 ./install.sh
@@ -273,13 +273,13 @@ To require a username/password for repository access:
 
 ```bash
 # Create the password file:
-sudo apt-get install -y apache2-utils   # Debian/Ubuntu
-sudo dnf install -y httpd-tools         # RHEL/Rocky
+sudo apt-get install -y apache2-utils # Debian/Ubuntu
+sudo dnf install -y httpd-tools # RHEL/Rocky
 sudo htpasswd -c /etc/nginx/.htpasswd repouser
 
 # Add to the relevant location block in the nginx config:
-# /etc/nginx/sites-available/mirroret-unified   (Debian/Ubuntu)
-# /etc/nginx/conf.d/mirroret-unified.conf       (RHEL/Rocky)
+# /etc/nginx/sites-available/mirroret-unified (Debian/Ubuntu)
+# /etc/nginx/conf.d/mirroret-unified.conf (RHEL/Rocky)
 ```
 
 ```nginx
@@ -319,7 +319,7 @@ All package download requests are logged in nginx access logs:
 
 ```
 /var/log/nginx/mirroret-unified-access.log
-/var/log/nginx/mirroret-unified-tls-access.log   (when TLS is enabled)
+/var/log/nginx/mirroret-unified-tls-access.log (when TLS is enabled)
 ```
 
 pypiserver and Verdaccio logs:

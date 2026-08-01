@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #######################################################################
-# LEGACY — DO NOT USE
+# LEGACY - DO NOT USE
 # This file is the original monolithic installer. It contains every
 # critical issue documented in docs/DEEP_REVIEW.md (insecure-by-default
 # client configs, no rollback, runs services as root, etc.) and is
@@ -21,7 +21,7 @@ case "${MIRRORET_ALLOW_LEGACY:-0}" in
         ;;
 esac
 
-set -e  # Exit on error
+set -e # Exit on error
 
 # Colors for output
 RED='\033[0;31m'
@@ -33,7 +33,7 @@ NC='\033[0m' # No Color
 # Configuration
 REPO_BASE_DIR="/var/mirroret"
 WEB_PORT=8080
-SYNC_HOUR=2  # Hour for daily sync (2 AM)
+SYNC_HOUR=2 # Hour for daily sync (2 AM)
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
 # Logging
@@ -46,26 +46,26 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 print_header() {
     echo -e "${BLUE}"
-    echo "═══════════════════════════════════════════════════════════"
-    echo "  $1"
-    echo "═══════════════════════════════════════════════════════════"
+    echo "==========================================================="
+    echo " $1"
+    echo "==========================================================="
     echo -e "${NC}"
 }
 
 print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "${GREEN}[ok] $1${NC}"
 }
 
 print_error() {
-    echo -e "${RED}✗ $1${NC}"
+    echo -e "${RED}[no] $1${NC}"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠ $1${NC}"
+    echo -e "${YELLOW}[warn] $1${NC}"
 }
 
 print_info() {
-    echo -e "${BLUE}ℹ $1${NC}"
+    echo -e "${BLUE}[info] $1${NC}"
 }
 
 #######################################################################
@@ -188,15 +188,15 @@ configure_apt_mirror() {
     cat > /etc/apt/mirror.list << 'EOF'
 ############# config ##################
 #
-set base_path    /var/mirroret/mirror
-set mirror_path  $base_path/mirror
-set skel_path    $base_path/skel
-set var_path     $base_path/var
-set cleanscript  $var_path/clean.sh
-set defaultarch  amd64
+set base_path /var/mirroret/mirror
+set mirror_path $base_path/mirror
+set skel_path $base_path/skel
+set var_path $base_path/var
+set cleanscript $var_path/clean.sh
+set defaultarch amd64
 set postmirror_script $var_path/postmirror.sh
 set run_postmirror 0
-set nthreads     20
+set nthreads 20
 set _tilde 0
 #
 ############# end config ##############
@@ -363,9 +363,9 @@ if [ "$1" = "--auto-approve" ]; then
     AUTO_APPROVE=true
 fi
 
-echo "═══════════════════════════════════════════════════════════"
-echo "  Package Approval System"
-echo "═══════════════════════════════════════════════════════════"
+echo "==========================================================="
+echo " Package Approval System"
+echo "==========================================================="
 echo ""
 
 # Find new packages
@@ -426,7 +426,7 @@ else
 fi
 
 echo ""
-echo "═══════════════════════════════════════════════════════════"
+echo "==========================================================="
 EOF
     
     chmod +x "$REPO_BASE_DIR/scripts/approve-packages.sh"
@@ -450,9 +450,9 @@ create_update_check_script() {
 REPO_BASE="/var/mirroret"
 LOG_FILE="$REPO_BASE/logs/update-check-$(date +%Y%m%d).log"
 
-echo "═══════════════════════════════════════════════════════════" | tee "$LOG_FILE"
-echo "  Update Check Report - $(date)" | tee -a "$LOG_FILE"
-echo "═══════════════════════════════════════════════════════════" | tee -a "$LOG_FILE"
+echo "===========================================================" | tee "$LOG_FILE"
+echo " Update Check Report - $(date)" | tee -a "$LOG_FILE"
+echo "===========================================================" | tee -a "$LOG_FILE"
 echo "" | tee -a "$LOG_FILE"
 
 # Detect distro type
@@ -476,7 +476,7 @@ elif [ -f /etc/redhat-release ]; then
 fi
 
 echo "" | tee -a "$LOG_FILE"
-echo "═══════════════════════════════════════════════════════════" | tee -a "$LOG_FILE"
+echo "===========================================================" | tee -a "$LOG_FILE"
 echo "Log saved to: $LOG_FILE"
 EOF
     
@@ -632,9 +632,9 @@ EOF
 
 APPROVED_DIR="/var/mirroret/approved"
 
-echo "═══════════════════════════════════════════════════════════"
-echo "  Available Packages in Approved Repository"
-echo "═══════════════════════════════════════════════════════════"
+echo "==========================================================="
+echo " Available Packages in Approved Repository"
+echo "==========================================================="
 echo ""
 
 if [ -f /etc/debian_version ]; then
@@ -688,12 +688,12 @@ generate_documentation() {
 
 \`\`\`
 $REPO_BASE_DIR/
-├── mirror/          # Downloaded packages from official repos
-├── approved/        # Approved packages ready for client use
-├── staging/         # Temporary staging area
-├── logs/           # Sync and operation logs
-├── scripts/        # Management scripts
-└── config/         # Client configuration files
++-- mirror/ # Downloaded packages from official repos
++-- approved/ # Approved packages ready for client use
++-- staging/ # Temporary staging area
++-- logs/ # Sync and operation logs
++-- scripts/ # Management scripts
++-- config/ # Client configuration files
 \`\`\`
 
 ## Management Scripts
@@ -798,9 +798,9 @@ Access the repository browser at: http://$SERVER_IP:$WEB_PORT/
 
 ## Workflow
 
-1. **Sync**: Download packages from official repos → \`mirror/\`
-2. **Review**: Check new packages → \`scripts/check-updates.sh\`
-3. **Approve**: Move approved packages → \`approved/\`
+1. **Sync**: Download packages from official repos -> \`mirror/\`
+2. **Review**: Check new packages -> \`scripts/check-updates.sh\`
+3. **Approve**: Move approved packages -> \`approved/\`
 4. **Serve**: Clients install from \`approved/\` via nginx
 
 ## Troubleshooting
@@ -863,50 +863,50 @@ print_summary() {
     print_header "Installation Complete!"
     
     echo ""
-    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Local Repository Server Successfully Installed!${NC}"
-    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}============================================================${NC}"
+    echo -e "${GREEN} Local Repository Server Successfully Installed!${NC}"
+    echo -e "${GREEN}============================================================${NC}"
     echo ""
     echo -e "${BLUE}Server Information:${NC}"
-    echo "  • Server IP: $SERVER_IP"
-    echo "  • Web Port: $WEB_PORT"
-    echo "  • Repository URL: http://$SERVER_IP:$WEB_PORT/"
-    echo "  • Base Directory: $REPO_BASE_DIR"
+    echo " * Server IP: $SERVER_IP"
+    echo " * Web Port: $WEB_PORT"
+    echo " * Repository URL: http://$SERVER_IP:$WEB_PORT/"
+    echo " * Base Directory: $REPO_BASE_DIR"
     echo ""
     echo -e "${BLUE}Quick Start:${NC}"
-    echo "  1. Initial sync:"
-    echo "     $REPO_BASE_DIR/scripts/sync-mirror.sh"
+    echo " 1. Initial sync:"
+    echo " $REPO_BASE_DIR/scripts/sync-mirror.sh"
     echo ""
-    echo "  2. Approve packages:"
-    echo "     $REPO_BASE_DIR/scripts/approve-packages.sh --auto-approve"
+    echo " 2. Approve packages:"
+    echo " $REPO_BASE_DIR/scripts/approve-packages.sh --auto-approve"
     echo ""
-    echo "  3. Configure clients:"
+    echo " 3. Configure clients:"
     if [ "$DISTRO_TYPE" = "debian" ]; then
-        echo "     wget http://$SERVER_IP:$WEB_PORT/config/localrepo.list"
-        echo "     sudo mv localrepo.list /etc/apt/sources.list.d/"
-        echo "     sudo apt update"
+        echo " wget http://$SERVER_IP:$WEB_PORT/config/localrepo.list"
+        echo " sudo mv localrepo.list /etc/apt/sources.list.d/"
+        echo " sudo apt update"
     else
-        echo "     wget http://$SERVER_IP:$WEB_PORT/config/localrepo.repo"
-        echo "     sudo mv localrepo.repo /etc/yum.repos.d/"
-        echo "     sudo dnf clean all && sudo dnf makecache"
+        echo " wget http://$SERVER_IP:$WEB_PORT/config/localrepo.repo"
+        echo " sudo mv localrepo.repo /etc/yum.repos.d/"
+        echo " sudo dnf clean all && sudo dnf makecache"
     fi
     echo ""
     echo -e "${BLUE}Management Scripts:${NC}"
-    echo "  • Check updates: $REPO_BASE_DIR/scripts/check-updates.sh"
-    echo "  • List packages: $REPO_BASE_DIR/scripts/list-packages.sh"
-    echo "  • Exclude package: $REPO_BASE_DIR/scripts/exclude-package.sh <name>"
+    echo " * Check updates: $REPO_BASE_DIR/scripts/check-updates.sh"
+    echo " * List packages: $REPO_BASE_DIR/scripts/list-packages.sh"
+    echo " * Exclude package: $REPO_BASE_DIR/scripts/exclude-package.sh <name>"
     echo ""
     echo -e "${BLUE}Documentation:${NC}"
-    echo "  • Full guide: $REPO_BASE_DIR/README.md"
-    echo "  • Log location: $REPO_BASE_DIR/logs/"
+    echo " * Full guide: $REPO_BASE_DIR/README.md"
+    echo " * Log location: $REPO_BASE_DIR/logs/"
     echo ""
     echo -e "${YELLOW}Next Steps:${NC}"
-    echo "  1. Run initial sync (may take several hours)"
-    echo "  2. Review and approve packages"
-    echo "  3. Configure client machines"
-    echo "  4. Test package installation from clients"
+    echo " 1. Run initial sync (may take several hours)"
+    echo " 2. Review and approve packages"
+    echo " 3. Configure client machines"
+    echo " 4. Test package installation from clients"
     echo ""
-    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}============================================================${NC}"
 }
 
 #######################################################################

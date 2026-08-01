@@ -3,21 +3,21 @@
 # Source this file; do not execute it directly.
 # Requires logging.sh, common.sh, distro.sh.
 
-# run_validation — comprehensive validation of the current installation.
+# run_validation - comprehensive validation of the current installation.
 # Prints a status report and exits non-zero if any critical check fails.
 run_validation() {
     section "Mirroret Installation Validation"
 
     local failures=0 rc=0
 
-    _check_commands;              rc=$?; failures=$(( failures + rc ))
-    _check_distro;                rc=$?; failures=$(( failures + rc ))
+    _check_commands; rc=$?; failures=$(( failures + rc ))
+    _check_distro; rc=$?; failures=$(( failures + rc ))
     _check_disk_space_validation; rc=$?; failures=$(( failures + rc ))
-    _check_directories;           rc=$?; failures=$(( failures + rc ))
-    _check_nginx_config;          rc=$?; failures=$(( failures + rc ))
-    _check_services;              rc=$?; failures=$(( failures + rc ))
-    _check_repo_metadata;         rc=$?; failures=$(( failures + rc ))
-    _check_client_configs;        rc=$?; failures=$(( failures + rc ))
+    _check_directories; rc=$?; failures=$(( failures + rc ))
+    _check_nginx_config; rc=$?; failures=$(( failures + rc ))
+    _check_services; rc=$?; failures=$(( failures + rc ))
+    _check_repo_metadata; rc=$?; failures=$(( failures + rc ))
+    _check_client_configs; rc=$?; failures=$(( failures + rc ))
 
     echo ""
     if [[ "$failures" -eq 0 ]]; then
@@ -30,7 +30,7 @@ run_validation() {
     return "$failures"
 }
 
-# print_status — quick status overview of running services.
+# print_status - quick status overview of running services.
 print_status() {
     section "Mirroret Status"
 
@@ -51,15 +51,15 @@ print_status() {
     local base_dir="${MIRRORET_BASE_DIR:-/srv/mirroret}"
     if [[ -d "$base_dir" ]]; then
         du -sh "${base_dir}"/* 2>/dev/null | while read -r size path; do
-            echo "  ${size}  ${path}"
+            echo " ${size} ${path}"
         done
     else
-        warn "  Base directory not found: ${base_dir}"
+        warn " Base directory not found: ${base_dir}"
     fi
 
     echo ""
     echo "Cron jobs:"
-    crontab -l 2>/dev/null | grep -i "mirroret\|sync" || echo "  (none found)"
+    crontab -l 2>/dev/null | grep -i "mirroret\|sync" || echo " (none found)"
 }
 
 # _status_registry - report the registry regardless of how it is run.
@@ -76,9 +76,9 @@ _status_registry() {
            systemctl list-unit-files --full --no-legend "${svc}.service" 2>/dev/null \
              | grep -q "${svc}.service"; then
             if service_is_active "$svc"; then
-                success "  ${svc}: running"
+                success " ${svc}: running"
             else
-                warn "  ${svc}: not running"
+                warn " ${svc}: not running"
             fi
             reported=1
         fi
@@ -89,10 +89,10 @@ _status_registry() {
     for rt in podman docker; do
         check_command "$rt" || continue
         if "$rt" ps --format '{{.Names}}' 2>/dev/null | grep -qx "$name"; then
-            success "  ${name}: running (${rt})"
+            success " ${name}: running (${rt})"
             reported=1
         elif "$rt" ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$name"; then
-            warn "  ${name}: exists but stopped (${rt})"
+            warn " ${name}: exists but stopped (${rt})"
             reported=1
         fi
     done
@@ -102,18 +102,18 @@ _status_registry() {
        systemctl list-unit-files --full --no-legend "${name}.service" 2>/dev/null \
          | grep -q "${name}.service"; then
         if service_is_active "$name"; then
-            success "  ${name}.service: running"
+            success " ${name}.service: running"
         else
-            warn "  ${name}.service: not running"
+            warn " ${name}.service: not running"
         fi
         reported=1
     fi
 
-    [[ "$reported" -eq 0 ]] && info "  no registry backend detected"
+    [[ "$reported" -eq 0 ]] && info " no registry backend detected"
     return 0
 }
 
-# ── Private check functions ──────────────────────────────────────────────────
+# -- Private check functions --------------------------------------------------
 
 _check_commands() {
     local fail=0
@@ -210,7 +210,7 @@ _check_nginx_config() {
         success "nginx config: valid"
     else
         warn "nginx config: INVALID"
-        nginx -t 2>&1 | while IFS= read -r line; do warn "  $line"; done
+        nginx -t 2>&1 | while IFS= read -r line; do warn " $line"; done
         (( fail += 1 )) || true
     fi
 
@@ -252,7 +252,7 @@ _check_repo_metadata() {
             success "APT metadata: found"
         else
             warn "APT metadata: Packages.gz not found in ${apt_approved}"
-            warn "  Run: dpkg-scanpackages ${apt_approved} | gzip > ${apt_approved}/Packages.gz"
+            warn " Run: dpkg-scanpackages ${apt_approved} | gzip > ${apt_approved}/Packages.gz"
             (( fail += 1 )) || true
         fi
     fi
@@ -267,7 +267,7 @@ _check_repo_metadata() {
             success "RPM metadata: found"
         else
             warn "RPM metadata: repomd.xml not found in ${rpm_approved}"
-            warn "  Run a sync first: ${base_dir}/scripts/sync-redhat-repos.sh"
+            warn " Run a sync first: ${base_dir}/scripts/sync-redhat-repos.sh"
             (( fail += 1 )) || true
         fi
     fi
