@@ -1,41 +1,41 @@
 # Unified Repository Server - Comprehensive Troubleshooting Guide
 
-## 🔍 General Diagnostics
+## General Diagnostics
 
 ### Quick Health Check Script
 ```bash
 #!/bin/bash
 # repo-health-check.sh
 
-echo "═══════════════════════════════════════════════════════"
-echo "  UNIFIED REPOSITORY SERVER - HEALTH CHECK"
-echo "═══════════════════════════════════════════════════════"
+echo "======================================================="
+echo " UNIFIED REPOSITORY SERVER - HEALTH CHECK"
+echo "======================================================="
 echo ""
 
 # Check services
 echo "[1] Service Status:"
 for service in nginx pypiserver verdaccio docker; do
     if systemctl is-active --quiet $service 2>/dev/null; then
-        echo "  ✓ $service: RUNNING"
+        echo " [ok] $service: RUNNING"
     else
-        echo "  ✗ $service: NOT RUNNING"
+        echo " [no] $service: NOT RUNNING"
     fi
 done
 
 # Check Docker registry container
 if docker ps | grep -q local-docker-registry; then
-    echo "  ✓ Docker Registry: RUNNING"
+    echo " [ok] Docker Registry: RUNNING"
 else
-    echo "  ✗ Docker Registry: NOT RUNNING"
+    echo " [no] Docker Registry: NOT RUNNING"
 fi
 
 echo ""
 echo "[2] Port Availability:"
 for port in 8080 8081 5000 4873; do
     if netstat -tuln | grep -q ":$port "; then
-        echo "  ✓ Port $port: LISTENING"
+        echo " [ok] Port $port: LISTENING"
     else
-        echo "  ✗ Port $port: NOT LISTENING"
+        echo " [no] Port $port: NOT LISTENING"
     fi
 done
 
@@ -48,19 +48,19 @@ echo "[4] Recent Errors:"
 grep -i error /srv/localrepo/logs/*.log 2>/dev/null | tail -5
 
 echo ""
-echo "═══════════════════════════════════════════════════════"
+echo "======================================================="
 ```
 
 ---
 
-## 🚨 Common Issues & Solutions
+## Common Issues & Solutions
 
 ### Issue 1: Nginx Won't Start
 
 **Symptoms:**
 ```bash
 $ systemctl status nginx
-● nginx.service - A high performance web server
+* nginx.service - A high performance web server
    Active: failed (Result: exit-code)
 ```
 
@@ -105,9 +105,9 @@ sudo systemctl restart nginx
 **C. Permission Issues**
 ```bash
 # Fix permissions
-sudo chown -R www-data:www-data /srv/localrepo  # Debian/Ubuntu
+sudo chown -R www-data:www-data /srv/localrepo # Debian/Ubuntu
 # or
-sudo chown -R nginx:nginx /srv/localrepo        # RHEL/CentOS
+sudo chown -R nginx:nginx /srv/localrepo # RHEL/CentOS
 
 sudo chmod -R 755 /srv/localrepo
 
@@ -185,7 +185,7 @@ apt-mirror
 **Symptoms:**
 ```bash
 $ systemctl status pypiserver
-● pypiserver.service - PyPI Server
+* pypiserver.service - PyPI Server
    Active: failed
 ```
 
@@ -405,9 +405,9 @@ sudo firewall-cmd --reload
 grep listen /etc/nginx/sites-available/unified-repo
 
 # Should be:
-# listen 8080;  (all interfaces)
+# listen 8080; (all interfaces)
 # NOT:
-# listen 127.0.0.1:8080;  (localhost only)
+# listen 127.0.0.1:8080; (localhost only)
 
 # Fix and restart
 sudo vim /etc/nginx/sites-available/unified-repo
@@ -492,8 +492,8 @@ sudo apt update
 **Symptoms:**
 ```bash
 $ df -h
-Filesystem      Size  Used Avail Use% Mounted on
-/dev/sda1       500G  500G     0 100% /srv
+Filesystem Size Used Avail Use% Mounted on
+/dev/sda1 500G 500G 0 100% /srv
 ```
 
 **Diagnosis:**
@@ -556,8 +556,8 @@ sudo vim /etc/apt/mirror.list
 **Diagnosis:**
 ```bash
 # Test network speed
-iperf3 -s  # On server
-iperf3 -c SERVER_IP  # On client
+iperf3 -s # On server
+iperf3 -c SERVER_IP # On client
 
 # Check nginx connections
 sudo ss -ant | grep :8080 | wc -l
@@ -591,7 +591,7 @@ sudo systemctl restart nginx
 ip link show
 
 # Test with different MTU
-sudo ip link set eth0 mtu 9000  # Jumbo frames if supported
+sudo ip link set eth0 mtu 9000 # Jumbo frames if supported
 
 # Check for packet loss
 ping -c 100 -f REPO_SERVER
@@ -610,7 +610,7 @@ iostat -x 1
 
 ---
 
-## 🔧 Service-Specific Troubleshooting
+## Service-Specific Troubleshooting
 
 ### Nginx Troubleshooting
 
@@ -694,7 +694,7 @@ systemctl restart verdaccio
 
 ---
 
-## 📊 Performance Monitoring
+## Performance Monitoring
 
 ### Real-Time Monitoring Script
 ```bash
@@ -737,7 +737,7 @@ awk '{print $4}' /var/log/nginx/unified-repo-access.log | cut -d: -f2 | sort | u
 
 ---
 
-## 🆘 Emergency Recovery
+## Emergency Recovery
 
 ### Complete Service Restart
 ```bash

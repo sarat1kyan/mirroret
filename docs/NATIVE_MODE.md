@@ -9,7 +9,7 @@ and systemd services. This is called **native mode**.
 
 - No container runtime required on the mirror server.
 - Simpler dependency chain on locked-down or minimal servers.
-- All services managed by standard `systemctl` — no container lifecycle.
+- All services managed by standard `systemctl` - no container lifecycle.
 - Works on a fresh minimal RHEL/Rocky/AlmaLinux/CentOS or Debian/Ubuntu install.
 
 ---
@@ -134,7 +134,7 @@ If `apt-mirror` is not found in the distro repos, mirroret automatically install
 
 ## Full native-only examples
 
-### RHEL 9 / Rocky 9 — no Docker or Podman
+### RHEL 9 / Rocky 9 - no Docker or Podman
 
 ```bash
 sudo MIRRORET_DOCKER_BACKEND=native \
@@ -143,7 +143,7 @@ sudo MIRRORET_DOCKER_BACKEND=native \
      ./install.sh
 ```
 
-### Debian 12 — apt-mirror not in repos
+### Debian 12 - apt-mirror not in repos
 
 ```bash
 sudo MIRRORET_DOCKER_BACKEND=native \
@@ -153,7 +153,7 @@ sudo MIRRORET_DOCKER_BACKEND=native \
      ./install.sh
 ```
 
-### Ubuntu 22.04 — APT and pip only, no Docker or npm
+### Ubuntu 22.04 - APT and pip only, no Docker or npm
 
 ```bash
 sudo MIRRORET_SERVER_IP=10.0.1.5 \
@@ -212,7 +212,7 @@ journalctl -u nginx -u pypiserver -u verdaccio -u docker-distribution -n 100 --n
 - **Docker image pre-seeding:** `sync-docker-images.sh` still requires `docker` or
   `podman` CLI installed on the mirror server to pull images from Docker Hub and push
   them to the local registry. The registry service itself does not need a container
-  runtime — only the CLI tool for the pull/push operations.
+  runtime - only the CLI tool for the pull/push operations.
 
 - **Verdaccio:** always installed as a native Node.js process via
   `npm install -g verdaccio`. Not a container.

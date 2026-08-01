@@ -3,7 +3,7 @@
 
 SHELL := /bin/bash
 # Production scripts (linted strictly).
-# mirroret.sh and mirroret-unified.sh are legacy reference files — kept for
+# mirroret.sh and mirroret-unified.sh are legacy reference files - kept for
 # comparison, not actively maintained, so excluded from strict lint.
 SCRIPTS := install.sh uninstall.sh mirroretctl $(wildcard lib/*.sh) $(wildcard scripts/*.sh)
 TEST_DIR := tests
@@ -12,34 +12,34 @@ TEST_DIR := tests
 
 all: lint test
 
-# ── Dependency check ──────────────────────────────────────────────────────────
+# -- Dependency check ----------------------------------------------------------
 
 check-deps:
 	@echo "Checking for required tools..."
 	@missing=""; \
 	for cmd in shellcheck shfmt bash; do \
 		if ! command -v $$cmd >/dev/null 2>&1; then \
-			echo "  MISSING: $$cmd"; \
+			echo " MISSING: $$cmd"; \
 			missing="$$missing $$cmd"; \
 		else \
-			echo "  OK:      $$cmd ($$( $$cmd --version 2>&1 | head -1 ))"; \
+			echo " OK: $$cmd ($$( $$cmd --version 2>&1 | head -1 ))"; \
 		fi; \
 	done; \
 	if command -v bats >/dev/null 2>&1; then \
-		echo "  OK:      bats ($$(bats --version 2>/dev/null))"; \
+		echo " OK: bats ($$(bats --version 2>/dev/null))"; \
 	else \
-		echo "  MISSING: bats (optional, for tests)"; \
+		echo " MISSING: bats (optional, for tests)"; \
 	fi; \
 	if [ -n "$$missing" ]; then \
 		echo ""; \
 		echo "Install missing tools:"; \
-		echo "  Ubuntu/Debian: apt-get install shellcheck shfmt"; \
-		echo "  RHEL/Fedora:   dnf install ShellCheck"; \
-		echo "  shfmt:         go install mvdan.cc/sh/v3/cmd/shfmt@latest"; \
-		echo "  bats:          npm install -g bats  OR  apt-get install bats"; \
+		echo " Ubuntu/Debian: apt-get install shellcheck shfmt"; \
+		echo " RHEL/Fedora: dnf install ShellCheck"; \
+		echo " shfmt: go install mvdan.cc/sh/v3/cmd/shfmt@latest"; \
+		echo " bats: npm install -g bats OR apt-get install bats"; \
 	fi
 
-# ── Linting ───────────────────────────────────────────────────────────────────
+# -- Linting -------------------------------------------------------------------
 
 lint: lint-shellcheck
 
@@ -52,7 +52,7 @@ lint-shellcheck:
 	@failed=0; \
 	for f in $(SCRIPTS); do \
 		if [ -f "$$f" ]; then \
-			echo "  $$f"; \
+			echo " $$f"; \
 			shellcheck --shell=bash --severity=warning --external-sources "$$f" || failed=1; \
 		fi; \
 	done; \
@@ -73,7 +73,7 @@ lint-tests:
 		$(TEST_DIR)/test_helpers.bash \
 		$(wildcard $(TEST_DIR)/*.bats) 2>/dev/null || true
 
-# ── Formatting ────────────────────────────────────────────────────────────────
+# -- Formatting ----------------------------------------------------------------
 
 format:
 	@if ! command -v shfmt >/dev/null 2>&1; then \
@@ -97,12 +97,12 @@ format-check:
 		echo "shfmt: all files properly formatted"; \
 	fi
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
+# -- Tests ---------------------------------------------------------------------
 
 test:
 	@if ! command -v bats >/dev/null 2>&1; then \
 		echo "bats not found. Install it to run tests."; \
-		echo "  npm install -g bats  OR  apt-get install bats"; \
+		echo " npm install -g bats OR apt-get install bats"; \
 		exit 1; \
 	fi
 	@echo "Running all unit+integration tests..."
@@ -123,7 +123,7 @@ test-verbose:
 	fi
 	@bats --show-output-of-passing-tests $(TEST_DIR)/*.bats
 
-# ── Validation ────────────────────────────────────────────────────────────────
+# -- Validation ----------------------------------------------------------------
 
 validate:
 	@if [ "$$(id -u)" -ne 0 ]; then \
@@ -132,44 +132,44 @@ validate:
 	fi
 	@bash install.sh --check
 
-# ── Dry run ───────────────────────────────────────────────────────────────────
+# -- Dry run -------------------------------------------------------------------
 
 dry-run:
 	@bash install.sh --dry-run --non-interactive
 
-# ── Uninstall preview ────────────────────────────────────────────────────────
+# -- Uninstall preview --------------------------------------------------------
 
 uninstall:
 	@bash uninstall.sh --list
 
-# ── Cleanup ───────────────────────────────────────────────────────────────────
+# -- Cleanup -------------------------------------------------------------------
 
 clean:
 	@echo "Removing temporary test artifacts..."
 	@rm -f /tmp/mirroret.*
 	@echo "Done."
 
-# ── Help ─────────────────────────────────────────────────────────────────────
+# -- Help ---------------------------------------------------------------------
 
 help:
 	@echo ""
 	@echo "mirroret Makefile targets:"
 	@echo ""
-	@echo "  make lint          Run shellcheck on all scripts"
-	@echo "  make format        Auto-format scripts with shfmt (in-place)"
-	@echo "  make format-check  Check formatting without modifying files"
-	@echo "  make test              Run every BATS test (no root needed)"
-	@echo "  make test-integration  Run integration tests subset"
-	@echo "  make test-all          Alias for 'make test'"
-	@echo "  make test-verbose      Run all tests with verbose output"
-	@echo "  make validate      Validate existing installation (requires root)"
-	@echo "  make dry-run       Preview what install.sh would do"
-	@echo "  make uninstall     Preview uninstall plan (sudo ./uninstall.sh for the real thing)"
-	@echo "  make check-deps    Check for required tools"
-	@echo "  make clean         Remove temp files"
-	@echo "  make help          Show this help"
+	@echo " make lint Run shellcheck on all scripts"
+	@echo " make format Auto-format scripts with shfmt (in-place)"
+	@echo " make format-check Check formatting without modifying files"
+	@echo " make test Run every BATS test (no root needed)"
+	@echo " make test-integration Run integration tests subset"
+	@echo " make test-all Alias for 'make test'"
+	@echo " make test-verbose Run all tests with verbose output"
+	@echo " make validate Validate existing installation (requires root)"
+	@echo " make dry-run Preview what install.sh would do"
+	@echo " make uninstall Preview uninstall plan (sudo ./uninstall.sh for the real thing)"
+	@echo " make check-deps Check for required tools"
+	@echo " make clean Remove temp files"
+	@echo " make help Show this help"
 	@echo ""
 	@echo "Required tools: shellcheck, shfmt, bats"
-	@echo "  Ubuntu: apt-get install shellcheck bats"
-	@echo "  shfmt:  go install mvdan.cc/sh/v3/cmd/shfmt@latest"
+	@echo " Ubuntu: apt-get install shellcheck bats"
+	@echo " shfmt: go install mvdan.cc/sh/v3/cmd/shfmt@latest"
 	@echo ""

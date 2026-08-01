@@ -17,8 +17,8 @@ sudo ./install.sh --list-backups
 Example output:
 
 ```
-  20260601-020000  (12 files)
-  20260604-143022  (8 files)
+  20260601-020000 (12 files)
+  20260604-143022 (8 files)
 ```
 
 ---
@@ -90,20 +90,20 @@ DRY_RUN=1 sudo ./install.sh --rollback 20260601-020000
 
 ```
 /var/backups/mirroret/
-└── 20260601-020000/
-    ├── backup.manifest          (list of OK/MISSING files)
-    └── etc/
-        ├── apt/
-        │   └── mirror.list
-        ├── nginx/
-        │   └── conf.d/
-        │       └── mirroret-unified.conf
-        ├── systemd/
-        │   └── system/
-        │       ├── pypiserver.service
-        │       └── verdaccio.service
-        └── verdaccio/
-            └── config.yaml
++-- 20260601-020000/
+    +-- backup.manifest (list of OK/MISSING files)
+    +-- etc/
+        +-- apt/
+        | +-- mirror.list
+        +-- nginx/
+        | +-- conf.d/
+        | +-- mirroret-unified.conf
+        +-- systemd/
+        | +-- system/
+        | +-- pypiserver.service
+        | +-- verdaccio.service
+        +-- verdaccio/
+            +-- config.yaml
 ```
 
 ---

@@ -1,15 +1,15 @@
 #!/usr/bin/env bats
 # Regression tests for the urgent-mode fixes:
-#   * Docker registry cache/hosted split + push-vs-proxy conflict
-#   * APT distro-aware upstreams (Debian uses Debian URLs, not Ubuntu)
-#   * APT signed-by no longer points at mirroret.gpg by default
-#   * RPM uses ${OS_ID}/ directory layout, not hardcoded rocky/
-#   * RPM repo list is parameterizable
-#   * get_server_ip multi-strategy fallback
-#   * Cron managed-block sentinel preserves unrelated lines
-#   * SELinux helpers are a no-op on non-SELinux hosts
-#   * Generated sync scripts parse cleanly (bash -n)
-#   * Generated sync scripts exit non-zero on failure (no tee masking)
+# * Docker registry cache/hosted split + push-vs-proxy conflict
+# * APT distro-aware upstreams (Debian uses Debian URLs, not Ubuntu)
+# * APT signed-by no longer points at mirroret.gpg by default
+# * RPM uses ${OS_ID}/ directory layout, not hardcoded rocky/
+# * RPM repo list is parameterizable
+# * get_server_ip multi-strategy fallback
+# * Cron managed-block sentinel preserves unrelated lines
+# * SELinux helpers are a no-op on non-SELinux hosts
+# * Generated sync scripts parse cleanly (bash -n)
+# * Generated sync scripts exit non-zero on failure (no tee masking)
 
 load 'test_helpers'
 
@@ -42,7 +42,7 @@ teardown() {
     rm -rf "$TMPDIR"
 }
 
-# ── Docker registry cache vs hosted ───────────────────────────────────────────
+# -- Docker registry cache vs hosted -------------------------------------------
 
 @test "docker: MIRRORET_DOCKER_MODE defaults to cache" {
     [[ "${MIRRORET_DOCKER_MODE:-cache}" == "cache" ]]
@@ -112,7 +112,7 @@ teardown() {
     [ "$output" = "0" ]
 }
 
-# ── APT distro-aware upstream ─────────────────────────────────────────────────
+# -- APT distro-aware upstream -------------------------------------------------
 
 @test "apt: Debian uses deb.debian.org by default, not archive.ubuntu.com" {
     mock_os_release "debian" "12" "bookworm"
@@ -124,7 +124,7 @@ teardown() {
     backup_id="$(MIRRORET_BACKUP_BASE="${TMPDIR}/backups" new_backup_id)"
     # Use debmirror to avoid needing apt-get during the test.
     MIRRORET_APT_MIRROR_TOOL=debmirror
-    DRY_RUN=1   # don't actually try to install debmirror
+    DRY_RUN=1 # don't actually try to install debmirror
     configure_apt_mirror "$backup_id"
     [[ "${MIRRORET_APT_NGINX_PREFIX}" == "/debian" ]]
 }
@@ -190,7 +190,7 @@ teardown() {
     grep -q "10.20.30.40:8080/ubuntu " "${TMPDIR}/sources.list"
 }
 
-# ── RPM flavor + repos ────────────────────────────────────────────────────────
+# -- RPM flavor + repos --------------------------------------------------------
 
 @test "rpm: AlmaLinux server lays out under almalinux/, not rocky/" {
     mock_os_release "almalinux" "9.3"
@@ -272,7 +272,7 @@ teardown() {
     bash -n "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
 }
 
-# ── Server IP detection ───────────────────────────────────────────────────────
+# -- Server IP detection -------------------------------------------------------
 
 @test "ip: MIRRORET_SERVER_IP override returns immediately" {
     source "${SCRIPT_DIR}/lib/common.sh"
@@ -304,7 +304,7 @@ EOF
     rm -rf "$stub"
 }
 
-# ── Cron sentinel safety ──────────────────────────────────────────────────────
+# -- Cron sentinel safety ------------------------------------------------------
 
 @test "cron: managed block strip preserves unrelated lines" {
     existing="0 1 * * * /home/user/backup.sh
@@ -333,7 +333,7 @@ EOF
     echo "$stripped" | grep -qvF "/srv/mirroret/scripts/sync-all.sh"
 }
 
-# ── SELinux helpers ───────────────────────────────────────────────────────────
+# -- SELinux helpers -----------------------------------------------------------
 
 @test "selinux: selinux_mode returns 'absent' on non-SELinux hosts" {
     result="$(selinux_mode)"
@@ -349,7 +349,7 @@ EOF
     [ "$status" -eq 0 ]
 }
 
-# ── Generated sync scripts: clean bash -n + honest exits ──────────────────────
+# -- Generated sync scripts: clean bash -n + honest exits ----------------------
 
 @test "sync: generated pip sync script parses cleanly" {
     DRY_RUN=0
@@ -395,7 +395,7 @@ EOF
     grep -q 'wrap at 256' "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
 }
 
-# ── Outbound HTTPS probes: don't false-flag healthy upstreams ─────────────────
+# -- Outbound HTTPS probes: don't false-flag healthy upstreams -----------------
 
 @test "preflight: outbound probe does NOT use curl -f (would 4xx-flag healthy upstreams)" {
     # registry-1.docker.io legitimately returns 404 at / and 401 at /v2/,
@@ -413,7 +413,7 @@ EOF
 
 @test "preflight: outbound probe targets Docker /v2/, not /" {
     # If we ever probe registry-1.docker.io/ instead of /v2/, the probe
-    # has to treat 404 as success — otherwise the bug we just fixed
+    # has to treat 404 as success - otherwise the bug we just fixed
     # comes back. Easier to just target /v2/.
     source "${SCRIPT_DIR}/lib/preflight.sh"
     run declare -f _pf_check_outbound_https
@@ -428,7 +428,7 @@ EOF
     grep -q "registry-1.docker.io|/v2/" "${SCRIPT_DIR}/scripts/mirroret-debug.sh"
 }
 
-# ── Real-world fixes (from 2026-07-01 log review) ────────────────────────────
+# -- Real-world fixes (from 2026-07-01 log review) ----------------------------
 
 @test "docker: _docker_proxy_run_args emits -e HTTP_PROXY when set" {
     source "${SCRIPT_DIR}/lib/logging.sh"
@@ -468,7 +468,7 @@ EOF
     source "${SCRIPT_DIR}/lib/common.sh"
     source "${SCRIPT_DIR}/lib/docker_registry.sh"
     unset HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy
-    DRY_RUN=0   # even in live mode, we must not create the file.
+    DRY_RUN=0 # even in live mode, we must not create the file.
     tmp="$(mktemp -d)"
     _write_service_proxy_dropin "docker-distribution" 2>/dev/null || true
     [ ! -d /etc/systemd/system/docker-distribution.service.d ] || \
@@ -499,7 +499,7 @@ EOF
     section="$(awk '/_pf_check_rhel_subscription/,/^}/' "${SCRIPT_DIR}/lib/preflight.sh")"
     [[ "$section" == *"Registered)"* ]]
     # And the alarming message must NOT be in the Registered branch.
-    reg_branch="$(printf '%s\n' "$section" | awk '/^        Registered\)/,/;;/')"
+    reg_branch="$(printf '%s\n' "$section" | awk '/^ Registered\)/,/;;/')"
     [[ "$reg_branch" != *"dnf install will likely fail"* ]]
 }
 
@@ -511,7 +511,7 @@ EOF
 @test "nginx: newly-written config is restorecon'd on SELinux hosts" {
     # Regression: on RHEL SELinux enforcing, a file created under
     # /etc/nginx/ by an unconfined process inherits etc_t which httpd_t
-    # cannot read — nginx -t then fails with "Permission denied". The
+    # cannot read - nginx -t then fails with "Permission denied". The
     # fix is to call restorecon on the freshly-written config file.
     grep -q 'restorecon "\$conf_file"' "${SCRIPT_DIR}/lib/nginx.sh"
     # Also the TLS-append path must restorecon after appending.
@@ -544,7 +544,7 @@ EOF
         [[ "$section" == *'generate_rpm_client_config'*'DISTRO_TYPE'* ]]
 }
 
-# ── Sync safety guards (runaway-download incident, 2026-07-22) ────────────────
+# -- Sync safety guards (runaway-download incident, 2026-07-22) ----------------
 
 @test "rpm: reposync pins arch (prevents src.rpm runaway)" {
     # A real sync pulled 44k .src.rpm files (400-600 MB each) because
@@ -638,7 +638,7 @@ EOF
     done
 }
 
-# ── Audit round 2 (2026-07-22 full-repo audit) ────────────────────────────────
+# -- Audit round 2 (2026-07-22 full-repo audit) --------------------------------
 
 @test "nginx: logs and scripts dirs are denied over HTTP" {
     grep -q 'logs|scripts|staging' "${SCRIPT_DIR}/lib/nginx.sh"

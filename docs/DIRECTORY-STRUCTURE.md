@@ -3,90 +3,90 @@
 ## Complete Directory Structure
 
 ```
-/var/mirroret/                              # Main repository base
-│
-├── mirror/                                    # Downloaded packages from official repos
-│   ├── mirror/                               # (Debian/Ubuntu) Mirror structure
-│   │   └── archive.ubuntu.com/
-│   │       └── ubuntu/
-│   │           ├── dists/
-│   │           │   ├── jammy/
-│   │           │   ├── jammy-updates/
-│   │           │   └── jammy-security/
-│   │           └── pool/
-│   │               ├── main/
-│   │               ├── restricted/
-│   │               ├── universe/
-│   │               └── multiverse/
-│   │
-│   ├── centos/                               # (RHEL/CentOS) Mirror structure
-│   │   └── 9/
-│   │       ├── baseos/
-│   │       ├── appstream/
-│   │       └── extras/
-│   │
-│   ├── var/                                  # apt-mirror working directory
-│   │   ├── clean.sh                          # Cleanup script
-│   │   └── postmirror.sh                     # Post-sync hook
-│   │
-│   └── skel/                                 # Skeleton structure
-│
-├── approved/                                  # Approved packages for client use
-│   ├── mirror/                               # (Debian/Ubuntu) Approved packages
-│   │   ├── Packages                          # Package index (plain text)
-│   │   ├── Packages.gz                       # Package index (compressed)
-│   │   ├── Release                           # Release information
-│   │   └── [.deb files]                      # Individual package files
-│   │
-│   ├── ubuntu/                               # Ubuntu-specific packages
-│   ├── debian/                               # Debian-specific packages
-│   ├── centos/                               # (RHEL/CentOS) Approved packages
-│   │   └── 9/
-│   │       ├── baseos/
-│   │       │   └── repodata/                 # Repository metadata
-│   │       ├── appstream/
-│   │       └── extras/
-│   │
-│   └── rhel/                                 # RHEL-specific packages
-│
-├── staging/                                   # Temporary staging area for testing
-│   ├── test-packages/                        # Packages under review
-│   └── quarantine/                           # Suspicious packages
-│
-├── archive/                                   # Historical package versions
-│   ├── 2024-01/                              # Monthly archives
-│   ├── 2024-02/
-│   └── rollback-20240115/                    # Rollback snapshots
-│
-├── logs/                                      # All system logs
-│   ├── sync-20240115-020000.log              # Sync operation logs
-│   ├── approval-20240115.log                 # Approval activity
-│   ├── security-updates-20240115.log         # Security update tracking
-│   ├── manual-review-queue.txt               # Queue for manual review
-│   └── client-access.log                     # Client access logs (from nginx)
-│
-├── scripts/                                   # Management automation scripts
-│   ├── sync-mirror.sh                        # Main sync script (auto via cron)
-│   ├── approve-packages.sh                   # Package approval script
-│   ├── check-updates.sh                      # Show available updates
-│   ├── list-packages.sh                      # List all packages
-│   ├── exclude-package.sh                    # Add to blacklist
-│   ├── show-updates.sh                       # Compare mirror vs approved
-│   ├── package-info.sh                       # Detailed package information
-│   ├── detect-security-updates.sh            # Security update detection
-│   ├── check-cve.sh                          # CVE vulnerability check
-│   ├── test-package-docker.sh                # Isolated testing with Docker
-│   ├── auto-approve-rules.sh                 # Rule-based auto-approval
-│   ├── rollback-package.sh                   # Version rollback
-│   └── manage-blacklist.sh                   # Blacklist management
-│
-└── config/                                    # Configuration files
-    ├── localrepo.list                        # Debian/Ubuntu client config
-    ├── localrepo.repo                        # RHEL/CentOS/Fedora client config
-    ├── approved-packages.txt                 # Whitelist
-    ├── blacklist-packages.txt                # Blacklist
-    ├── excluded-packages.txt                 # Exclusion list
-    └── approval-rules.conf                   # Auto-approval rules
+/var/mirroret/ # Main repository base
+|
++-- mirror/ # Downloaded packages from official repos
+| +-- mirror/ # (Debian/Ubuntu) Mirror structure
+| | +-- archive.ubuntu.com/
+| | +-- ubuntu/
+| | +-- dists/
+| | | +-- jammy/
+| | | +-- jammy-updates/
+| | | +-- jammy-security/
+| | +-- pool/
+| | +-- main/
+| | +-- restricted/
+| | +-- universe/
+| | +-- multiverse/
+| |
+| +-- centos/ # (RHEL/CentOS) Mirror structure
+| | +-- 9/
+| | +-- baseos/
+| | +-- appstream/
+| | +-- extras/
+| |
+| +-- var/ # apt-mirror working directory
+| | +-- clean.sh # Cleanup script
+| | +-- postmirror.sh # Post-sync hook
+| |
+| +-- skel/ # Skeleton structure
+|
++-- approved/ # Approved packages for client use
+| +-- mirror/ # (Debian/Ubuntu) Approved packages
+| | +-- Packages # Package index (plain text)
+| | +-- Packages.gz # Package index (compressed)
+| | +-- Release # Release information
+| | +-- [.deb files] # Individual package files
+| |
+| +-- ubuntu/ # Ubuntu-specific packages
+| +-- debian/ # Debian-specific packages
+| +-- centos/ # (RHEL/CentOS) Approved packages
+| | +-- 9/
+| | +-- baseos/
+| | | +-- repodata/ # Repository metadata
+| | +-- appstream/
+| | +-- extras/
+| |
+| +-- rhel/ # RHEL-specific packages
+|
++-- staging/ # Temporary staging area for testing
+| +-- test-packages/ # Packages under review
+| +-- quarantine/ # Suspicious packages
+|
++-- archive/ # Historical package versions
+| +-- 2024-01/ # Monthly archives
+| +-- 2024-02/
+| +-- rollback-20240115/ # Rollback snapshots
+|
++-- logs/ # All system logs
+| +-- sync-20240115-020000.log # Sync operation logs
+| +-- approval-20240115.log # Approval activity
+| +-- security-updates-20240115.log # Security update tracking
+| +-- manual-review-queue.txt # Queue for manual review
+| +-- client-access.log # Client access logs (from nginx)
+|
++-- scripts/ # Management automation scripts
+| +-- sync-mirror.sh # Main sync script (auto via cron)
+| +-- approve-packages.sh # Package approval script
+| +-- check-updates.sh # Show available updates
+| +-- list-packages.sh # List all packages
+| +-- exclude-package.sh # Add to blacklist
+| +-- show-updates.sh # Compare mirror vs approved
+| +-- package-info.sh # Detailed package information
+| +-- detect-security-updates.sh # Security update detection
+| +-- check-cve.sh # CVE vulnerability check
+| +-- test-package-docker.sh # Isolated testing with Docker
+| +-- auto-approve-rules.sh # Rule-based auto-approval
+| +-- rollback-package.sh # Version rollback
+| +-- manage-blacklist.sh # Blacklist management
+|
++-- config/ # Configuration files
+    +-- localrepo.list # Debian/Ubuntu client config
+    +-- localrepo.repo # RHEL/CentOS/Fedora client config
+    +-- approved-packages.txt # Whitelist
+    +-- blacklist-packages.txt # Blacklist
+    +-- excluded-packages.txt # Exclusion list
+    +-- approval-rules.conf # Auto-approval rules
 
 ```
 
@@ -94,27 +94,27 @@
 
 ### Nginx Configuration
 ```
-/etc/nginx/sites-available/mirroret         # (Debian/Ubuntu)
-/etc/nginx/sites-enabled/mirroret           # Symlink
-/etc/nginx/conf.d/mirroret.conf             # (RHEL/CentOS)
+/etc/nginx/sites-available/mirroret # (Debian/Ubuntu)
+/etc/nginx/sites-enabled/mirroret # Symlink
+/etc/nginx/conf.d/mirroret.conf # (RHEL/CentOS)
 ```
 
 ### Repository Configuration
 ```
-/etc/apt/mirror.list                          # apt-mirror config (Debian/Ubuntu)
+/etc/apt/mirror.list # apt-mirror config (Debian/Ubuntu)
 ```
 
 ### Cron Jobs
 ```
-/var/spool/cron/root                          # Root user crontab
+/var/spool/cron/root # Root user crontab
 # Contains: 0 2 * * * /var/mirroret/scripts/sync-mirror.sh
 ```
 
 ### Logs
 ```
-/var/log/nginx/mirroret-access.log          # Nginx access log
-/var/log/nginx/mirroret-error.log           # Nginx error log
-/var/log/mirroret-setup.log                 # Installation log
+/var/log/nginx/mirroret-access.log # Nginx access log
+/var/log/nginx/mirroret-error.log # Nginx error log
+/var/log/mirroret-setup.log # Installation log
 ```
 
 ## Disk Space Requirements
@@ -211,7 +211,7 @@ sudo /var/mirroret/scripts/show-updates.sh
 #### For Debian/Ubuntu Client:
 ```bash
 # On the client machine
-REPO_SERVER="192.168.1.100"  # Replace with your server IP
+REPO_SERVER="192.168.1.100" # Replace with your server IP
 
 # Backup original sources
 sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
@@ -236,7 +236,7 @@ sudo apt install htop
 #### For RHEL/CentOS Client:
 ```bash
 # On the client machine
-REPO_SERVER="192.168.1.100"  # Replace with your server IP
+REPO_SERVER="192.168.1.100" # Replace with your server IP
 
 # Backup original repos
 sudo mkdir -p /etc/yum.repos.d/backup
@@ -292,7 +292,7 @@ df -h /var/mirroret
 find /var/mirroret/logs -name "*.log" -mtime +30 -delete
 
 # 3. Archive old package versions
-/var/mirroret/scripts/archive-old-versions.sh  # Create this script
+/var/mirroret/scripts/archive-old-versions.sh # Create this script
 
 # 4. Review blacklist effectiveness
 /var/mirroret/scripts/manage-blacklist.sh
@@ -304,7 +304,7 @@ find /var/mirroret/logs -name "*.log" -mtime +30 -delete
 ### Monthly Tasks (1-2 hours)
 ```bash
 # 1. Full system audit
-/var/mirroret/scripts/audit-repository.sh  # Create comprehensive audit script
+/var/mirroret/scripts/audit-repository.sh # Create comprehensive audit script
 
 # 2. Review and update approval rules
 vim /var/mirroret/config/approval-rules.conf
@@ -333,7 +333,7 @@ tar -czf /backup/mirroret-config-$(date +%Y%m%d).tar.gz \
 ### 1. Mirror Sync Optimization
 ```bash
 # Edit /etc/apt/mirror.list
-set nthreads 20  # Increase parallel downloads (default: 20)
+set nthreads 20 # Increase parallel downloads (default: 20)
 
 # For faster syncing, use closest mirror
 # Example: Use local country mirror instead of main
@@ -418,7 +418,7 @@ time wget http://archive.ubuntu.com/ubuntu/README -O /dev/null
 du -sh /var/mirroret/* | sort -h
 
 # Clean old packages
-/var/mirroret/mirror/var/clean.sh  # For apt-mirror
+/var/mirroret/mirror/var/clean.sh # For apt-mirror
 
 # Remove old logs
 find /var/mirroret/logs -mtime +30 -delete

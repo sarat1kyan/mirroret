@@ -3,7 +3,7 @@
 This document covers every network connection mirroret makes or listens on.
 
 - **The mirror server** needs outbound internet access during installation and sync.
-- **Client machines** only need to reach the mirror server — not the internet.
+- **Client machines** only need to reach the mirror server - not the internet.
 
 ---
 
@@ -13,8 +13,8 @@ Open these on the mirror server's firewall. All ports are configurable via envir
 
 | Default port | Variable | Service | Required |
 |---|---|---|---|
-| 8080 | `MIRRORET_WEB_PORT` | nginx HTTP — APT, RPM, static files | Always |
-| 8443 | `MIRRORET_TLS_PORT` | nginx HTTPS — TLS listener | Only if TLS enabled |
+| 8080 | `MIRRORET_WEB_PORT` | nginx HTTP - APT, RPM, static files | Always |
+| 8443 | `MIRRORET_TLS_PORT` | nginx HTTPS - TLS listener | Only if TLS enabled |
 | 8081 | `MIRRORET_PIP_PORT` | pypiserver (pip/PyPI) | If pip enabled |
 | 5000 | `MIRRORET_DOCKER_REGISTRY_PORT` | Docker registry | If Docker enabled |
 | 4873 | `MIRRORET_NPM_PORT` | Verdaccio (npm) | If npm enabled |
@@ -22,16 +22,16 @@ Open these on the mirror server's firewall. All ports are configurable via envir
 The TLS port (8443) is only opened in the firewall automatically when `--tls-self-signed`
 or `MIRRORET_TLS_CERT`/`MIRRORET_TLS_KEY` are set.
 
-### Firewall commands — inbound (run on the mirror server)
+### Firewall commands - inbound (run on the mirror server)
 
 **UFW (Ubuntu/Debian):**
 
 ```bash
-sudo ufw allow 8080/tcp    # nginx HTTP
-sudo ufw allow 8443/tcp    # nginx HTTPS (only if TLS is enabled)
-sudo ufw allow 8081/tcp    # pypiserver / pip
-sudo ufw allow 5000/tcp    # Docker registry
-sudo ufw allow 4873/tcp    # Verdaccio / npm
+sudo ufw allow 8080/tcp # nginx HTTP
+sudo ufw allow 8443/tcp # nginx HTTPS (only if TLS is enabled)
+sudo ufw allow 8081/tcp # pypiserver / pip
+sudo ufw allow 5000/tcp # Docker registry
+sudo ufw allow 4873/tcp # Verdaccio / npm
 
 # Optional: restrict to a specific subnet only
 sudo ufw allow from 192.168.10.0/24 to any port 8080 proto tcp
@@ -44,11 +44,11 @@ sudo ufw allow from 192.168.10.0/24 to any port 4873 proto tcp
 
 ```bash
 # Open ports permanently in the default zone:
-sudo firewall-cmd --permanent --add-port=8080/tcp   # nginx HTTP
-sudo firewall-cmd --permanent --add-port=8443/tcp   # nginx HTTPS (only if TLS)
-sudo firewall-cmd --permanent --add-port=8081/tcp   # pypiserver
-sudo firewall-cmd --permanent --add-port=5000/tcp   # Docker registry
-sudo firewall-cmd --permanent --add-port=4873/tcp   # Verdaccio
+sudo firewall-cmd --permanent --add-port=8080/tcp # nginx HTTP
+sudo firewall-cmd --permanent --add-port=8443/tcp # nginx HTTPS (only if TLS)
+sudo firewall-cmd --permanent --add-port=8081/tcp # pypiserver
+sudo firewall-cmd --permanent --add-port=5000/tcp # Docker registry
+sudo firewall-cmd --permanent --add-port=4873/tcp # Verdaccio
 
 # Reload to apply:
 sudo firewall-cmd --reload
@@ -70,15 +70,15 @@ sudo firewall-cmd --reload
 
 ```bash
 # Allow inbound from anywhere (replace with your client subnet if desired):
-sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT   # nginx HTTP
-sudo iptables -A INPUT -p tcp --dport 8443 -j ACCEPT   # nginx HTTPS
-sudo iptables -A INPUT -p tcp --dport 8081 -j ACCEPT   # pypiserver
-sudo iptables -A INPUT -p tcp --dport 5000 -j ACCEPT   # Docker registry
-sudo iptables -A INPUT -p tcp --dport 4873 -j ACCEPT   # Verdaccio
+sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT # nginx HTTP
+sudo iptables -A INPUT -p tcp --dport 8443 -j ACCEPT # nginx HTTPS
+sudo iptables -A INPUT -p tcp --dport 8081 -j ACCEPT # pypiserver
+sudo iptables -A INPUT -p tcp --dport 5000 -j ACCEPT # Docker registry
+sudo iptables -A INPUT -p tcp --dport 4873 -j ACCEPT # Verdaccio
 
 # Persist rules (choose one):
-sudo iptables-save > /etc/iptables/rules.v4          # Debian/Ubuntu
-sudo service iptables save                            # RHEL/Rocky
+sudo iptables-save > /etc/iptables/rules.v4 # Debian/Ubuntu
+sudo service iptables save # RHEL/Rocky
 ```
 
 > `install.sh` calls `configure_firewall()` which automatically adds inbound rules via
@@ -98,7 +98,7 @@ tools. After installation they are not needed unless you reinstall.
 
 | Destination | Port | Protocol | Purpose |
 |---|---|---|---|
-| `archive.ubuntu.com` | 80 | HTTP | `apt-get install nginx, python3, nodejs…` |
+| `archive.ubuntu.com` | 80 | HTTP | `apt-get install nginx, python3, nodejs...` |
 | `security.ubuntu.com` | 80 | HTTP | Ubuntu security package index update |
 | `deb.debian.org` | 80 | HTTP | Same role on Debian (replaces archive.ubuntu.com) |
 
@@ -110,7 +110,7 @@ The exact hostnames depend on which distribution you run. All use HTTPS/443.
 
 | Destination | Port | Protocol | Purpose |
 |---|---|---|---|
-| `dl.rockylinux.org` | 443 | HTTPS | `dnf install nginx, createrepo_c, nodejs, podman…` |
+| `dl.rockylinux.org` | 443 | HTTPS | `dnf install nginx, createrepo_c, nodejs, podman...` |
 | `mirrors.rockylinux.org` | 443 | HTTPS | Mirror-list resolution (dnf uses this to find the fastest mirror) |
 
 **AlmaLinux 8 / 9:**
@@ -137,7 +137,7 @@ The exact hostnames depend on which distribution you run. All use HTTPS/443.
 | `mirror.stream.centos.org` | 443 | HTTPS | CentOS Stream package downloads |
 | `mirrors.centos.org` | 443 | HTTPS | Mirror-list resolution |
 
-#### All distributions — tools installed from the internet
+#### All distributions - tools installed from the internet
 
 | Destination | Port | Protocol | Purpose |
 |---|---|---|---|
@@ -149,15 +149,15 @@ The exact hostnames depend on which distribution you run. All use HTTPS/443.
 
 > **When is the container pull needed?**
 > Only when the Docker registry backend resolves to `container` mode.
-> On RHEL/Rocky 8 with `docker-distribution` available: native mode — no Docker Hub pull.
+> On RHEL/Rocky 8 with `docker-distribution` available: native mode - no Docker Hub pull.
 > On RHEL/Rocky 9 where `docker-distribution` is absent: Podman pulls `registry:2` from Docker Hub.
-> On Debian/Ubuntu with `docker-registry` package available: native mode — no Docker Hub pull.
+> On Debian/Ubuntu with `docker-registry` package available: native mode - no Docker Hub pull.
 
 > **Air-gapped install:** If you pre-install all OS packages manually (`nginx`, `python3`,
 > `nodejs`, `npm`, `podman` or `docker-distribution`, etc.) none of the above are needed.
 > See section 5 for full offline instructions.
 
-### 2b. During sync (recurring — runs via cron daily)
+### 2b. During sync (recurring - runs via cron daily)
 
 These hosts are contacted every time the mirror syncs packages.
 
@@ -218,16 +218,16 @@ These hosts are contacted every time the mirror syncs packages.
 Most Linux distributions allow all outbound traffic by default. If your security
 policy requires explicit outbound rules, add these.
 
-**UFW — allow outbound:**
+**UFW - allow outbound:**
 
 ```bash
 # Usually outbound is allowed by default. To be explicit:
-sudo ufw allow out to any port 80 proto tcp    # apt-get (HTTP)
-sudo ufw allow out to any port 443 proto tcp   # all HTTPS destinations
-sudo ufw allow out to any port 53 proto udp    # DNS (required for hostname resolution)
+sudo ufw allow out to any port 80 proto tcp # apt-get (HTTP)
+sudo ufw allow out to any port 443 proto tcp # all HTTPS destinations
+sudo ufw allow out to any port 53 proto udp # DNS (required for hostname resolution)
 ```
 
-**firewalld — outbound is permitted by default in standard zones.**
+**firewalld - outbound is permitted by default in standard zones.**
 If using a `drop` or custom zone, add outbound rules explicitly:
 
 ```bash
@@ -239,9 +239,9 @@ sudo firewall-cmd --reload
 
 ---
 
-## 4. Summary table — all rules at a glance
+## 4. Summary table - all rules at a glance
 
-### Inbound (clients → mirror server)
+### Inbound (clients -> mirror server)
 
 | Port | Proto | Direction | Service | When |
 |---|---|---|---|---|
@@ -251,7 +251,7 @@ sudo firewall-cmd --reload
 | 5000 | TCP | IN | Docker registry | Docker enabled |
 | 4873 | TCP | IN | Verdaccio | npm enabled |
 
-### Outbound (mirror server → internet)
+### Outbound (mirror server -> internet)
 
 | Port | Proto | Direction | Destination | When |
 |---|---|---|---|---|
@@ -286,7 +286,7 @@ If the mirror server has no internet access at all:
    dnf download --resolve nginx createrepo_c yum-utils python3 python3-pip wget curl rsync cronie \
        policycoreutils-python-utils nodejs npm podman docker-distribution
    # Then on the air-gapped server: dnf localinstall *.rpm
-   # Note: docker-distribution may not exist on RHEL 9 — skip it; podman will be the container backend.
+   # Note: docker-distribution may not exist on RHEL 9 - skip it; podman will be the container backend.
    ```
 
 2. Install `verdaccio`, `pypiserver`, and `registry:2` from offline sources:

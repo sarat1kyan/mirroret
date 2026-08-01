@@ -6,21 +6,21 @@
 # Retention is OPT-IN. The default policy is "keep everything forever"
 # because that's what most mirror operators want. Enable via env:
 #
-#   MIRRORET_RETENTION_ENABLE=1        turn cleanup on
-#   MIRRORET_RETENTION_MODE=report     dry-run — logs what would be removed
-#   MIRRORET_RETENTION_MODE=prune      actually delete
+# MIRRORET_RETENTION_ENABLE=1 turn cleanup on
+# MIRRORET_RETENTION_MODE=report dry-run - logs what would be removed
+# MIRRORET_RETENTION_MODE=prune actually delete
 #
 # Per-ecosystem knobs (all take effect only when RETENTION_ENABLE=1):
-#   MIRRORET_RPM_KEEP_VERSIONS=3       keep 3 newest of each RPM (0 = disable)
-#   MIRRORET_PIP_KEEP_VERSIONS=3       keep 3 newest wheels/sdists per pkg
-#   MIRRORET_NPM_KEEP_DAYS=180         drop npm tarballs older than N days
-#   MIRRORET_DOCKER_GC=0               run registry garbage-collect (needs
-#                                      brief downtime; default off)
+# MIRRORET_RPM_KEEP_VERSIONS=3 keep 3 newest of each RPM (0 = disable)
+# MIRRORET_PIP_KEEP_VERSIONS=3 keep 3 newest wheels/sdists per pkg
+# MIRRORET_NPM_KEEP_DAYS=180 drop npm tarballs older than N days
+# MIRRORET_DOCKER_GC=0 run registry garbage-collect (needs
+# brief downtime; default off)
 #
 # Public API:
-#   run_retention          run all enabled retention steps
-#   retention_report       force report mode regardless of MODE env
-#   retention_prune        force prune mode regardless of MODE env
+# run_retention run all enabled retention steps
+# retention_report force report mode regardless of MODE env
+# retention_prune force prune mode regardless of MODE env
 
 MIRRORET_RETENTION_ENABLE="${MIRRORET_RETENTION_ENABLE:-0}"
 MIRRORET_RETENTION_MODE="${MIRRORET_RETENTION_MODE:-report}"
@@ -33,7 +33,7 @@ MIRRORET_DOCKER_GC="${MIRRORET_DOCKER_GC:-0}"
 # could not be rebuilt. run_retention turns this into a non-zero exit.
 RETENTION_METADATA_BROKEN=0
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# -- Helpers ------------------------------------------------------------------
 
 # _ret_int <name> <value> <default> - validate a numeric knob. A non-numeric
 # value used to make `[[ "$keep" -le 0 ]]` evaluate true, silently disabling
@@ -53,11 +53,11 @@ _ret_int() {
 _ret_mode() {
     case "${MIRRORET_RETENTION_MODE:-report}" in
         prune) echo prune ;;
-        *)     echo report ;;
+        *) echo report ;;
     esac
 }
 
-# _ret_do <label> <cmd...> — in prune mode run the command; in report mode
+# _ret_do <label> <cmd...> - in prune mode run the command; in report mode
 # log what would run. Never let a single failure abort the caller.
 _ret_do() {
     local label="$1"; shift
@@ -69,11 +69,11 @@ _ret_do() {
     if "$@"; then
         info "[pruned] ${label}"
     else
-        warn "[fail]  ${label}"
+        warn "[fail] ${label}"
     fi
 }
 
-# ── RPM: keep N newest of each package name ──────────────────────────────────
+# -- RPM: keep N newest of each package name ----------------------------------
 
 retention_rpm_prune() {
     local keep
@@ -93,7 +93,7 @@ retention_rpm_prune() {
 
     local createrepo_cmd
     if check_command createrepo_c; then createrepo_cmd=createrepo_c
-    elif check_command createrepo;   then createrepo_cmd=createrepo
+    elif check_command createrepo; then createrepo_cmd=createrepo
     else warn "createrepo not found. Skipping RPM retention."; return 0
     fi
 
@@ -108,13 +108,13 @@ retention_rpm_prune() {
         local old_list
         old_list="$(repomanage --keep="$keep" --old "$repo_dir" 2>/dev/null || true)"
         if [[ -z "$old_list" ]]; then
-            info "  nothing to prune"
+            info " nothing to prune"
             continue
         fi
 
         local count
         count="$(printf '%s\n' "$old_list" | wc -l | tr -d ' ')"
-        info "  ${count} old RPM(s) to prune"
+        info " ${count} old RPM(s) to prune"
 
         if [[ "$(_ret_mode)" == "prune" ]]; then
             printf '%s\n' "$old_list" | xargs -r rm -f
@@ -122,26 +122,26 @@ retention_rpm_prune() {
             # repomd.xml still advertises files that are gone and every
             # client dnf call hard-fails. Retry once, then surface loudly.
             if ! "${createrepo_cmd}" --update "$repo_dir" >/dev/null 2>&1; then
-                warn "  createrepo --update failed; retrying without --update"
+                warn " createrepo --update failed; retrying without --update"
                 if ! "${createrepo_cmd}" "$repo_dir" >/dev/null 2>&1; then
-                    error "  METADATA STALE for ${repo_dir}"
-                    error "  Packages were deleted but repodata was not rebuilt."
-                    error "  Clients will fail until you run: ${createrepo_cmd} ${repo_dir}"
+                    error " METADATA STALE for ${repo_dir}"
+                    error " Packages were deleted but repodata was not rebuilt."
+                    error " Clients will fail until you run: ${createrepo_cmd} ${repo_dir}"
                     RETENTION_METADATA_BROKEN=1
                     continue
                 fi
             fi
-            info "  [pruned] ${count} RPM(s) removed, metadata refreshed"
+            info " [pruned] ${count} RPM(s) removed, metadata refreshed"
         else
-            info "  [report] would remove ${count} RPM(s) — sample:"
+            info " [report] would remove ${count} RPM(s) - sample:"
             printf '%s\n' "$old_list" | head -3 | while IFS= read -r f; do
-                info "    ${f}"
+                info " ${f}"
             done
         fi
     done < <(find "$mirror_root" -type d -name repodata -print0 2>/dev/null)
 }
 
-# ── pip: keep N newest wheels/sdists per package ─────────────────────────────
+# -- pip: keep N newest wheels/sdists per package -----------------------------
 
 retention_pip_prune() {
     local keep
@@ -187,12 +187,12 @@ retention_pip_prune() {
 
             local total="${#all[@]}"
             if [[ "$total" -le "$keep" ]]; then
-                debug "  ${pkg}: ${total} version(s), within keep"
+                debug " ${pkg}: ${total} version(s), within keep"
                 continue
             fi
 
             local to_prune=$(( total - keep ))
-            info "  ${pkg}: ${total} version(s), pruning ${to_prune}"
+            info " ${pkg}: ${total} version(s), pruning ${to_prune}"
 
             local i=0
             for f in "${all[@]}"; do
@@ -209,7 +209,7 @@ retention_pip_prune() {
     done
 }
 
-# ── npm: delete tarballs older than N days ───────────────────────────────────
+# -- npm: delete tarballs older than N days -----------------------------------
 
 # _npm_storage_is_verdaccio <dir> - true when <dir> looks like a live
 # Verdaccio storage root (it keeps a package.json per package dir).
@@ -243,38 +243,38 @@ retention_npm_prune() {
         # the operator has explicitly accepted that.
         if _npm_storage_is_verdaccio "$dir"; then
             if [[ "${MIRRORET_NPM_PRUNE_STORAGE:-0}" != "1" ]]; then
-                warn "  ${dir} is a live Verdaccio storage root - skipping."
-                warn "  Raw .tgz deletion desyncs Verdaccio metadata (clients get 404)."
-                warn "  Prune properly with: npm unpublish <pkg>@<ver> --registry http://localhost:${MIRRORET_NPM_PORT:-4873}"
-                warn "  Or set MIRRORET_NPM_PRUNE_STORAGE=1 to override (not recommended)."
+                warn " ${dir} is a live Verdaccio storage root - skipping."
+                warn " Raw .tgz deletion desyncs Verdaccio metadata (clients get 404)."
+                warn " Prune properly with: npm unpublish <pkg>@<ver> --registry http://localhost:${MIRRORET_NPM_PORT:-4873}"
+                warn " Or set MIRRORET_NPM_PRUNE_STORAGE=1 to override (not recommended)."
                 continue
             fi
-            warn "  MIRRORET_NPM_PRUNE_STORAGE=1 - pruning a live Verdaccio store."
-            warn "  Verdaccio metadata may advertise removed versions afterwards."
+            warn " MIRRORET_NPM_PRUNE_STORAGE=1 - pruning a live Verdaccio store."
+            warn " Verdaccio metadata may advertise removed versions afterwards."
         fi
 
         local count
         count="$(find "$dir" -type f -name '*.tgz' -mtime "+${days}" 2>/dev/null | wc -l | tr -d ' ')"
         if [[ "$count" -eq 0 ]]; then
-            info "  nothing older than ${days} days"
+            info " nothing older than ${days} days"
             continue
         fi
 
-        info "  ${count} tarball(s) to prune"
+        info " ${count} tarball(s) to prune"
         if [[ "$(_ret_mode)" == "prune" ]]; then
             find "$dir" -type f -name '*.tgz' -mtime "+${days}" -delete 2>/dev/null || \
-                warn "  some tarballs could not be deleted"
-            info "  [pruned] ${count} tarball(s) removed"
+                warn " some tarballs could not be deleted"
+            info " [pruned] ${count} tarball(s) removed"
         else
-            info "  [report] would remove:"
+            info " [report] would remove:"
             find "$dir" -type f -name '*.tgz' -mtime "+${days}" 2>/dev/null | head -3 | \
-                while IFS= read -r f; do info "    ${f}"; done
+                while IFS= read -r f; do info " ${f}"; done
         fi
     done
 }
 
-# ── Docker registry: garbage-collect unreferenced blobs ──────────────────────
-# Requires a brief downtime (few seconds) — the registry must be stopped.
+# -- Docker registry: garbage-collect unreferenced blobs ----------------------
+# Requires a brief downtime (few seconds) - the registry must be stopped.
 
 retention_docker_gc() {
     [[ "${MIRRORET_DOCKER_GC:-0}" == "1" ]] || { debug "Docker GC disabled."; return 0; }
@@ -315,7 +315,7 @@ retention_docker_gc() {
 
     # If it's a native binary use that; otherwise fall back to podman run.
     if check_command registry; then
-        registry garbage-collect "$conf" 2>&1 | while IFS= read -r line; do info "  $line"; done || \
+        registry garbage-collect "$conf" 2>&1 | while IFS= read -r line; do info " $line"; done || \
             warn "GC returned non-zero"
     elif check_command podman; then
         info "Using podman to run garbage-collect against registry:2..."
@@ -324,7 +324,7 @@ retention_docker_gc() {
             -v "${base_dir}/docker/registry:/var/lib/registry" \
             -v "${conf}:/etc/docker/registry/config.yml:ro" \
             registry:2 garbage-collect /etc/docker/registry/config.yml 2>&1 | \
-            while IFS= read -r line; do info "  $line"; done || \
+            while IFS= read -r line; do info " $line"; done || \
             warn "GC returned non-zero"
     else
         warn "Neither registry binary nor podman available. Skipping GC."
@@ -335,9 +335,9 @@ retention_docker_gc() {
         warn "Failed to restart ${svc}. Run: systemctl start ${svc}"
 }
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# -- Public API ---------------------------------------------------------------
 
-# run_retention — run all enabled retention steps.
+# run_retention - run all enabled retention steps.
 run_retention() {
     if [[ "${MIRRORET_RETENTION_ENABLE:-0}" != "1" ]]; then
         info "Retention disabled (MIRRORET_RETENTION_ENABLE=0). Nothing to do."
@@ -347,16 +347,16 @@ run_retention() {
     local mode
     mode="$(_ret_mode)"
     section "Mirror retention (mode: ${mode})"
-    info "RPM keep-versions   : ${MIRRORET_RPM_KEEP_VERSIONS}"
-    info "pip keep-versions   : ${MIRRORET_PIP_KEEP_VERSIONS}"
-    info "npm keep-days       : ${MIRRORET_NPM_KEEP_DAYS}"
-    info "Docker GC           : ${MIRRORET_DOCKER_GC}"
+    info "RPM keep-versions : ${MIRRORET_RPM_KEEP_VERSIONS}"
+    info "pip keep-versions : ${MIRRORET_PIP_KEEP_VERSIONS}"
+    info "npm keep-days : ${MIRRORET_NPM_KEEP_DAYS}"
+    info "Docker GC : ${MIRRORET_DOCKER_GC}"
 
     RETENTION_METADATA_BROKEN=0
-    retention_rpm_prune    || true
-    retention_pip_prune    || true
-    retention_npm_prune    || true
-    retention_docker_gc    || true
+    retention_rpm_prune || true
+    retention_pip_prune || true
+    retention_npm_prune || true
+    retention_docker_gc || true
 
     if [[ "${RETENTION_METADATA_BROKEN}" == "1" ]]; then
         error "Retention finished but at least one repo has STALE METADATA."
@@ -367,7 +367,7 @@ run_retention() {
     success "Retention complete (mode: ${mode})."
 }
 
-# retention_report / retention_prune — one-shot overrides.
+# retention_report / retention_prune - one-shot overrides.
 retention_report() {
     MIRRORET_RETENTION_ENABLE=1 MIRRORET_RETENTION_MODE=report run_retention
 }

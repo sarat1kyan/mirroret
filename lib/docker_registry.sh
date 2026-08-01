@@ -4,25 +4,25 @@
 # Requires logging.sh, common.sh, backup.sh, distro.sh.
 #
 # Operating modes (MIRRORET_DOCKER_MODE):
-#   cache  — pull-through cache: registry transparently proxies upstream
-#            and caches every pulled layer. Pre-seed/push is NOT possible
-#            in this mode (the registry rejects pushes). This is the
-#            default — it is the most useful mode for offline-warming a
-#            cache from connected clients.
-#   hosted — local registry: accepts docker push from the mirror server
-#            and clients. No upstream proxy. Use this when you want to
-#            mirror a curated set of images and serve them air-gapped.
-#            The generated sync-docker-images.sh runs only in this mode.
+# cache - pull-through cache: registry transparently proxies upstream
+# and caches every pulled layer. Pre-seed/push is NOT possible
+# in this mode (the registry rejects pushes). This is the
+# default - it is the most useful mode for offline-warming a
+# cache from connected clients.
+# hosted - local registry: accepts docker push from the mirror server
+# and clients. No upstream proxy. Use this when you want to
+# mirror a curated set of images and serve them air-gapped.
+# The generated sync-docker-images.sh runs only in this mode.
 #
 # Backend (MIRRORET_DOCKER_BACKEND):
-#   auto      — try native OS package first, fall back to container
-#   native    — OS package (docker-distribution on RHEL, docker-registry
-#               on Debian). No container runtime required at runtime.
-#   container — registry:2 container via Docker or Podman.
+# auto - try native OS package first, fall back to container
+# native - OS package (docker-distribution on RHEL, docker-registry
+# on Debian). No container runtime required at runtime.
+# container - registry:2 container via Docker or Podman.
 #
 # Other knobs:
-#   MIRRORET_DOCKER_UPSTREAM_URL   upstream when MODE=cache (default Docker Hub)
-#   MIRRORET_DOCKER_IMAGES_FILE    path to plain-text image list (MODE=hosted)
+# MIRRORET_DOCKER_UPSTREAM_URL upstream when MODE=cache (default Docker Hub)
+# MIRRORET_DOCKER_IMAGES_FILE path to plain-text image list (MODE=hosted)
 
 MIRRORET_DOCKER_CONTAINER_NAME="${MIRRORET_DOCKER_CONTAINER_NAME:-mirroret-registry}"
 MIRRORET_DOCKER_BACKEND="${MIRRORET_DOCKER_BACKEND:-auto}"
@@ -30,7 +30,7 @@ MIRRORET_DOCKER_MODE="${MIRRORET_DOCKER_MODE:-cache}"
 MIRRORET_DOCKER_UPSTREAM_URL="${MIRRORET_DOCKER_UPSTREAM_URL:-https://registry-1.docker.io}"
 MIRRORET_DOCKER_IMAGES_FILE="${MIRRORET_DOCKER_IMAGES_FILE:-}"
 
-# ── Proxy propagation helpers ────────────────────────────────────────────────
+# -- Proxy propagation helpers ------------------------------------------------
 # The registry container (cache mode) must reach the upstream, and the
 # native docker-distribution / docker-registry services likewise. On hosts
 # behind a corporate proxy, systemd starts services with a MINIMAL env
@@ -38,7 +38,7 @@ MIRRORET_DOCKER_IMAGES_FILE="${MIRRORET_DOCKER_IMAGES_FILE:-}"
 # inject the proxy explicitly into both the container run and the native
 # service drop-in.
 
-# _docker_proxy_run_args — print the `-e HTTP_PROXY=... -e HTTPS_PROXY=... -e NO_PROXY=...`
+# _docker_proxy_run_args - print the `-e HTTP_PROXY=... -e HTTPS_PROXY=... -e NO_PROXY=...`
 # argument list for `podman run` / `docker run`. Empty when no proxy env is set.
 _docker_proxy_run_args() {
     local args=""
@@ -46,13 +46,13 @@ _docker_proxy_run_args() {
     local http_p="${HTTP_PROXY:-${http_proxy:-}}"
     local https_p="${HTTPS_PROXY:-${https_proxy:-}}"
     local no_p="${NO_PROXY:-${no_proxy:-}}"
-    [[ -n "$http_p"  ]] && args+=" -e HTTP_PROXY=${http_p} -e http_proxy=${http_p}"
+    [[ -n "$http_p" ]] && args+=" -e HTTP_PROXY=${http_p} -e http_proxy=${http_p}"
     [[ -n "$https_p" ]] && args+=" -e HTTPS_PROXY=${https_p} -e https_proxy=${https_p}"
-    [[ -n "$no_p"    ]] && args+=" -e NO_PROXY=${no_p} -e no_proxy=${no_p}"
+    [[ -n "$no_p" ]] && args+=" -e NO_PROXY=${no_p} -e no_proxy=${no_p}"
     printf '%s' "${args}"
 }
 
-# _write_service_proxy_dropin <service-name> — write a systemd drop-in that
+# _write_service_proxy_dropin <service-name> - write a systemd drop-in that
 # injects proxy env into the given service. No-op if no proxy env is set.
 _write_service_proxy_dropin() {
     local svc="$1"
@@ -61,7 +61,7 @@ _write_service_proxy_dropin() {
     local no_p="${NO_PROXY:-${no_proxy:-}}"
 
     if [[ -z "$http_p" && -z "$https_p" && -z "$no_p" ]]; then
-        debug "No proxy env in installer shell — skipping ${svc} proxy drop-in."
+        debug "No proxy env in installer shell - skipping ${svc} proxy drop-in."
         return 0
     fi
 
@@ -76,19 +76,19 @@ _write_service_proxy_dropin() {
     mkdir -p "$dir"
     {
         printf '[Service]\n'
-        [[ -n "$http_p"  ]] && printf 'Environment="HTTP_PROXY=%s"\n'  "$http_p"  \
+        [[ -n "$http_p" ]] && printf 'Environment="HTTP_PROXY=%s"\n' "$http_p" \
                              && printf 'Environment="http_proxy=%s"\n' "$http_p"
         [[ -n "$https_p" ]] && printf 'Environment="HTTPS_PROXY=%s"\n' "$https_p" \
                              && printf 'Environment="https_proxy=%s"\n' "$https_p"
-        [[ -n "$no_p"    ]] && printf 'Environment="NO_PROXY=%s"\n'   "$no_p"    \
-                             && printf 'Environment="no_proxy=%s"\n'  "$no_p"
+        [[ -n "$no_p" ]] && printf 'Environment="NO_PROXY=%s"\n' "$no_p" \
+                             && printf 'Environment="no_proxy=%s"\n' "$no_p"
     } > "$file"
     info "Wrote proxy drop-in for ${svc}: ${file}"
 }
 
-# ── Container runtime detection ───────────────────────────────────────────────
+# -- Container runtime detection -----------------------------------------------
 
-# _detect_container_runtime — set CONTAINER_CMD to 'podman' or 'docker'.
+# _detect_container_runtime - set CONTAINER_CMD to 'podman' or 'docker'.
 # On RHEL, podman-docker provides a 'docker' shim; we detect that and use
 # podman directly so we can also generate a proper systemd unit for it.
 _detect_container_runtime() {
@@ -104,10 +104,10 @@ _detect_container_runtime() {
         info "Docker not found; using Podman directly."
         CONTAINER_CMD="podman"
     else
-        # No runtime found — attempt to auto-install Podman (BaseOS on
+        # No runtime found - attempt to auto-install Podman (BaseOS on
         # RHEL/Rocky/Alma, universe on Ubuntu).
-        info "No container runtime found — attempting to install podman..."
-        # shellcheck disable=SC2086  # PKG_MGR_INSTALL is intentionally word-split
+        info "No container runtime found - attempting to install podman..."
+        # shellcheck disable=SC2086 # PKG_MGR_INSTALL is intentionally word-split
         ${PKG_MGR_INSTALL} podman 2>/dev/null || true
         if check_command podman; then
             info "Podman installed successfully."
@@ -119,7 +119,7 @@ _detect_container_runtime() {
     export CONTAINER_CMD
 }
 
-# _start_docker_daemon — ensure the Docker daemon is running (real Docker only).
+# _start_docker_daemon - ensure the Docker daemon is running (real Docker only).
 _start_docker_daemon() {
     [[ "${CONTAINER_CMD}" != "docker" ]] && return 0
     if ! systemctl is-active --quiet docker 2>/dev/null; then
@@ -128,7 +128,7 @@ _start_docker_daemon() {
     fi
 }
 
-# _container_exists / _container_is_running — runtime-agnostic wrappers.
+# _container_exists / _container_is_running - runtime-agnostic wrappers.
 _container_exists() {
     "${CONTAINER_CMD}" ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$1"
 }
@@ -136,7 +136,7 @@ _container_is_running() {
     "${CONTAINER_CMD}" ps --format '{{.Names}}' 2>/dev/null | grep -qx "$1"
 }
 
-# _generate_podman_systemd_unit — create and enable a systemd unit for the
+# _generate_podman_systemd_unit - create and enable a systemd unit for the
 # registry container so it survives reboots when using Podman.
 _generate_podman_systemd_unit() {
     local container="$1"
@@ -159,9 +159,9 @@ _generate_podman_systemd_unit() {
     fi
 }
 
-# ── Native backend helpers ────────────────────────────────────────────────────
+# -- Native backend helpers ----------------------------------------------------
 
-# _native_registry_info — set NATIVE_PKG, NATIVE_SERVICE, NATIVE_CONF_DIR
+# _native_registry_info - set NATIVE_PKG, NATIVE_SERVICE, NATIVE_CONF_DIR
 # based on the current distro type.
 _native_registry_info() {
     local distro_type="${DISTRO_TYPE:-}"
@@ -190,7 +190,7 @@ _native_registry_info() {
     export NATIVE_PKG NATIVE_SERVICE NATIVE_CONF_DIR NATIVE_CONF_FILE
 }
 
-# _is_native_registry_available — true if the native OS package is present.
+# _is_native_registry_available - true if the native OS package is present.
 _is_native_registry_available() {
     _native_registry_info 2>/dev/null || return 1
     check_command "${NATIVE_SERVICE}" 2>/dev/null \
@@ -200,7 +200,7 @@ _is_native_registry_available() {
         || dpkg -l "${NATIVE_PKG}" 2>/dev/null | grep -q '^ii'
 }
 
-# _emit_registry_config <path> — write the registry config.yml at <path>.
+# _emit_registry_config <path> - write the registry config.yml at <path>.
 # Embeds the proxy block ONLY when MIRRORET_DOCKER_MODE=cache.
 _emit_registry_config() {
     local conf_file="$1"
@@ -235,7 +235,7 @@ HEAD
         if [[ "${mode}" == "cache" ]]; then
             cat <<PROXY
 # Pull-through cache mode (MIRRORET_DOCKER_MODE=cache).
-# A registry in proxy mode REJECTS pushes — do not use this with the
+# A registry in proxy mode REJECTS pushes - do not use this with the
 # pre-seed sync script. Switch to MIRRORET_DOCKER_MODE=hosted if you
 # want to push images into the mirror.
 proxy:
@@ -244,7 +244,7 @@ PROXY
         else
             cat <<HOSTED
 # Hosted mode (MIRRORET_DOCKER_MODE=hosted).
-# No upstream proxy — the registry only serves images that have been
+# No upstream proxy - the registry only serves images that have been
 # explicitly pushed to it. sync-docker-images.sh handles the pre-seed.
 HOSTED
         fi
@@ -265,7 +265,7 @@ _setup_native_registry() {
     _native_registry_info
 
     info "Installing native registry package: ${NATIVE_PKG}"
-    # shellcheck disable=SC2086  # PKG_MGR_INSTALL is intentionally word-split
+    # shellcheck disable=SC2086 # PKG_MGR_INSTALL is intentionally word-split
     xrun ${PKG_MGR_INSTALL} "${NATIVE_PKG}"
 
     backup_file "$backup_id" "${NATIVE_CONF_FILE}"
@@ -278,7 +278,7 @@ _setup_native_registry() {
     mkdir -p "${NATIVE_CONF_DIR}" "${MIRRORET_BASE_DIR}/docker/registry"
     _emit_registry_config "${NATIVE_CONF_FILE}"
 
-    # Native services run under systemd with a minimal env — they won't
+    # Native services run under systemd with a minimal env - they won't
     # inherit the operator's shell HTTP_PROXY. Drop in an Environment
     # override so cache mode can actually reach the upstream.
     _write_service_proxy_dropin "${NATIVE_SERVICE}"
@@ -288,7 +288,7 @@ _setup_native_registry() {
     success "Native Docker registry running (mode: ${MIRRORET_DOCKER_MODE}, service: ${NATIVE_SERVICE})."
 }
 
-# ── Container backend ────────────────────────────────────────────────────────
+# -- Container backend --------------------------------------------------------
 
 _setup_container_registry() {
     local backup_id="$1"
@@ -322,7 +322,7 @@ _setup_container_registry() {
         local proxy_args
         proxy_args="$(_docker_proxy_run_args)"
         [[ -n "${proxy_args}" ]] && info "Passing proxy env into container: ${proxy_args}"
-        # shellcheck disable=SC2086  # proxy_args must be word-split into -e/name/value triples
+        # shellcheck disable=SC2086 # proxy_args must be word-split into -e/name/value triples
         xrun "${CONTAINER_CMD}" run -d \
             --name "${MIRRORET_DOCKER_CONTAINER_NAME}" \
             --restart=always \
@@ -348,9 +348,9 @@ _setup_container_registry() {
     success "Docker registry running (mode: ${MIRRORET_DOCKER_MODE}, runtime: ${CONTAINER_CMD})."
 }
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# -- Public API ----------------------------------------------------------------
 
-# setup_docker_registry <backup_id> — deploy the Docker registry.
+# setup_docker_registry <backup_id> - deploy the Docker registry.
 # Selects native or container backend based on MIRRORET_DOCKER_BACKEND
 # and embeds proxy or hosted config based on MIRRORET_DOCKER_MODE.
 setup_docker_registry() {
@@ -383,10 +383,10 @@ setup_docker_registry() {
             ;;
         auto)
             if _is_native_registry_available 2>/dev/null; then
-                info "Native registry package available — using native backend."
+                info "Native registry package available - using native backend."
                 _setup_native_registry "${backup_id}"
             else
-                info "Native registry not available — using container backend."
+                info "Native registry not available - using container backend."
                 _setup_container_registry "${backup_id}"
             fi
             ;;
@@ -413,13 +413,13 @@ setup_docker_registry() {
     success "Docker registry ready on port ${registry_port}."
 }
 
-# has_docker_sync_script — true when a usable sync script exists for sync-all.
+# has_docker_sync_script - true when a usable sync script exists for sync-all.
 has_docker_sync_script() {
     [[ "${MIRRORET_DOCKER_MODE:-cache}" == "hosted" ]] \
         && [[ -x "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh" ]]
 }
 
-# generate_docker_client_config <output_file> — write daemon.json for clients.
+# generate_docker_client_config <output_file> - write daemon.json for clients.
 generate_docker_client_config() {
     local output_file="$1"
     local server_ip="${MIRRORET_SERVER_IP}"
@@ -481,7 +481,7 @@ DOCKER_EOF
     success "Docker client config written: ${output_file}"
 }
 
-# write_docker_sync_script <output_file> — generate the image pre-seed sync script.
+# write_docker_sync_script <output_file> - generate the image pre-seed sync script.
 # ONLY called in hosted mode. In cache mode the registry rejects pushes
 # and there is nothing to pre-seed.
 # If MIRRORET_DOCKER_IMAGES_FILE is set, images are read from that file.
@@ -513,14 +513,14 @@ write_docker_sync_script() {
         # Read image list from file; strip comments and blank lines.
         images_block=""
         while IFS= read -r line; do
-            line="${line%%#*}"       # strip inline comments
-            line="${line// /}"       # strip spaces
+            line="${line%%#*}" # strip inline comments
+            line="${line// /}" # strip spaces
             [[ -z "${line}" ]] && continue
-            images_block+="    \"${line}\""$'\n'
+            images_block+=" \"${line}\""$'\n'
         done < "${images_file}"
         info "Docker image list loaded from: ${images_file}"
     else
-        images_block='    "ubuntu:22.04"
+        images_block=' "ubuntu:22.04"
     "debian:12"
     "nginx:stable"
     "python:3.11-slim"
@@ -537,12 +537,12 @@ set -Eeuo pipefail
 
 ${MIRRORET_MANAGED_MARKER}
 # To customize the image list, set MIRRORET_DOCKER_IMAGES_FILE=/path
-# before running install.sh — do NOT edit this file directly.
+# before running install.sh - do NOT edit this file directly.
 
-# Docker image pre-seed sync script — generated by mirroret.
+# Docker image pre-seed sync script - generated by mirroret.
 # REQUIRES MIRRORET_DOCKER_MODE=hosted at install time.
 # Pulls images from the configured upstream and pushes them to the
-# local registry. The local registry must be in hosted mode — cache-
+# local registry. The local registry must be in hosted mode - cache-
 # mode registries reject pushes.
 
 LOCAL_REGISTRY="localhost:${registry_port}"
@@ -607,21 +607,21 @@ for image in "\${IMAGES[@]}"; do
     fi
     echo "Syncing \${image}..."
     if ! timeout -k 30 "\${PULL_TIMEOUT}" "\${CONTAINER_CMD}" pull "\$image"; then
-        echo "  PULL FAILED: \${image}"
+        echo " PULL FAILED: \${image}"
         failed=\$(( failed + 1 ))
         continue
     fi
     if ! "\${CONTAINER_CMD}" tag "\$image" "\${LOCAL_REGISTRY}/\${image}"; then
-        echo "  TAG FAILED: \${image}"
+        echo " TAG FAILED: \${image}"
         failed=\$(( failed + 1 ))
         continue
     fi
     if ! "\${CONTAINER_CMD}" push "\${LOCAL_REGISTRY}/\${image}"; then
-        echo "  PUSH FAILED: \${image}"
+        echo " PUSH FAILED: \${image}"
         failed=\$(( failed + 1 ))
         continue
     fi
-    echo "  OK: \${image}"
+    echo " OK: \${image}"
     # The image now lives in the registry store. Drop the local copy so the
     # container store does not grow by the full size of every synced image.
     "\${CONTAINER_CMD}" rmi "\${LOCAL_REGISTRY}/\${image}" >/dev/null 2>&1 || true

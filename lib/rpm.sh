@@ -4,23 +4,23 @@
 # Requires logging.sh, common.sh, distro.sh, backup.sh.
 #
 # Configurable knobs:
-#   MIRRORET_RHEL_VERSION    major version to mirror (default: derived from host)
-#   MIRRORET_RPM_FLAVOR      directory name under redhat/mirror/ — defaults to OS_ID
-#                            ("rocky", "almalinux", "rhel", "ol", "centos", "fedora")
-#   MIRRORET_RPM_REPOS       space-separated repo list (default depends on distro)
-#   MIRRORET_RPM_GPGKEY_URL  URL where clients fetch the repo's signing key
-#   MIRRORET_RPM_ARCH        arch to mirror (default: x86_64). noarch always added.
-#   MIRRORET_RPM_NEWEST_ONLY 1 (default) = only newest build of each package.
-#                            0 = full history (WARNING: terabytes on some repos).
-#   MIRRORET_RPM_SOURCE      0 (default) = skip .src.rpm. 1 = include source RPMs
-#                            (WARNING: source RPMs are 400-600 MB each; the
-#                            OL9 appstream repo has ~44k of them = multi-TB).
-#   MIRRORET_RPM_DELETE      1 (default) = delete local packages that upstream
-#                            dropped. 0 = keep forever.
-#   MIRRORET_SYNC_MIN_FREE_GB abort a sync when free space drops below this
-#                            (default 10). Prevents filling the disk mid-run.
+# MIRRORET_RHEL_VERSION major version to mirror (default: derived from host)
+# MIRRORET_RPM_FLAVOR directory name under redhat/mirror/ - defaults to OS_ID
+# ("rocky", "almalinux", "rhel", "ol", "centos", "fedora")
+# MIRRORET_RPM_REPOS space-separated repo list (default depends on distro)
+# MIRRORET_RPM_GPGKEY_URL URL where clients fetch the repo's signing key
+# MIRRORET_RPM_ARCH arch to mirror (default: x86_64). noarch always added.
+# MIRRORET_RPM_NEWEST_ONLY 1 (default) = only newest build of each package.
+# 0 = full history (WARNING: terabytes on some repos).
+# MIRRORET_RPM_SOURCE 0 (default) = skip .src.rpm. 1 = include source RPMs
+# (WARNING: source RPMs are 400-600 MB each; the
+# OL9 appstream repo has ~44k of them = multi-TB).
+# MIRRORET_RPM_DELETE 1 (default) = delete local packages that upstream
+# dropped. 0 = keep forever.
+# MIRRORET_SYNC_MIN_FREE_GB abort a sync when free space drops below this
+# (default 10). Prevents filling the disk mid-run.
 
-# _rpm_resolve_flavor — print directory name for this distro's tree.
+# _rpm_resolve_flavor - print directory name for this distro's tree.
 _rpm_resolve_flavor() {
     if [[ -n "${MIRRORET_RPM_FLAVOR:-}" ]]; then
         echo "${MIRRORET_RPM_FLAVOR}"
@@ -41,7 +41,7 @@ _rpm_resolve_flavor() {
     esac
 }
 
-# _rpm_default_repos <flavor> <major> — print default repo names.
+# _rpm_default_repos <flavor> <major> - print default repo names.
 _rpm_default_repos() {
     local flavor="$1" major="$2"
 
@@ -51,7 +51,7 @@ _rpm_default_repos() {
     fi
 
     # Sensible defaults that exist on each flavor's main release stream.
-    # "extras" was discontinued on Rocky/Alma 9 but is harmless if listed —
+    # "extras" was discontinued on Rocky/Alma 9 but is harmless if listed -
     # reposync will warn and skip; the generated script treats this as
     # non-fatal but still surfaces it.
     case "${flavor}" in
@@ -91,7 +91,7 @@ _rpm_default_repos() {
     esac
 }
 
-# configure_createrepo <backup_id> — write the RHEL/CentOS-family sync script.
+# configure_createrepo <backup_id> - write the RHEL/CentOS-family sync script.
 configure_createrepo() {
     local backup_id="$1"
     local base_dir="${MIRRORET_BASE_DIR}"
@@ -134,13 +134,13 @@ configure_createrepo() {
     esac
 
     section "Configuring createrepo (${flavor} ${rhel_ver})"
-    info "Repo tree:     ${base_dir}/redhat/mirror/${flavor}/${rhel_ver}/"
+    info "Repo tree: ${base_dir}/redhat/mirror/${flavor}/${rhel_ver}/"
     info "Repos to sync: ${repos}"
-    info "Arch:          ${rpm_arch} (+noarch)"
-    info "Newest only:   ${newest_only}   Source RPMs: ${include_source}   Delete removed: ${delete_removed}"
-    info "Disk floor:    ${min_free_gb} GB (sync aborts below this)"
+    info "Arch: ${rpm_arch} (+noarch)"
+    info "Newest only: ${newest_only} Source RPMs: ${include_source} Delete removed: ${delete_removed}"
+    info "Disk floor: ${min_free_gb} GB (sync aborts below this)"
     if [[ "${include_source}" == "1" ]]; then
-        warn "MIRRORET_RPM_SOURCE=1 — source RPMs will be mirrored."
+        warn "MIRRORET_RPM_SOURCE=1 - source RPMs will be mirrored."
         warn "This can consume MULTIPLE TERABYTES. Ensure the volume is sized for it."
     fi
 
@@ -166,7 +166,7 @@ configure_createrepo() {
     elif command -v createrepo &>/dev/null; then
         createrepo_cmd="createrepo"
     else
-        createrepo_cmd="createrepo_c"  # let it fail with a clear error if missing
+        createrepo_cmd="createrepo_c" # let it fail with a clear error if missing
     fi
 
     # Export flavor + repos to nginx + client config callers.
@@ -180,12 +180,12 @@ set -Eeuo pipefail
 
 ${MIRRORET_MANAGED_MARKER}
 # To customize the repo list, set MIRRORET_RPM_REPOS="baseos appstream crb"
-# before running install.sh — do NOT edit this file directly.
+# before running install.sh - do NOT edit this file directly.
 
-# RPM sync script — generated by mirroret.
-# Flavor:  ${flavor}
+# RPM sync script - generated by mirroret.
+# Flavor: ${flavor}
 # Version: ${rhel_ver}
-# Repos:   ${repos}
+# Repos: ${repos}
 
 REPO_BASE="${base_dir}/redhat/mirror"
 LOG_DIR="${base_dir}/logs"
@@ -202,7 +202,7 @@ SYNC_TIMEOUT="${sync_timeout}"
 mkdir -p "\$LOG_DIR"
 exec > >(tee -a "\$LOG_FILE") 2>&1
 
-# ── Single-instance lock ─────────────────────────────────────────────────
+# -- Single-instance lock -------------------------------------------------
 # Prevents a cron run from colliding with a manual run. Concurrent
 # reposync + createrepo on the same tree corrupts repodata.
 exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
@@ -219,7 +219,7 @@ trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
 $(mirroret_script_preamble)
 
 echo "Starting RPM sync: \$(date)"
-echo "  arch=\${ARCH}  newest_only=\${NEWEST_ONLY}  source=\${INCLUDE_SOURCE}  delete=\${DELETE_REMOVED}"
+echo " arch=\${ARCH} newest_only=\${NEWEST_ONLY} source=\${INCLUDE_SOURCE} delete=\${DELETE_REMOVED}"
 
 for _cmd in reposync ${createrepo_cmd} flock; do
     if ! command -v "\$_cmd" >/dev/null 2>&1; then
@@ -228,7 +228,7 @@ for _cmd in reposync ${createrepo_cmd} flock; do
     fi
 done
 
-# ── Disk guard ───────────────────────────────────────────────────────────
+# -- Disk guard -----------------------------------------------------------
 # reposync has no size cap. On repos that carry source RPMs a single sync
 # can pull terabytes. Abort before we fill the filesystem.
 _free_gb() {
@@ -252,9 +252,9 @@ _check_disk() {
 mkdir -p "\$REPO_BASE"
 _check_disk || exit 4
 
-# ── reposync flags ───────────────────────────────────────────────────────
+# -- reposync flags -------------------------------------------------------
 # --arch pins the architecture. WITHOUT this, reposync on some repos
-# (notably OL9 appstream) also pulls every .src.rpm — 44k packages at
+# (notably OL9 appstream) also pulls every .src.rpm - 44k packages at
 # 400-600 MB each. That is the single most destructive default here.
 REPOSYNC_ARGS=(--download-metadata --arch "\${ARCH}" --arch noarch
     --setopt=timeout=60 --setopt=minrate=1000 --setopt=retries=3)
@@ -279,11 +279,11 @@ if [[ "\${MIRRORET_SYNC_ESTIMATE:-1}" == "1" ]]; then
     est_total=0
     for repo in \${REPOS[@]+"\${REPOS[@]}"}; do
         est="\$(_estimate_gb "\$repo")"
-        echo "    \${repo}: ~\${est} GB"
+        echo " \${repo}: ~\${est} GB"
         est_total=\$(( est_total + est ))
     done
     free_now="\$(_free_gb)"
-    echo "    total: ~\${est_total} GB   free: \${free_now:-?} GB"
+    echo " total: ~\${est_total} GB free: \${free_now:-?} GB"
     if [[ -n "\${free_now}" ]] && [[ "\${est_total}" -gt 0 ]] \
        && [[ \$(( free_now - est_total )) -lt "\${MIN_FREE_GB}" ]]; then
         echo "ABORT: estimated \${est_total} GB would leave less than \${MIN_FREE_GB} GB free."
@@ -301,7 +301,7 @@ if command -v nice >/dev/null 2>&1; then
         NICE="ionice -c 2 -n 7 \${NICE}"
     fi
 fi
-[[ "\${NEWEST_ONLY}"   == "1" ]] && REPOSYNC_ARGS+=(--newest-only)
+[[ "\${NEWEST_ONLY}" == "1" ]] && REPOSYNC_ARGS+=(--newest-only)
 [[ "\${DELETE_REMOVED}" == "1" ]] && REPOSYNC_ARGS+=(--delete)
 [[ "\${INCLUDE_SOURCE}" == "1" ]] && REPOSYNC_ARGS+=(--source)
 
@@ -313,14 +313,14 @@ aborted=0
 
 for repo in "\${REPOS[@]}"; do
     if ! _check_disk; then
-        echo "Stopping before \${repo} — disk floor reached."
+        echo "Stopping before \${repo} - disk floor reached."
         aborted=1
         break
     fi
     target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
     mkdir -p "\$target"
     echo "--- reposync \${repo} (free: \$(_free_gb) GB)"
-    # shellcheck disable=SC2086  # NICE must word-split
+    # shellcheck disable=SC2086 # NICE must word-split
     if ! timeout -k 60 "\${SYNC_TIMEOUT}" \\
             \${NICE} reposync -p "\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}" \\
             "\${REPOSYNC_ARGS[@]}" --repo "\${repo}"; then
@@ -333,7 +333,7 @@ done
 # --download-metadata already fetched upstream repodata, INCLUDING its
 # signatures (repomd.xml.asc). Running createrepo over that regenerates
 # repomd.xml and destroys the upstream signature, breaking any client
-# using repo_gpgcheck=1 — and burns hours of CPU rebuilding metadata we
+# using repo_gpgcheck=1 - and burns hours of CPU rebuilding metadata we
 # already have. Only build metadata when upstream metadata is absent.
 for repo in "\${REPOS[@]}"; do
     target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
@@ -365,9 +365,9 @@ if [[ "\${MIRRORET_SYNC_SMOKE_TEST:-1}" == "1" ]] && command -v dnf >/dev/null 2
                --repo="smoke-\${repo}" \
                --setopt=cachedir="\${_tmpcache}" \
                repoquery --queryformat='%{name}' 2>/dev/null | head -1 | grep -q .; then
-            echo "    OK: \${repo} is readable by dnf"
+            echo " OK: \${repo} is readable by dnf"
         else
-            echo "    FAIL: \${repo} repodata is not readable by dnf"
+            echo " FAIL: \${repo} repodata is not readable by dnf"
             smoke_failed=\$(( smoke_failed + 1 ))
         fi
     done
@@ -386,7 +386,7 @@ SYNC_EOF
     success "RPM sync script written: ${sync_script}"
 }
 
-# generate_rpm_client_config <output_file> — write a .repo file for clients.
+# generate_rpm_client_config <output_file> - write a .repo file for clients.
 generate_rpm_client_config() {
     local output_file="$1"
     local server_ip="${MIRRORET_SERVER_IP}"
@@ -425,20 +425,20 @@ generate_rpm_client_config() {
         # key that stock clients already ship in /etc/pki/rpm-gpg/.
         gpg_check_line="gpgcheck=1"
         case "${flavor}" in
-            ol)        gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle" ;;
-            rhel)      gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release" ;;
-            rocky)     gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-${rhel_ver}" ;;
+            ol) gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle" ;;
+            rhel) gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release" ;;
+            rocky) gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Rocky-${rhel_ver}" ;;
             almalinux) gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-${rhel_ver}" ;;
-            centos)    gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial" ;;
-            fedora)    gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-${rhel_ver}-primary" ;;
-            *)         gpg_key_line="# gpgkey=  # set MIRRORET_RPM_GPGKEY_URL" ;;
+            centos) gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial" ;;
+            fedora) gpg_key_line="gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-${rhel_ver}-primary" ;;
+            *) gpg_key_line="# gpgkey= # set MIRRORET_RPM_GPGKEY_URL" ;;
         esac
         info "RPM client config: gpgcheck=1 using the upstream ${flavor} vendor key."
         info "Override with MIRRORET_RPM_GPGKEY_URL if you re-sign locally."
     fi
 
     {
-        printf '# mirroret RPM client config — %s %s\n' "${flavor}" "${rhel_ver}"
+        printf '# mirroret RPM client config - %s %s\n' "${flavor}" "${rhel_ver}"
         printf '# Place in /etc/yum.repos.d/ on clients.\n\n'
         for repo in ${repos}; do
             printf '[mirroret-%s]\n' "${repo}"
@@ -450,12 +450,12 @@ generate_rpm_client_config() {
             [[ -n "${gpg_key_line}" ]] && printf '%s\n' "${gpg_key_line}"
             printf '\n'
         done
-        printf '# ── Client setup ─────────────────────────────────────────────\n'
+        printf '# -- Client setup ---------------------------------------------\n'
         printf '# After installing this file, DISABLE the upstream repos or dnf\n'
         printf '# will keep reaching the internet and bypass this mirror:\n'
         printf '#\n'
-        printf '#   sudo dnf config-manager --disable %s\n' "${repos}"
-        printf '#   sudo dnf clean all && sudo dnf repolist\n'
+        printf '# sudo dnf config-manager --disable %s\n' "${repos}"
+        printf '# sudo dnf clean all && sudo dnf repolist\n'
     } > "$output_file"
 
     success "RPM client config written: ${output_file}"

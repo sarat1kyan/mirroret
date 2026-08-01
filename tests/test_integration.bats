@@ -6,7 +6,7 @@
 
 load 'test_helpers'
 
-# ── Setup / Teardown ─────────────────────────────────────────────────────────
+# -- Setup / Teardown ---------------------------------------------------------
 
 setup() {
     load_lib
@@ -30,7 +30,7 @@ teardown() {
     rm -rf "${TMPDIR:-/tmp/bats-integration-$$}"
 }
 
-# ── TLS default variables ─────────────────────────────────────────────────────
+# -- TLS default variables -----------------------------------------------------
 
 @test "tls: MIRRORET_TLS_ENABLED defaults to 0" {
     [[ "${MIRRORET_TLS_ENABLED:-0}" == "0" ]]
@@ -92,7 +92,7 @@ teardown() {
     [[ "${output}" =~ "9443" ]]
 }
 
-# ── GPG default variables ─────────────────────────────────────────────────────
+# -- GPG default variables -----------------------------------------------------
 
 @test "gpg: MIRRORET_GPG_AUTO defaults to 0" {
     [[ "${MIRRORET_GPG_AUTO}" == "0" ]]
@@ -124,7 +124,7 @@ teardown() {
     grep -q "rpm --import" "${out_file}"
 }
 
-# ── Approval workflow ─────────────────────────────────────────────────────────
+# -- Approval workflow ---------------------------------------------------------
 
 @test "approval: MIRRORET_APPROVAL_ENABLED defaults to 0" {
     [[ "${MIRRORET_APPROVAL_ENABLED:-0}" == "0" ]]
@@ -208,7 +208,7 @@ teardown() {
     [[ -f "${MIRRORET_BASE_DIR}/staging/pip/testpkg-1.0-py3-none-any.whl" ]]
 }
 
-# ── APT mirror tool selection ──────────────────────────────────────────────────
+# -- APT mirror tool selection --------------------------------------------------
 
 @test "apt: MIRRORET_APT_MIRROR_TOOL defaults to auto" {
     [[ "${MIRRORET_APT_MIRROR_TOOL}" == "auto" ]]
@@ -225,7 +225,7 @@ teardown() {
     [[ "${status}" -ne 0 ]]
 }
 
-# ── Docker backend ────────────────────────────────────────────────────────────
+# -- Docker backend ------------------------------------------------------------
 
 @test "docker: MIRRORET_DOCKER_BACKEND defaults to auto" {
     [[ "${MIRRORET_DOCKER_BACKEND}" == "auto" ]]
@@ -270,7 +270,7 @@ teardown() {
     grep -q "myorg/myimage:1.0" "${TMPDIR}/sync-docker-custom.sh"
 }
 
-# ── npm sync script ───────────────────────────────────────────────────────────
+# -- npm sync script -----------------------------------------------------------
 
 @test "npm: MIRRORET_NPM_ALLOW_ANON_PUBLISH defaults to 0" {
     [[ "${MIRRORET_NPM_ALLOW_ANON_PUBLISH}" == "0" ]]
@@ -295,7 +295,7 @@ teardown() {
     grep -q "npm publish" "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
 }
 
-# ── pip sync script ───────────────────────────────────────────────────────────
+# -- pip sync script -----------------------------------------------------------
 
 @test "pip: sync script targets staging when approval enabled" {
     DRY_RUN=0
@@ -315,7 +315,7 @@ teardown() {
     grep -q "pip/approved" "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
 }
 
-# ── install.sh new CLI flags ──────────────────────────────────────────────────
+# -- install.sh new CLI flags --------------------------------------------------
 
 @test "install.sh --tls-self-signed is accepted without error" {
     run bash "${SCRIPT_DIR}/install.sh" --tls-self-signed --help
@@ -359,7 +359,7 @@ teardown() {
     [[ "${output}" =~ "--approve-all-pip" ]]
 }
 
-# ── config example validity ───────────────────────────────────────────────────
+# -- config example validity ---------------------------------------------------
 
 @test "config example: new TLS variables have valid bash syntax" {
     run bash -n "${SCRIPT_DIR}/config/mirroret.conf.example"
@@ -386,7 +386,7 @@ teardown() {
     grep -q "MIRRORET_APT_MIRROR_TOOL" "${SCRIPT_DIR}/config/mirroret.conf.example"
 }
 
-# ── ensure_approval_dirs DRY_RUN ──────────────────────────────────────────────
+# -- ensure_approval_dirs DRY_RUN ----------------------------------------------
 
 @test "approval: ensure_approval_dirs dry-run does not create dirs" {
     MIRRORET_APPROVAL_ENABLED=1
@@ -395,7 +395,7 @@ teardown() {
     [[ ! -d "${MIRRORET_BASE_DIR}/staging/pip" ]]
 }
 
-# ── APT resolved tool export ──────────────────────────────────────────────────
+# -- APT resolved tool export --------------------------------------------------
 
 @test "apt: configure_apt_mirror exports MIRRORET_APT_RESOLVED_TOOL (debmirror)" {
     MIRRORET_APT_MIRROR_TOOL=debmirror
@@ -406,7 +406,7 @@ teardown() {
     [[ "${MIRRORET_APT_RESOLVED_TOOL}" == "debmirror" ]]
 }
 
-# ── APT_RESOLVED_TOOL drives correct sync command ─────────────────────────────
+# -- APT_RESOLVED_TOOL drives correct sync command -----------------------------
 
 @test "apt: MIRRORET_APT_RESOLVED_TOOL defaults to empty" {
     [[ -z "${MIRRORET_APT_RESOLVED_TOOL:-}" ]]

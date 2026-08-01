@@ -79,7 +79,7 @@ and `MIRRORET_GPG_KEYID` is set to the key fingerprint in use.
 
 | Variable | Default | Description |
 |---|---|---|
-| `MIRRORET_APPROVAL_ENABLED` | `0` | Set to `1` to enable the staging → approved workflow for pip and npm |
+| `MIRRORET_APPROVAL_ENABLED` | `0` | Set to `1` to enable the staging -> approved workflow for pip and npm |
 
 When enabled:
 - Sync scripts download packages to `BASE_DIR/staging/{pip,npm}/` instead of serving them directly.
@@ -91,12 +91,12 @@ Directory layout with approval enabled:
 
 ```
 /srv/mirroret/
-├── staging/
-│   ├── pip/    ← sync downloads pip packages here
-│   └── npm/    ← sync downloads npm tarballs here
-└── approved/
-    ├── pip/    ← pypiserver serves from here
-    └── npm/    ← nginx serves as static files from here
++-- staging/
+| +-- pip/ <- sync downloads pip packages here
+| +-- npm/ <- sync downloads npm tarballs here
++-- approved/
+    +-- pip/ <- pypiserver serves from here
+    +-- npm/ <- nginx serves as static files from here
 ```
 
 ### Docker registry backend
@@ -106,9 +106,9 @@ Directory layout with approval enabled:
 | `MIRRORET_DOCKER_BACKEND` | `auto` | `auto`, `native`, or `container` |
 | `MIRRORET_DOCKER_IMAGES_FILE` | *(empty)* | Path to a file listing images to pre-seed (one per line, `#` for comments) |
 
-- `auto` — use the OS-native registry package if available; fall back to the `registry:2` container.
-- `native` — install `docker-distribution` (RHEL) or `docker-registry` (Debian/Ubuntu) as a systemd service.
-- `container` — run `registry:2` via Docker or Podman. Podman is detected automatically (podman-docker shim).
+- `auto` - use the OS-native registry package if available; fall back to the `registry:2` container.
+- `native` - install `docker-distribution` (RHEL) or `docker-registry` (Debian/Ubuntu) as a systemd service.
+- `container` - run `registry:2` via Docker or Podman. Podman is detected automatically (podman-docker shim).
 
 ### APT mirror tool
 
@@ -116,9 +116,9 @@ Directory layout with approval enabled:
 |---|---|---|
 | `MIRRORET_APT_MIRROR_TOOL` | `auto` | `auto`, `apt-mirror`, or `debmirror` |
 
-- `auto` — try `apt-mirror`, then `apt-mirror2` (pip), then `debmirror`.
-- `apt-mirror` — use `apt-mirror`. Falls back to `apt-mirror2` (pip) if not installed.
-- `debmirror` — use `debmirror`. Required on Debian 12+ where `apt-mirror` was removed from the repos.
+- `auto` - try `apt-mirror`, then `apt-mirror2` (pip), then `debmirror`.
+- `apt-mirror` - use `apt-mirror`. Falls back to `apt-mirror2` (pip) if not installed.
+- `debmirror` - use `debmirror`. Required on Debian 12+ where `apt-mirror` was removed from the repos.
 
 After `configure_apt_mirror()` runs, `MIRRORET_APT_RESOLVED_TOOL` is exported with the
 actual tool selected, and `MIRRORET_APT_DATA_PATH` is exported with the path nginx serves
@@ -140,7 +140,7 @@ authentication is not required.
 | Variable | Default | Description |
 |---|---|---|
 | `MIRRORET_APT_KEYRING` | *(empty)* | Path to binary GPG keyring for APT `signed-by` field. Set automatically by `--gpg-auto`. |
-| `MIRRORET_APT_INSECURE` | `0` | Set to `1` to add `trusted=yes` to APT client configs (LAB ONLY — disables GPG check) |
+| `MIRRORET_APT_INSECURE` | `0` | Set to `1` to add `trusted=yes` to APT client configs (LAB ONLY - disables GPG check) |
 | `MIRRORET_RPM_GPGKEY_URL` | *(empty)* | URL to the GPG key for RPM client configs (`gpgkey=` field) |
 | `MIRRORET_RPM_INSECURE` | `0` | Set to `1` to add `gpgcheck=0` to RPM client configs (LAB ONLY) |
 | `MIRRORET_DOCKER_INSECURE` | `0` | Set to `1` to add `insecure-registries` to Docker client config (LAB ONLY) |
@@ -164,7 +164,7 @@ Use `--insecure` on the command line to set all four insecure flags at once.
 |---|---|---|
 | `MIRRORET_MIN_DISK_GB` | `50` | Minimum free disk space in GB required before install proceeds |
 | `MIRRORET_NON_INTERACTIVE` | `0` | Set to `1` to suppress all interactive prompts (auto-decline) |
-| `MIRRORET_SYNC_HOUR` | `2` | Hour (0–23) for the daily cron sync |
+| `MIRRORET_SYNC_HOUR` | `2` | Hour (0-23) for the daily cron sync |
 | `LOG_LEVEL` | `INFO` | Log verbosity: `DEBUG` or `INFO` |
 | `DRY_RUN` | `0` | Set to `1` for dry-run mode (no changes made). Same as `--dry-run`. |
 
@@ -198,7 +198,7 @@ MIRRORET_UBUNTU_CODENAME=jammy
 sudo ./install.sh --config /etc/mirroret/mirroret.conf
 ```
 
-### Minimal — APT mirror only, subnet-restricted
+### Minimal - APT mirror only, subnet-restricted
 
 ```bash
 sudo MIRRORET_SERVER_IP=10.0.1.5 \
@@ -226,7 +226,7 @@ sudo MIRRORET_DOCKER_BACKEND=native \
      ./install.sh --gpg-auto --tls-self-signed
 ```
 
-### Custom package lists — persist across reinstalls
+### Custom package lists - persist across reinstalls
 
 ```bash
 # Docker images to pre-seed:

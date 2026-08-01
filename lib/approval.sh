@@ -4,18 +4,18 @@
 # Requires logging.sh, common.sh.
 #
 # When MIRRORET_APPROVAL_ENABLED=1:
-#   - pip/npm sync scripts download to  BASE_DIR/staging/{pip,npm}/
-#   - Admin approves packages to        BASE_DIR/approved/{pip,npm}/
-#   - nginx serves packages from        BASE_DIR/approved/{pip,npm}/
+# - pip/npm sync scripts download to BASE_DIR/staging/{pip,npm}/
+# - Admin approves packages to BASE_DIR/approved/{pip,npm}/
+# - nginx serves packages from BASE_DIR/approved/{pip,npm}/
 #
 # This file provides the admin-facing operations.
 # The sync-side staging behaviour is implemented in pip.sh and npm.sh.
 
 MIRRORET_APPROVAL_ENABLED="${MIRRORET_APPROVAL_ENABLED:-0}"
 
-# ── Staging listing ───────────────────────────────────────────────────────────
+# -- Staging listing -----------------------------------------------------------
 
-# list_staging — show packages waiting for approval.
+# list_staging - show packages waiting for approval.
 list_staging() {
     local base_dir="${MIRRORET_BASE_DIR}"
     local pip_staging="${base_dir}/staging/pip"
@@ -49,14 +49,14 @@ list_staging() {
     fi
 
     if [[ "${found}" -eq 0 ]]; then
-        echo "  (no packages in staging)"
+        echo " (no packages in staging)"
     fi
     echo ""
 }
 
-# ── pip approval ─────────────────────────────────────────────────────────────
+# -- pip approval -------------------------------------------------------------
 
-# approve_all_pip — promote all staged pip packages to approved.
+# approve_all_pip - promote all staged pip packages to approved.
 approve_all_pip() {
     local base_dir="${MIRRORET_BASE_DIR}"
     local src="${base_dir}/staging/pip"
@@ -90,7 +90,7 @@ approve_pip_package() {
     local dst="${base_dir}/approved/pip"
 
     [[ -n "${fragment}" ]] || die "approve_pip_package: package name fragment required."
-    [[ -d "${src}" ]]     || die "No pip staging dir: ${src}"
+    [[ -d "${src}" ]] || die "No pip staging dir: ${src}"
 
     local match
     match=$(find "${src}" -type f -name "*${fragment}*" | head -1)
@@ -115,7 +115,7 @@ exclude_pip_package() {
     local src="${base_dir}/staging/pip"
 
     [[ -n "${fragment}" ]] || die "exclude_pip_package: package name fragment required."
-    [[ -d "${src}" ]]     || die "No pip staging dir: ${src}"
+    [[ -d "${src}" ]] || die "No pip staging dir: ${src}"
 
     local match
     match=$(find "${src}" -type f -name "*${fragment}*" | head -1)
@@ -131,9 +131,9 @@ exclude_pip_package() {
     fi
 }
 
-# ── npm approval ─────────────────────────────────────────────────────────────
+# -- npm approval -------------------------------------------------------------
 
-# approve_all_npm — promote all staged npm tarballs to approved.
+# approve_all_npm - promote all staged npm tarballs to approved.
 approve_all_npm() {
     local base_dir="${MIRRORET_BASE_DIR}"
     local src="${base_dir}/staging/npm"
@@ -166,7 +166,7 @@ exclude_npm_package() {
     local src="${base_dir}/staging/npm"
 
     [[ -n "${fragment}" ]] || die "exclude_npm_package: package name fragment required."
-    [[ -d "${src}" ]]     || die "No npm staging dir: ${src}"
+    [[ -d "${src}" ]] || die "No npm staging dir: ${src}"
 
     local match
     match=$(find "${src}" -type f -name "*${fragment}*" | head -1)
@@ -182,9 +182,9 @@ exclude_npm_package() {
     fi
 }
 
-# ── Dir setup ────────────────────────────────────────────────────────────────
+# -- Dir setup ----------------------------------------------------------------
 
-# ensure_approval_dirs — create staging/approved directory tree.
+# ensure_approval_dirs - create staging/approved directory tree.
 ensure_approval_dirs() {
     [[ "${MIRRORET_APPROVAL_ENABLED}" == "1" ]] || return 0
     local base_dir="${MIRRORET_BASE_DIR}"

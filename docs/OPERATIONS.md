@@ -58,9 +58,9 @@ sudo /srv/mirroret/scripts/sync-all.sh
 sync command inside `sync-all.sh` is automatically set to the right binary when
 `install.sh` runs:
 
-- `apt-mirror` selected → calls `/usr/bin/apt-mirror`
-- `apt-mirror2` selected → calls `/usr/local/bin/apt-mirror2`
-- `debmirror` selected → calls `/srv/mirroret/scripts/sync-apt-debmirror.sh`
+- `apt-mirror` selected -> calls `/usr/bin/apt-mirror`
+- `apt-mirror2` selected -> calls `/usr/local/bin/apt-mirror2`
+- `debmirror` selected -> calls `/srv/mirroret/scripts/sync-apt-debmirror.sh`
 
 To see which tool was selected, check the first line of the APT section:
 
@@ -71,7 +71,7 @@ grep "_run_step.*apt" /srv/mirroret/scripts/sync-all.sh
 ### Sync individual repositories
 
 ```bash
-# APT (Ubuntu/Debian) — the correct tool is called by sync-all.sh.
+# APT (Ubuntu/Debian) - the correct tool is called by sync-all.sh.
 # To run manually, check which tool is configured:
 grep "_run_step.*apt" /srv/mirroret/scripts/sync-all.sh | awk '{print $2}'
 # Then call that script or binary directly.
@@ -99,7 +99,7 @@ sudo /srv/mirroret/scripts/sync-npm-packages.sh
 
 ### Customise the package list
 
-**Option A — edit the generated sync script directly (changes may be overwritten on reinstall):**
+**Option A - edit the generated sync script directly (changes may be overwritten on reinstall):**
 
 ```bash
 sudo nano /srv/mirroret/scripts/sync-pip-packages.sh
@@ -112,7 +112,7 @@ sudo nano /srv/mirroret/scripts/sync-npm-packages.sh
 # Edit the PACKAGES array.
 ```
 
-**Option B — supply a package list file that persists across reinstalls:**
+**Option B - supply a package list file that persists across reinstalls:**
 
 ```bash
 # Docker images:
@@ -142,7 +142,7 @@ sudo MIRRORET_NPM_PACKAGES_FILE=/etc/mirroret/npm-packages.txt ./install.sh
 
 ```bash
 # apt-mirror / apt-mirror2:
-sudo /usr/bin/apt-mirror   # or /usr/local/bin/apt-mirror2
+sudo /usr/bin/apt-mirror # or /usr/local/bin/apt-mirror2
 
 # debmirror:
 sudo /srv/mirroret/scripts/sync-apt-debmirror.sh
@@ -203,14 +203,14 @@ docker exec mirroret-registry \
     registry garbage-collect /etc/docker/registry/config.yml
 ```
 
-**Native backend — RHEL (`docker-distribution`):**
+**Native backend - RHEL (`docker-distribution`):**
 
 ```bash
 sudo registry garbage-collect \
     /etc/docker-distribution/registry/config.yml
 ```
 
-**Native backend — Debian (`docker-registry`):**
+**Native backend - Debian (`docker-registry`):**
 
 ```bash
 sudo registry garbage-collect \
@@ -293,7 +293,7 @@ MIRRORET_SYNC_HOUR=4 sudo ./install.sh
 ## Service restarts
 
 ```bash
-# nginx (graceful reload is preferred — no dropped connections):
+# nginx (graceful reload is preferred - no dropped connections):
 sudo systemctl reload nginx
 
 # Full restart:
@@ -305,13 +305,13 @@ sudo systemctl restart pypiserver
 # Verdaccio:
 sudo systemctl restart verdaccio
 
-# Docker registry — container backend:
+# Docker registry - container backend:
 docker restart mirroret-registry
 
-# Docker registry — native RHEL:
+# Docker registry - native RHEL:
 sudo systemctl restart docker-distribution
 
-# Docker registry — native Debian:
+# Docker registry - native Debian:
 sudo systemctl restart docker-registry
 ```
 
@@ -359,12 +359,12 @@ Directory layout:
 
 ```
 /srv/mirroret/
-├── staging/
-│   ├── pip/    ← sync writes here; admin reviews
-│   └── npm/    ← sync writes here; admin reviews
-└── approved/
-    ├── pip/    ← pypiserver serves from here
-    └── npm/    ← nginx serves as static files
++-- staging/
+| +-- pip/ <- sync writes here; admin reviews
+| +-- npm/ <- sync writes here; admin reviews
++-- approved/
+    +-- pip/ <- pypiserver serves from here
+    +-- npm/ <- nginx serves as static files
 ```
 
 When approval mode is off, sync scripts write directly to the served directories

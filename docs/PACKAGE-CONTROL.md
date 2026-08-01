@@ -5,7 +5,7 @@
 This local repository system gives you **100% manual control** over what packages can be installed on your infrastructure. The workflow follows a strict three-stage process:
 
 ```
-Official Repos → [MIRROR] → [REVIEW] → [APPROVED] → Clients
+Official Repos -> [MIRROR] -> [REVIEW] -> [APPROVED] -> Clients
 ```
 
 ## Workflow Stages
@@ -202,7 +202,7 @@ remove_blacklisted() {
         [[ "$pattern" =~ ^#.*$ ]] && continue
         [[ -z "$pattern" ]] && continue
         
-        echo "  Removing: $pattern"
+        echo " Removing: $pattern"
         find "$MIRROR_DIR" -name "${pattern}*.deb" -delete 2>/dev/null
         find "$MIRROR_DIR" -name "${pattern}*.rpm" -delete 2>/dev/null
     done < "$BLACKLIST"
@@ -220,10 +220,10 @@ remove_blacklisted
 # Edit /etc/apt/mirror.list
 
 # Add package exclusions
-set base_path    /var/mirroret/mirror
-set mirror_path  $base_path/mirror
-set skel_path    $base_path/skel
-set var_path     $base_path/var
+set base_path /var/mirroret/mirror
+set mirror_path $base_path/mirror
+set skel_path $base_path/skel
+set var_path $base_path/var
 
 # Exclude packages by pattern
 # Note: apt-mirror doesn't support exclusions directly
@@ -262,15 +262,15 @@ echo "Blacklisted packages removed"
 MIRROR_DIR="/var/mirroret/mirror"
 APPROVED_DIR="/var/mirroret/approved"
 
-echo "════════════════════════════════════════════════════════"
-echo "  Available Updates - Package Comparison"
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
+echo " Available Updates - Package Comparison"
+echo "========================================================"
 echo ""
 
 if [ -f /etc/debian_version ]; then
     # Debian/Ubuntu comparison
-    echo "Package Name                Current (Approved)        New (Mirror)"
-    echo "────────────────────────────────────────────────────────────────"
+    echo "Package Name Current (Approved) New (Mirror)"
+    echo "----------------------------------------------------------------"
     
     # Get packages from both locations
     APPROVED_PKGS=$(find "$APPROVED_DIR" -name "*.deb" -exec dpkg-deb -f {} Package,Version \; | sort)
@@ -282,8 +282,8 @@ if [ -f /etc/debian_version ]; then
     done
 else
     # RHEL/CentOS comparison
-    echo "Package Name                Current (Approved)        New (Mirror)"
-    echo "────────────────────────────────────────────────────────────────"
+    echo "Package Name Current (Approved) New (Mirror)"
+    echo "----------------------------------------------------------------"
     
     APPROVED_PKGS=$(find "$APPROVED_DIR" -name "*.rpm" -exec rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE}\n' {} \; 2>/dev/null | sort)
     MIRROR_PKGS=$(find "$MIRROR_DIR" -name "*.rpm" -exec rpm -qp --queryformat '%{NAME} %{VERSION}-%{RELEASE}\n' {} \; 2>/dev/null | sort)
@@ -294,7 +294,7 @@ else
 fi
 
 echo ""
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
 ```
 
 ### Detailed Package Information
@@ -311,9 +311,9 @@ if [ -z "$PACKAGE_NAME" ]; then
     exit 1
 fi
 
-echo "════════════════════════════════════════════════════════"
-echo "  Package Information: $PACKAGE_NAME"
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
+echo " Package Information: $PACKAGE_NAME"
+echo "========================================================"
 echo ""
 
 if [ -f /etc/debian_version ]; then
@@ -354,7 +354,7 @@ else
 fi
 
 echo ""
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
 ```
 
 ## Security-First Approval Workflow
@@ -369,7 +369,7 @@ MIRROR_DIR="/var/mirroret/mirror"
 LOG_FILE="/var/mirroret/logs/security-updates-$(date +%Y%m%d).log"
 
 echo "Security Update Detection - $(date)" > "$LOG_FILE"
-echo "══════════════════════════════════════════════════════" >> "$LOG_FILE"
+echo "======================================================" >> "$LOG_FILE"
 echo "" >> "$LOG_FILE"
 
 if [ -f /etc/debian_version ]; then
@@ -414,7 +414,7 @@ if [ -z "$PACKAGE_NAME" ]; then
 fi
 
 echo "Checking CVEs for: $PACKAGE_NAME"
-echo "══════════════════════════════════════════════════════"
+echo "======================================================"
 
 # Ubuntu Security Notices
 if [ -f /etc/debian_version ]; then
@@ -432,8 +432,8 @@ fi
 
 echo ""
 echo "Manual verification recommended at:"
-echo "  - https://cve.mitre.org/"
-echo "  - https://nvd.nist.gov/"
+echo " - https://cve.mitre.org/"
+echo " - https://nvd.nist.gov/"
 ```
 
 ## Testing Environment Setup

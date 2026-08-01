@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # RHEL-specific tests for mirroret.
 # Covers: distro detection, RPM config, SELinux stubs, Docker registry native backend.
-# No real RHEL system required — uses mocks and dry-run mode throughout.
+# No real RHEL system required - uses mocks and dry-run mode throughout.
 
 load 'test_helpers'
 
@@ -28,7 +28,7 @@ teardown() {
     rm -rf "${TMPDIR}"
 }
 
-# ── Distribution detection ────────────────────────────────────────────────────
+# -- Distribution detection ----------------------------------------------------
 
 @test "detect_distro: almalinux sets DISTRO_TYPE=rhel" {
     mock_os_release "almalinux" "9.3"
@@ -80,7 +80,7 @@ teardown() {
     [ "$result" = "9" ]
 }
 
-# ── SELinux ───────────────────────────────────────────────────────────────────
+# -- SELinux -------------------------------------------------------------------
 
 @test "selinux: set_selinux_context is a no-op when not enforcing" {
     # On non-RHEL test machines SELinux is always not enforcing.
@@ -93,7 +93,7 @@ teardown() {
     ! selinux_enforcing
 }
 
-# ── RPM sync script generation ────────────────────────────────────────────────
+# -- RPM sync script generation ------------------------------------------------
 
 @test "rpm: configure_createrepo dry-run does not create sync script" {
     mock_os_release "rocky" "9.3"
@@ -139,7 +139,7 @@ teardown() {
     grep -q "command -v" "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
 }
 
-# ── RPM client config ─────────────────────────────────────────────────────────
+# -- RPM client config ---------------------------------------------------------
 
 @test "rpm: generate_rpm_client_config dry-run skips file write" {
     mock_os_release "rocky" "9.3"
@@ -185,7 +185,7 @@ teardown() {
     grep -q "10.0.0.1" "${TMPDIR}/test.repo"
 }
 
-# ── Docker registry native backend ────────────────────────────────────────────
+# -- Docker registry native backend --------------------------------------------
 
 @test "docker_registry: MIRRORET_DOCKER_BACKEND defaults to auto" {
     [ "${MIRRORET_DOCKER_BACKEND}" = "auto" ]

@@ -9,17 +9,17 @@
 # explicit flag or interactive confirmation.
 #
 # Design:
-#  - All decisions are made up front in UNINST_PLAN[], so --dry-run and
-#    --list can show the operator exactly what will happen.
-#  - DRY_RUN=1 is fully honoured: every state-changing call goes through
-#    xrun or a guarded branch.
+# - All decisions are made up front in UNINST_PLAN[], so --dry-run and
+# --list can show the operator exactly what will happen.
+# - DRY_RUN=1 is fully honoured: every state-changing call goes through
+# xrun or a guarded branch.
 #
 # Public entry points:
-#  uninstall_main      — top-level: parses targets, builds plan, executes
-#  uninstall_plan_show — print the current plan without executing
-#  uninstall_components_present — print which components look installed
+# uninstall_main - top-level: parses targets, builds plan, executes
+# uninstall_plan_show - print the current plan without executing
+# uninstall_components_present - print which components look installed
 
-# ── Defaults ─────────────────────────────────────────────────────────────────
+# -- Defaults -----------------------------------------------------------------
 
 MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
 MIRRORET_BACKUP_BASE="${MIRRORET_BACKUP_BASE:-/var/backups/mirroret}"
@@ -34,7 +34,7 @@ MIRRORET_DOCKER_REGISTRY_PORT="${MIRRORET_DOCKER_REGISTRY_PORT:-5000}"
 MIRRORET_NPM_PORT="${MIRRORET_NPM_PORT:-4873}"
 MIRRORET_TLS_PORT="${MIRRORET_TLS_PORT:-8443}"
 
-# Cron sentinel — must match install.sh.
+# Cron sentinel - must match install.sh.
 UNINST_CRON_BEGIN="# >>> mirroret managed (do not edit between markers) >>>"
 UNINST_CRON_END="# <<< mirroret managed <<<"
 
@@ -43,7 +43,7 @@ UNINST_PLAN=()
 UNINST_REMOVED=0
 UNINST_SKIPPED=0
 UNINST_FAILED=0
-# Labels of steps that returned non-zero — printed in the summary so the
+# Labels of steps that returned non-zero - printed in the summary so the
 # operator knows what to investigate.
 UNINST_FAILED_LABELS=()
 
@@ -53,14 +53,14 @@ UNINST_T_RPM=0
 UNINST_T_PIP=0
 UNINST_T_NPM=0
 UNINST_T_DOCKER=0
-UNINST_T_COMMON=0       # nginx vhost, cron, base dir, GPG, TLS
-UNINST_PURGE=0          # also delete mirror data, backups, GPG, TLS
-UNINST_KEEP_USERS=0     # don't userdel mirroret-pip / mirroret-npm
-UNINST_KEEP_FIREWALL=0  # don't reverse firewall rules
+UNINST_T_COMMON=0 # nginx vhost, cron, base dir, GPG, TLS
+UNINST_PURGE=0 # also delete mirror data, backups, GPG, TLS
+UNINST_KEEP_USERS=0 # don't userdel mirroret-pip / mirroret-npm
+UNINST_KEEP_FIREWALL=0 # don't reverse firewall rules
 UNINST_ASSUME_YES=0
 UNINST_LIST_ONLY=0
 
-# ── Utility helpers ──────────────────────────────────────────────────────────
+# -- Utility helpers ----------------------------------------------------------
 
 uninst_step() {
     # Record one planned removal step. Format: "tag|description".
@@ -87,7 +87,7 @@ uninst_do() {
     fi
 }
 
-# uninst_try — best-effort: run a command and count a non-zero exit as a
+# uninst_try - best-effort: run a command and count a non-zero exit as a
 # skip, not a failure. Use for hygiene ops where the target state may
 # legitimately be absent (systemctl reset-failed on a healthy unit,
 # semanage fcontext -d on a rule that isn't in the policy store).
@@ -127,10 +127,10 @@ uninst_confirm() {
     [[ "${reply}" =~ ^[Yy]$ ]]
 }
 
-# ── Detection ────────────────────────────────────────────────────────────────
+# -- Detection ----------------------------------------------------------------
 
-# uninstall_components_present — print which components look installed.
-# Prints lines like "docker  present (container=mirroret-registry)".
+# uninstall_components_present - print which components look installed.
+# Prints lines like "docker present (container=mirroret-registry)".
 uninstall_components_present() {
     echo ""
     echo "Detected mirroret components on this host:"
@@ -138,9 +138,9 @@ uninstall_components_present() {
 
     # nginx vhost
     if _has_nginx_vhost; then
-        echo "  nginx vhost      : present"
+        echo " nginx vhost : present"
     else
-        echo "  nginx vhost      : not found"
+        echo " nginx vhost : not found"
     fi
 
     # pypiserver
@@ -149,9 +149,9 @@ uninstall_components_present() {
         _has_unit pypiserver && extras+=("systemd unit")
         [[ -d /opt/mirroret-pypiserver ]] && extras+=("venv")
         id "${MIRRORET_PYPI_USER}" &>/dev/null && extras+=("user=${MIRRORET_PYPI_USER}")
-        echo "  pip (pypiserver) : present (${extras[*]})"
+        echo " pip (pypiserver) : present (${extras[*]})"
     else
-        echo "  pip (pypiserver) : not found"
+        echo " pip (pypiserver) : not found"
     fi
 
     # verdaccio
@@ -160,56 +160,56 @@ uninstall_components_present() {
         _has_unit verdaccio && extras+=("systemd unit")
         [[ -d /etc/verdaccio ]] && extras+=("/etc/verdaccio")
         id "${MIRRORET_NPM_USER}" &>/dev/null && extras+=("user=${MIRRORET_NPM_USER}")
-        echo "  npm (Verdaccio)  : present (${extras[*]})"
+        echo " npm (Verdaccio) : present (${extras[*]})"
     else
-        echo "  npm (Verdaccio)  : not found"
+        echo " npm (Verdaccio) : not found"
     fi
 
     # Docker registry
     if _has_docker_registry; then
         local extras=()
-        _has_unit docker-distribution        && extras+=("docker-distribution")
-        _has_unit docker-registry            && extras+=("docker-registry")
+        _has_unit docker-distribution && extras+=("docker-distribution")
+        _has_unit docker-registry && extras+=("docker-registry")
         _has_unit "${MIRRORET_DOCKER_CONTAINER_NAME}" && extras+=("podman unit")
-        _docker_container_exists             && extras+=("container=${MIRRORET_DOCKER_CONTAINER_NAME}")
+        _docker_container_exists && extras+=("container=${MIRRORET_DOCKER_CONTAINER_NAME}")
         [[ -f /etc/docker/registry/config.yml ]] && extras+=("/etc/docker/registry")
         [[ -f /etc/docker-distribution/registry/config.yml ]] && extras+=("/etc/docker-distribution/registry")
-        echo "  Docker registry  : present (${extras[*]})"
+        echo " Docker registry : present (${extras[*]})"
     else
-        echo "  Docker registry  : not found"
+        echo " Docker registry : not found"
     fi
 
     # APT mirror tool config
     if [[ -f /etc/apt/mirror.list ]] || [[ -d /opt/mirroret-apt-mirror2 ]]; then
         local extras=()
-        [[ -f /etc/apt/mirror.list ]]         && extras+=("/etc/apt/mirror.list")
-        [[ -d /opt/mirroret-apt-mirror2 ]]    && extras+=("apt-mirror2 venv")
-        echo "  APT mirror       : present (${extras[*]})"
+        [[ -f /etc/apt/mirror.list ]] && extras+=("/etc/apt/mirror.list")
+        [[ -d /opt/mirroret-apt-mirror2 ]] && extras+=("apt-mirror2 venv")
+        echo " APT mirror : present (${extras[*]})"
     else
-        echo "  APT mirror       : not found"
+        echo " APT mirror : not found"
     fi
 
     # RPM sync script
     if [[ -f "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh" ]]; then
-        echo "  RPM mirror       : present (sync script)"
+        echo " RPM mirror : present (sync script)"
     else
-        echo "  RPM mirror       : not found"
+        echo " RPM mirror : not found"
     fi
 
     # Mirror data
     if [[ -d "${MIRRORET_BASE_DIR}" ]]; then
         local size
         size="$(du -sh "${MIRRORET_BASE_DIR}" 2>/dev/null | awk '{print $1}')"
-        echo "  Mirror data tree : ${MIRRORET_BASE_DIR} (${size:-unknown size})"
+        echo " Mirror data tree : ${MIRRORET_BASE_DIR} (${size:-unknown size})"
     else
-        echo "  Mirror data tree : not found"
+        echo " Mirror data tree : not found"
     fi
 
     # Cron block
     if crontab -l 2>/dev/null | grep -qF "${UNINST_CRON_BEGIN}"; then
-        echo "  Cron entry       : present (managed block)"
+        echo " Cron entry : present (managed block)"
     else
-        echo "  Cron entry       : not found"
+        echo " Cron entry : not found"
     fi
 
     echo ""
@@ -239,10 +239,10 @@ _has_nginx_vhost() {
 }
 
 _has_docker_registry() {
-    _has_unit docker-distribution     && return 0
-    _has_unit docker-registry         && return 0
+    _has_unit docker-distribution && return 0
+    _has_unit docker-registry && return 0
     _has_unit "${MIRRORET_DOCKER_CONTAINER_NAME}" && return 0
-    _docker_container_exists          && return 0
+    _docker_container_exists && return 0
     [[ -f /etc/docker/registry/config.yml ]] && return 0
     [[ -f /etc/docker-distribution/registry/config.yml ]] && return 0
     return 1
@@ -260,7 +260,7 @@ _docker_container_exists() {
     return 1
 }
 
-# ── Per-component removers ───────────────────────────────────────────────────
+# -- Per-component removers ---------------------------------------------------
 
 uninst_remove_service() {
     # Stop + disable + delete a systemd unit and reset its failed state.
@@ -269,12 +269,12 @@ uninst_remove_service() {
         uninst_skip "service ${svc} (not installed)"
         return 0
     fi
-    uninst_do  "stop ${svc}.service"    systemctl stop    "${svc}.service" || true
+    uninst_do "stop ${svc}.service" systemctl stop "${svc}.service" || true
     uninst_try "disable ${svc}.service" systemctl disable "${svc}.service"
     # reset-failed is hygiene: it returns non-zero on many systemd builds
     # when the unit ISN'T in a failed state (i.e. there's nothing to reset).
-    # That is not a failure — treat it as best-effort.
-    uninst_try "reset-failed ${svc}"    systemctl reset-failed "${svc}.service"
+    # That is not a failure - treat it as best-effort.
+    uninst_try "reset-failed ${svc}" systemctl reset-failed "${svc}.service"
     local unit_file="/etc/systemd/system/${svc}.service"
     if [[ -f "${unit_file}" ]]; then
         uninst_do "rm ${unit_file}" rm -f "${unit_file}"
@@ -319,31 +319,31 @@ uninst_remove_dir() {
     uninst_do "rm -rf ${path}" rm -rf "$path" || true
 }
 
-# ── Component: pip / pypiserver ──────────────────────────────────────────────
+# -- Component: pip / pypiserver ----------------------------------------------
 
 uninstall_pip() {
     section "Removing pip / pypiserver"
     uninst_remove_service "pypiserver"
-    uninst_remove_user    "${MIRRORET_PYPI_USER}"
-    uninst_remove_file    "/usr/local/bin/pypi-server"
-    uninst_remove_dir     "/opt/mirroret-pypiserver"
-    uninst_remove_file    "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
+    uninst_remove_user "${MIRRORET_PYPI_USER}"
+    uninst_remove_file "/usr/local/bin/pypi-server"
+    uninst_remove_dir "/opt/mirroret-pypiserver"
+    uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
     # Mirror data under pip/ is removed by --purge; not touched otherwise.
 }
 
-# ── Component: npm / Verdaccio ───────────────────────────────────────────────
+# -- Component: npm / Verdaccio -----------------------------------------------
 
 uninstall_npm() {
     section "Removing npm / Verdaccio"
     uninst_remove_service "verdaccio"
-    uninst_remove_user    "${MIRRORET_NPM_USER}"
-    uninst_remove_dir     "/etc/verdaccio"
-    uninst_remove_file    "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
-    # We don't try to uninstall Verdaccio via `npm uninstall -g verdaccio` —
+    uninst_remove_user "${MIRRORET_NPM_USER}"
+    uninst_remove_dir "/etc/verdaccio"
+    uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+    # We don't try to uninstall Verdaccio via `npm uninstall -g verdaccio` -
     # that may be shared with other tooling and the install path varies.
 }
 
-# ── Component: Docker registry ───────────────────────────────────────────────
+# -- Component: Docker registry -----------------------------------------------
 
 uninstall_docker() {
     section "Removing Docker registry"
@@ -372,18 +372,18 @@ uninstall_docker() {
     fi
 
     # Config files.
-    uninst_remove_dir  "/etc/docker/registry"
-    uninst_remove_dir  "/etc/docker-distribution/registry"
+    uninst_remove_dir "/etc/docker/registry"
+    uninst_remove_dir "/etc/docker-distribution/registry"
 
     # Generated sync script (hosted mode only) + cache-mode-disabled stub.
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh.cache-mode-disabled"
 
-    # We do NOT uninstall docker or podman — operators may use those for
+    # We do NOT uninstall docker or podman - operators may use those for
     # other purposes. Removing the registry pieces only is the right scope.
 }
 
-# ── Component: APT mirror ────────────────────────────────────────────────────
+# -- Component: APT mirror ----------------------------------------------------
 
 uninstall_apt() {
     section "Removing APT mirror config"
@@ -397,11 +397,11 @@ uninstall_apt() {
     fi
     uninst_remove_dir "/opt/mirroret-apt-mirror2"
 
-    # We do not auto-uninstall the apt-mirror / debmirror OS packages —
+    # We do not auto-uninstall the apt-mirror / debmirror OS packages -
     # operators may want to keep them.
 }
 
-# ── Component: RPM mirror ────────────────────────────────────────────────────
+# -- Component: RPM mirror ----------------------------------------------------
 
 uninstall_rpm() {
     section "Removing RPM mirror config"
@@ -410,7 +410,7 @@ uninstall_rpm() {
     # ${MIRRORET_BASE_DIR}/redhat/ and is handled by --purge.
 }
 
-# ── Common: nginx vhost, cron, firewall, base dir, GPG, TLS ──────────────────
+# -- Common: nginx vhost, cron, firewall, base dir, GPG, TLS ------------------
 
 uninstall_nginx_vhost() {
     section "Removing nginx vhost"
@@ -468,7 +468,7 @@ uninstall_cron() {
         crontab -r 2>/dev/null || true
     else
         if ! printf '%s\n' "${stripped}" | crontab -; then
-            warn "[fail] crontab update — managed block left in place. Run: crontab -e"
+            warn "[fail] crontab update - managed block left in place. Run: crontab -e"
             UNINST_FAILED=$(( UNINST_FAILED + 1 ))
             return 0
         fi
@@ -485,14 +485,14 @@ uninstall_firewall() {
     section "Reversing firewall rules"
     local ports=()
     [[ "${UNINST_T_COMMON}" == "1" ]] && ports+=("${MIRRORET_WEB_PORT}" "${MIRRORET_TLS_PORT}")
-    [[ "${UNINST_T_PIP}"    == "1" ]] && ports+=("${MIRRORET_PIP_PORT}")
+    [[ "${UNINST_T_PIP}" == "1" ]] && ports+=("${MIRRORET_PIP_PORT}")
     [[ "${UNINST_T_DOCKER}" == "1" ]] && ports+=("${MIRRORET_DOCKER_REGISTRY_PORT}")
-    [[ "${UNINST_T_NPM}"    == "1" ]] && ports+=("${MIRRORET_NPM_PORT}")
+    [[ "${UNINST_T_NPM}" == "1" ]] && ports+=("${MIRRORET_NPM_PORT}")
     [[ ${#ports[@]} -eq 0 ]] && return 0
 
     # The installer's lib/firewall.sh installs different RULE SHAPES based
     # on whether MIRRORET_FIREWALL_SOURCE was set. To actually remove the
-    # rule, we have to delete the same shape — a "delete by port" call
+    # rule, we have to delete the same shape - a "delete by port" call
     # does not match a "rule from <CIDR>" entry, on any of the three
     # supported firewalls.
     #
@@ -537,7 +537,7 @@ uninstall_firewall() {
 
 uninstall_selinux_restore() {
     # Drop our file-context rule and restore default labels. Do NOT toggle
-    # httpd_can_network_connect — other services may rely on it.
+    # httpd_can_network_connect - other services may rely on it.
     if ! selinux_active; then
         uninst_skip "SELinux context restore (not active)"
         return 0
@@ -548,7 +548,7 @@ uninstall_selinux_restore() {
     fi
     if [[ -d "${MIRRORET_BASE_DIR}" ]]; then
         # semanage fcontext -d returns non-zero if the rule isn't in the
-        # local policy store — that's not a failure, it just means there's
+        # local policy store - that's not a failure, it just means there's
         # nothing to delete.
         uninst_try "semanage fcontext -d ${MIRRORET_BASE_DIR}(/.*)?" \
             semanage fcontext -d "${MIRRORET_BASE_DIR}(/.*)?"
@@ -577,7 +577,7 @@ uninstall_purge_data() {
         return 0
     fi
     section "Purging mirror data, backups, TLS, and GPG"
-    # Mirror data — usually hundreds of GB. We ALWAYS confirm interactively
+    # Mirror data - usually hundreds of GB. We ALWAYS confirm interactively
     # here unless --yes is set.
     if [[ -d "${MIRRORET_BASE_DIR}" ]]; then
         local size
@@ -615,15 +615,15 @@ uninstall_common() {
     uninstall_purge_data
 }
 
-# ── Plan + execution ─────────────────────────────────────────────────────────
+# -- Plan + execution ---------------------------------------------------------
 
 uninstall_build_plan() {
     UNINST_PLAN=()
-    if [[ "${UNINST_T_PIP}"    == "1" ]]; then uninst_step "remove pypiserver (service, user, venv, sync script)"; fi
-    if [[ "${UNINST_T_NPM}"    == "1" ]]; then uninst_step "remove Verdaccio (service, user, /etc/verdaccio, sync script)"; fi
+    if [[ "${UNINST_T_PIP}" == "1" ]]; then uninst_step "remove pypiserver (service, user, venv, sync script)"; fi
+    if [[ "${UNINST_T_NPM}" == "1" ]]; then uninst_step "remove Verdaccio (service, user, /etc/verdaccio, sync script)"; fi
     if [[ "${UNINST_T_DOCKER}" == "1" ]]; then uninst_step "remove Docker registry (services, container, configs, sync script)"; fi
-    if [[ "${UNINST_T_APT}"    == "1" ]]; then uninst_step "remove APT mirror config (/etc/apt/mirror.list, apt-mirror2 venv)"; fi
-    if [[ "${UNINST_T_RPM}"    == "1" ]]; then uninst_step "remove RPM mirror config (sync script)"; fi
+    if [[ "${UNINST_T_APT}" == "1" ]]; then uninst_step "remove APT mirror config (/etc/apt/mirror.list, apt-mirror2 venv)"; fi
+    if [[ "${UNINST_T_RPM}" == "1" ]]; then uninst_step "remove RPM mirror config (sync script)"; fi
     if [[ "${UNINST_T_COMMON}" == "1" ]]; then
         uninst_step "remove nginx vhost (sites-available/enabled, conf.d, reload nginx)"
         uninst_step "strip cron managed block"
@@ -646,19 +646,19 @@ uninstall_plan_show() {
     echo "Uninstall plan:"
     echo ""
     if [[ ${#UNINST_PLAN[@]} -eq 0 ]]; then
-        echo "  (nothing — no targets selected)"
+        echo " (nothing - no targets selected)"
     else
         local i=1
         for entry in "${UNINST_PLAN[@]}"; do
-            printf "  %d. %s\n" "$i" "$entry"
+            printf " %d. %s\n" "$i" "$entry"
             i=$(( i + 1 ))
         done
     fi
     echo ""
-    [[ "${UNINST_PURGE}"         == "1" ]] && echo "  PURGE       : YES (data, backups, GPG, TLS)"
-    [[ "${UNINST_KEEP_USERS}"    == "1" ]] && echo "  Keep users  : YES"
-    [[ "${UNINST_KEEP_FIREWALL}" == "1" ]] && echo "  Keep firewall rules : YES"
-    [[ "${UNINST_ASSUME_YES}"    == "1" ]] && echo "  Assume yes  : YES"
+    [[ "${UNINST_PURGE}" == "1" ]] && echo " PURGE : YES (data, backups, GPG, TLS)"
+    [[ "${UNINST_KEEP_USERS}" == "1" ]] && echo " Keep users : YES"
+    [[ "${UNINST_KEEP_FIREWALL}" == "1" ]] && echo " Keep firewall rules : YES"
+    [[ "${UNINST_ASSUME_YES}" == "1" ]] && echo " Assume yes : YES"
     echo ""
 }
 
@@ -666,11 +666,11 @@ uninstall_execute() {
     # daemon-reload once after we've removed unit files.
     local need_daemon_reload=0
 
-    [[ "${UNINST_T_PIP}"    == "1" ]] && { uninstall_pip;    need_daemon_reload=1; }
-    [[ "${UNINST_T_NPM}"    == "1" ]] && { uninstall_npm;    need_daemon_reload=1; }
+    [[ "${UNINST_T_PIP}" == "1" ]] && { uninstall_pip; need_daemon_reload=1; }
+    [[ "${UNINST_T_NPM}" == "1" ]] && { uninstall_npm; need_daemon_reload=1; }
     [[ "${UNINST_T_DOCKER}" == "1" ]] && { uninstall_docker; need_daemon_reload=1; }
-    [[ "${UNINST_T_APT}"    == "1" ]] && uninstall_apt
-    [[ "${UNINST_T_RPM}"    == "1" ]] && uninstall_rpm
+    [[ "${UNINST_T_APT}" == "1" ]] && uninstall_apt
+    [[ "${UNINST_T_RPM}" == "1" ]] && uninstall_rpm
     [[ "${UNINST_T_COMMON}" == "1" ]] && uninstall_common
 
     if [[ "${need_daemon_reload}" == "1" ]] && [[ "${DRY_RUN:-0}" != "1" ]] && [[ "${UNINST_LIST_ONLY}" != "1" ]]; then
@@ -680,61 +680,61 @@ uninstall_execute() {
     fi
 }
 
-# uninstall_main <args...> — parse CLI flags, build plan, execute.
+# uninstall_main <args...> - parse CLI flags, build plan, execute.
 uninstall_main() {
     # Defaults: when no component is named, target ALL of them.
     local any_target=0
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --apt)          UNINST_T_APT=1;    any_target=1 ;;
-            --rpm)          UNINST_T_RPM=1;    any_target=1 ;;
-            --pip)          UNINST_T_PIP=1;    any_target=1 ;;
-            --npm)          UNINST_T_NPM=1;    any_target=1 ;;
-            --docker)       UNINST_T_DOCKER=1; any_target=1 ;;
-            --common)       UNINST_T_COMMON=1; any_target=1 ;;
+            --apt) UNINST_T_APT=1; any_target=1 ;;
+            --rpm) UNINST_T_RPM=1; any_target=1 ;;
+            --pip) UNINST_T_PIP=1; any_target=1 ;;
+            --npm) UNINST_T_NPM=1; any_target=1 ;;
+            --docker) UNINST_T_DOCKER=1; any_target=1 ;;
+            --common) UNINST_T_COMMON=1; any_target=1 ;;
             --all)
                 UNINST_T_APT=1; UNINST_T_RPM=1; UNINST_T_PIP=1
                 UNINST_T_NPM=1; UNINST_T_DOCKER=1; UNINST_T_COMMON=1
                 any_target=1
                 ;;
-            --purge)        UNINST_PURGE=1 ;;
-            --keep-users)   UNINST_KEEP_USERS=1 ;;
+            --purge) UNINST_PURGE=1 ;;
+            --keep-users) UNINST_KEEP_USERS=1 ;;
             --keep-firewall) UNINST_KEEP_FIREWALL=1 ;;
-            --yes|-y)       UNINST_ASSUME_YES=1 ;;
-            --dry-run)      DRY_RUN=1 ;;
-            --list)         UNINST_LIST_ONLY=1 ;;
-            --base-dir)     shift; MIRRORET_BASE_DIR="$1" ;;
-            -h|--help)      _uninstall_usage; return 0 ;;
+            --yes|-y) UNINST_ASSUME_YES=1 ;;
+            --dry-run) DRY_RUN=1 ;;
+            --list) UNINST_LIST_ONLY=1 ;;
+            --base-dir) shift; MIRRORET_BASE_DIR="$1" ;;
+            -h|--help) _uninstall_usage; return 0 ;;
             --check|--validate|--status|--backup-only|--rollback|--list-backups|--no-apt|--no-rpm|--no-pip|--no-docker|--no-npm|--no-firewall|--insecure|--tls-self-signed|--gpg-auto|--approval-mode|--list-staging|--approve-all-pip|--approve-all-npm|--config)
                 die "Flag $1 is an install.sh flag, not an uninstall flag. See ./uninstall.sh --help."
                 ;;
-            *)              die "Unknown uninstall flag: $1. Run ./uninstall.sh --help for the flag list." ;;
+            *) die "Unknown uninstall flag: $1. Run ./uninstall.sh --help for the flag list." ;;
         esac
         shift
     done
 
     if [[ "${any_target}" == "0" ]]; then
-        # No component named — default to everything.
+        # No component named - default to everything.
         UNINST_T_APT=1; UNINST_T_RPM=1; UNINST_T_PIP=1
         UNINST_T_NPM=1; UNINST_T_DOCKER=1; UNINST_T_COMMON=1
     fi
 
     # --purge only takes effect inside the --common path (it's what owns
     # the data tree, backups, TLS, and GPG). Warn rather than silently
-    # ignoring the flag — the operator clearly wanted data removed.
+    # ignoring the flag - the operator clearly wanted data removed.
     if [[ "${UNINST_PURGE}" == "1" ]] && [[ "${UNINST_T_COMMON}" != "1" ]]; then
         warn "--purge has no effect without --common or --all (data lives outside per-component scope)."
         warn "Add --common or --all if you actually want to delete ${MIRRORET_BASE_DIR}."
     fi
 
     section "Mirroret uninstaller"
-    info "Base dir       : ${MIRRORET_BASE_DIR}"
-    info "Dry-run        : ${DRY_RUN:-0}"
-    info "List-only      : ${UNINST_LIST_ONLY}"
-    info "Purge          : ${UNINST_PURGE}"
-    info "Keep users     : ${UNINST_KEEP_USERS}"
-    info "Keep firewall  : ${UNINST_KEEP_FIREWALL}"
+    info "Base dir : ${MIRRORET_BASE_DIR}"
+    info "Dry-run : ${DRY_RUN:-0}"
+    info "List-only : ${UNINST_LIST_ONLY}"
+    info "Purge : ${UNINST_PURGE}"
+    info "Keep users : ${UNINST_KEEP_USERS}"
+    info "Keep firewall : ${UNINST_KEEP_FIREWALL}"
 
     uninstall_components_present
     uninstall_build_plan
@@ -756,12 +756,12 @@ uninstall_main() {
     uninstall_execute
 
     echo ""
-    info "Uninstall summary: removed=${UNINST_REMOVED}  skipped=${UNINST_SKIPPED}  failed=${UNINST_FAILED}"
+    info "Uninstall summary: removed=${UNINST_REMOVED} skipped=${UNINST_SKIPPED} failed=${UNINST_FAILED}"
     if [[ "${UNINST_FAILED}" -gt 0 ]]; then
         warn "Some items failed:"
         local lbl
         for lbl in "${UNINST_FAILED_LABELS[@]}"; do
-            warn "  - ${lbl}"
+            warn " - ${lbl}"
         done
         warn "Re-run with --debug for more detail."
         return 1
@@ -771,39 +771,39 @@ uninstall_main() {
 
 _uninstall_usage() {
     cat <<'USAGE'
-mirroret uninstaller — selective and full removal.
+mirroret uninstaller - selective and full removal.
 
 Usage:
-  sudo ./uninstall.sh                       # remove everything (asks for confirmation)
-  sudo ./uninstall.sh --docker              # remove only the Docker registry
-  sudo ./uninstall.sh --pip --npm           # remove pip + npm only
-  sudo ./uninstall.sh --all --purge --yes   # full wipe including data + GPG, no prompts
-  sudo ./uninstall.sh --list                # show what would be removed, do nothing
-  sudo ./uninstall.sh --dry-run             # detailed plan, do nothing
+  sudo ./uninstall.sh # remove everything (asks for confirmation)
+  sudo ./uninstall.sh --docker # remove only the Docker registry
+  sudo ./uninstall.sh --pip --npm # remove pip + npm only
+  sudo ./uninstall.sh --all --purge --yes # full wipe including data + GPG, no prompts
+  sudo ./uninstall.sh --list # show what would be removed, do nothing
+  sudo ./uninstall.sh --dry-run # detailed plan, do nothing
 
 Component targets (combine freely; default is all):
-  --apt        APT mirror config + apt-mirror2 venv
-  --rpm        RPM mirror sync script
-  --pip        pypiserver (service, user, venv)
-  --npm        Verdaccio (service, user, /etc/verdaccio)
-  --docker     Docker registry (services, container, config)
-  --common     nginx vhost, cron, master sync, SELinux restore, firewall
-  --all        every component (equivalent to listing them all)
+  --apt APT mirror config + apt-mirror2 venv
+  --rpm RPM mirror sync script
+  --pip pypiserver (service, user, venv)
+  --npm Verdaccio (service, user, /etc/verdaccio)
+  --docker Docker registry (services, container, config)
+  --common nginx vhost, cron, master sync, SELinux restore, firewall
+  --all every component (equivalent to listing them all)
 
 Scope flags:
-  --purge          ALSO delete mirror data, backups, TLS, GPG. PROMPTS.
-  --keep-users     do not delete mirroret-pip / mirroret-npm
-  --keep-firewall  do not reverse firewall rules
-  --base-dir <p>   override MIRRORET_BASE_DIR (default /srv/mirroret)
+  --purge ALSO delete mirror data, backups, TLS, GPG. PROMPTS.
+  --keep-users do not delete mirroret-pip / mirroret-npm
+  --keep-firewall do not reverse firewall rules
+  --base-dir <p> override MIRRORET_BASE_DIR (default /srv/mirroret)
 
 Modes:
-  --list           print the plan, exit
-  --dry-run        print the plan, exit (alias-like, with [DRY-RUN] markers)
-  --yes, -y        accept all confirmations
-  --help, -h       show this help
+  --list print the plan, exit
+  --dry-run print the plan, exit (alias-like, with [DRY-RUN] markers)
+  --yes, -y accept all confirmations
+  --help, -h show this help
 
 The uninstaller never removes nginx, docker, podman, debmirror, or other
-OS packages — operators may use those for unrelated purposes. It only
+OS packages - operators may use those for unrelated purposes. It only
 removes things mirroret itself created.
 USAGE
 }

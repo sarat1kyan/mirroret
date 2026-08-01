@@ -2,7 +2,7 @@
 # Copy to /etc/mirroret/mirroret.conf or pass via --config <path>
 # All values can also be set as environment variables with the same name.
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+# -- Paths ---------------------------------------------------------------------
 
 # Base directory for all repository data.
 # Default: /srv/mirroret
@@ -12,7 +12,7 @@
 # Default: /var/backups/mirroret
 #MIRRORET_BACKUP_BASE=/var/backups/mirroret
 
-# ── Network ───────────────────────────────────────────────────────────────────
+# -- Network -------------------------------------------------------------------
 
 # IP address to use in generated client configs.
 # Default: auto-detected via 'ip route get 1.1.1.1'
@@ -36,14 +36,14 @@
 # Default: 4873
 #MIRRORET_NPM_PORT=4873
 
-# ── Firewall ──────────────────────────────────────────────────────────────────
+# -- Firewall ------------------------------------------------------------------
 
 # Source CIDR to restrict all repository ports to a specific subnet.
 # Leave empty to allow from any source (not recommended for production).
-# Example: 10.0.0.0/8  or  192.168.1.0/24
+# Example: 10.0.0.0/8 or 192.168.1.0/24
 #MIRRORET_FIREWALL_SOURCE=
 
-# ── Distribution / distro-specific ───────────────────────────────────────────
+# -- Distribution / distro-specific -------------------------------------------
 
 # Ubuntu codename to mirror (e.g. focal, jammy, noble).
 # Default: auto-detected from the running system.
@@ -61,7 +61,7 @@
 # Default: 10
 #MIRRORET_APT_THREADS=10
 
-# ── Security ─────────────────────────────────────────────────────────────────
+# -- Security -----------------------------------------------------------------
 
 # APT client config: path to GPG keyring for package signing.
 # When set, generated client configs use 'signed-by=<path>'.
@@ -96,7 +96,7 @@
 # Default: 0 (off)
 #MIRRORET_PIP_INSECURE=0
 
-# ── TLS ───────────────────────────────────────────────────────────────────────
+# -- TLS -----------------------------------------------------------------------
 
 # Set to 1 to generate a self-signed certificate during install.
 # The cert is stored in MIRRORET_TLS_DIR and used for the nginx HTTPS listener.
@@ -115,7 +115,7 @@
 # Default: /etc/mirroret/tls
 #MIRRORET_TLS_DIR=/etc/mirroret/tls
 
-# ── GPG signing ───────────────────────────────────────────────────────────────
+# -- GPG signing ---------------------------------------------------------------
 
 # Set to 1 to auto-generate a GPG key for APT/RPM signing if none exists.
 # The key is stored in MIRRORET_GPG_HOMEDIR.
@@ -134,30 +134,30 @@
 # Leave empty to auto-detect or auto-generate.
 #MIRRORET_GPG_KEYID=
 
-# ── Package approval workflow ─────────────────────────────────────────────────
+# -- Package approval workflow -------------------------------------------------
 
-# Set to 1 to enable the staging → approved workflow for pip and npm.
+# Set to 1 to enable the staging -> approved workflow for pip and npm.
 # Sync scripts download to staging/; an admin promotes packages to approved/.
 # nginx serves only packages in approved/.
 # Use --list-staging / --approve-all-pip / --approve-all-npm to manage.
 # Default: 0 (off)
 #MIRRORET_APPROVAL_ENABLED=0
 
-# ── Docker registry backend / mode ────────────────────────────────────────────
+# -- Docker registry backend / mode --------------------------------------------
 
 # How to RUN the registry.
-#   auto      — use OS package if available, fall back to container (default)
-#   native    — OS package: docker-distribution (RHEL) or docker-registry (Debian)
-#   container — registry:2 container via Docker or Podman
+# auto - use OS package if available, fall back to container (default)
+# native - OS package: docker-distribution (RHEL) or docker-registry (Debian)
+# container - registry:2 container via Docker or Podman
 #MIRRORET_DOCKER_BACKEND=auto
 
 # Operating mode for the registry.
-#   cache  — pull-through proxy (default). The registry transparently
-#            forwards and caches every layer pulled by a client. The
-#            registry REJECTS pushes in this mode; no pre-seed sync
-#            script is generated.
-#   hosted — local registry. Accepts docker push from operators and
-#            sync-docker-images.sh. No upstream proxy.
+# cache - pull-through proxy (default). The registry transparently
+# forwards and caches every layer pulled by a client. The
+# registry REJECTS pushes in this mode; no pre-seed sync
+# script is generated.
+# hosted - local registry. Accepts docker push from operators and
+# sync-docker-images.sh. No upstream proxy.
 #MIRRORET_DOCKER_MODE=cache
 
 # Upstream registry for cache mode.
@@ -169,18 +169,18 @@
 # When unset, a small built-in default list is used.
 #MIRRORET_DOCKER_IMAGES_FILE=/etc/mirroret/docker-images.txt
 
-# ── APT mirror tool / flavor / upstream ──────────────────────────────────────
+# -- APT mirror tool / flavor / upstream --------------------------------------
 
 # Which tool to use for mirroring APT repositories.
-#   auto       — try apt-mirror, then apt-mirror2 (pip), then debmirror
-#   apt-mirror — use apt-mirror (classic)
-#   debmirror  — use debmirror (required on Debian 12+)
+# auto - try apt-mirror, then apt-mirror2 (pip), then debmirror
+# apt-mirror - use apt-mirror (classic)
+# debmirror - use debmirror (required on Debian 12+)
 #MIRRORET_APT_MIRROR_TOOL=auto
 
 # Which APT family to mirror.
-#   auto    — derive from /etc/os-release on the mirror server (default)
-#   ubuntu  — force Ubuntu upstream (archive.ubuntu.com)
-#   debian  — force Debian upstream (deb.debian.org + security.debian.org)
+# auto - derive from /etc/os-release on the mirror server (default)
+# ubuntu - force Ubuntu upstream (archive.ubuntu.com)
+# debian - force Debian upstream (deb.debian.org + security.debian.org)
 #MIRRORET_APT_FLAVOR=auto
 
 # Override the upstream archive host. Useful for regional mirrors or
@@ -189,40 +189,40 @@
 #MIRRORET_APT_SECURITY_HOST=security.debian.org
 
 # Override the components list. Defaults to:
-#   Ubuntu: "main restricted universe multiverse"
-#   Debian: "main contrib non-free non-free-firmware"
+# Ubuntu: "main restricted universe multiverse"
+# Debian: "main contrib non-free non-free-firmware"
 #MIRRORET_APT_COMPONENTS="main contrib non-free non-free-firmware"
 
 # Mirroret re-signs the mirrored Release files with its own GPG key.
-# DEFAULT: 0 (no re-sign — client configs do NOT emit signed-by=mirroret.gpg).
+# DEFAULT: 0 (no re-sign - client configs do NOT emit signed-by=mirroret.gpg).
 # Set to 1 ONLY if you have set up a re-sign workflow yourself.
 #MIRRORET_APT_RESIGN=0
 
-# ── RPM flavor / repos ───────────────────────────────────────────────────────
+# -- RPM flavor / repos -------------------------------------------------------
 
-# Directory name under redhat/mirror/ — defaults to OS_ID, so AlmaLinux
+# Directory name under redhat/mirror/ - defaults to OS_ID, so AlmaLinux
 # servers store under almalinux/, Rocky under rocky/, etc.
 #MIRRORET_RPM_FLAVOR=
 
-# ── RPM sync safety (IMPORTANT) ───────────────────────────────────────────────
+# -- RPM sync safety (IMPORTANT) -----------------------------------------------
 
 # Architecture to mirror. "noarch" is always included in addition.
 # Default: x86_64
 #MIRRORET_RPM_ARCH=x86_64
 
 # Only mirror the newest build of each package.
-# Default: 1 (ON). Set 0 for full version history — this multiplies disk
+# Default: 1 (ON). Set 0 for full version history - this multiplies disk
 # usage several times over and is rarely what you want.
 #MIRRORET_RPM_NEWEST_ONLY=1
 
 # Mirror source RPMs (.src.rpm).
-# Default: 0 (OFF) — and you almost certainly want it OFF.
+# Default: 0 (OFF) - and you almost certainly want it OFF.
 # Source RPMs are 400-600 MB EACH. The OL9 appstream repo carries roughly
 # 44,000 of them. Enabling this needs MULTIPLE TERABYTES of disk.
 #MIRRORET_RPM_SOURCE=0
 
 # Delete local packages that upstream no longer ships.
-# Default: 1 (ON) — keeps the mirror tracking upstream and bounds growth.
+# Default: 1 (ON) - keeps the mirror tracking upstream and bounds growth.
 # Set 0 to accumulate every package ever seen.
 #MIRRORET_RPM_DELETE=1
 
@@ -231,15 +231,15 @@
 #MIRRORET_SYNC_MIN_FREE_GB=10
 
 # Repository list to sync. Defaults vary by flavor.
-# Rocky/Alma 8:   "baseos appstream extras"
-# Rocky/Alma 9:   "baseos appstream"
-# RHEL:           "rhel-9-for-x86_64-baseos-rpms rhel-9-for-x86_64-appstream-rpms"
+# Rocky/Alma 8: "baseos appstream extras"
+# Rocky/Alma 9: "baseos appstream"
+# RHEL: "rhel-9-for-x86_64-baseos-rpms rhel-9-for-x86_64-appstream-rpms"
 # Oracle Linux 9: "ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL"
 # Oracle Linux 8: "ol8_baseos_latest ol8_appstream"
-# Fedora:         "fedora updates"
+# Fedora: "fedora updates"
 #MIRRORET_RPM_REPOS="baseos appstream"
 
-# ── npm extras ────────────────────────────────────────────────────────────────
+# -- npm extras ----------------------------------------------------------------
 
 # Path to a file listing npm packages to sync (one per line, # for comments).
 # When unset, a built-in default list is used.
@@ -249,7 +249,7 @@
 # When 0 (default), npm login is required before publishing.
 #MIRRORET_NPM_ALLOW_ANON_PUBLISH=0
 
-# ── Components ────────────────────────────────────────────────────────────────
+# -- Components ----------------------------------------------------------------
 
 # Set to 0 to disable a component entirely.
 # Default: 1 (enabled)
@@ -259,7 +259,7 @@
 #MIRRORET_ENABLE_DOCKER=1
 #MIRRORET_ENABLE_NPM=1
 
-# ── Behaviour ─────────────────────────────────────────────────────────────────
+# -- Behaviour -----------------------------------------------------------------
 
 # Minimum free disk space (GB) required before installation proceeds.
 # Set to 0 to skip the check.
@@ -279,7 +279,7 @@
 # Default: 2
 #MIRRORET_SYNC_HOUR=2
 
-# ── Preflight ────────────────────────────────────────────────────────────────
+# -- Preflight ----------------------------------------------------------------
 
 # Run an optional outbound HTTPS probe during preflight. Off by default
 # to keep `--check` fast and to avoid blocking offline installs.
@@ -289,7 +289,7 @@
 #MIRRORET_PIP_PACKAGES_FILE=/etc/mirroret/pip-packages.txt
 #MIRRORET_NPM_PACKAGES_FILE=/etc/mirroret/npm-packages.txt
 
-# ── Retention / cleanup ──────────────────────────────────────────────────────
+# -- Retention / cleanup ------------------------------------------------------
 
 # Retention is OPT-IN. Default: keep everything forever.
 # Enable it, then set the mode to 'report' (dry-run) first to see what
@@ -299,28 +299,28 @@
 # by default (override MIRRORET_CLEANUP_HOUR / MIRRORET_CLEANUP_DOW).
 #
 # You can also invoke it manually:
-#   sudo ./install.sh --cleanup-report    # dry-run, prints what would go
-#   sudo ./install.sh --cleanup           # actually delete
+# sudo ./install.sh --cleanup-report # dry-run, prints what would go
+# sudo ./install.sh --cleanup # actually delete
 
-#MIRRORET_RETENTION_ENABLE=0        # 1 to enable
-#MIRRORET_RETENTION_MODE=report     # report | prune
+#MIRRORET_RETENTION_ENABLE=0 # 1 to enable
+#MIRRORET_RETENTION_MODE=report # report | prune
 
 # Per-ecosystem policies (only take effect when RETENTION_ENABLE=1)
-#MIRRORET_RPM_KEEP_VERSIONS=3       # keep 3 newest of each RPM (0 = disable)
-#MIRRORET_PIP_KEEP_VERSIONS=3       # keep 3 newest wheels/sdists per package
-#MIRRORET_NPM_KEEP_DAYS=180         # drop npm tarballs older than N days
-#MIRRORET_DOCKER_GC=0               # 1 = weekly registry garbage-collect
-                                    #     (needs brief registry restart)
+#MIRRORET_RPM_KEEP_VERSIONS=3 # keep 3 newest of each RPM (0 = disable)
+#MIRRORET_PIP_KEEP_VERSIONS=3 # keep 3 newest wheels/sdists per package
+#MIRRORET_NPM_KEEP_DAYS=180 # drop npm tarballs older than N days
+#MIRRORET_DOCKER_GC=0 # 1 = weekly registry garbage-collect
+                                    # (needs brief registry restart)
 
 # Cron schedule for the weekly cleanup (default Sun @ 03:00).
 #MIRRORET_CLEANUP_HOUR=3
-#MIRRORET_CLEANUP_DOW=0             # 0=Sun ... 6=Sat
+#MIRRORET_CLEANUP_DOW=0 # 0=Sun ... 6=Sat
 
-# ── Proxy / corporate CA (needed for unattended cron syncs) ───────────────────
+# -- Proxy / corporate CA (needed for unattended cron syncs) -------------------
 
 # Proxy for all upstream fetches. Set these HERE (not just in your shell) so
 # the cron-driven syncs and the Verdaccio/pypiserver systemd units inherit
-# them — cron and systemd do NOT read /etc/environment or shell rc files.
+# them - cron and systemd do NOT read /etc/environment or shell rc files.
 #http_proxy=http://proxy.example.internal:3128
 #https_proxy=http://proxy.example.internal:3128
 #no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,192.168.0.0/16
@@ -332,7 +332,7 @@
 # You still need the CA in the OS store: see FIXME-ENVIRONMENT.md.
 #MIRRORET_CA_BUNDLE=/etc/pki/tls/cert.pem
 
-# ── Sync timeouts / log retention ─────────────────────────────────────────────
+# -- Sync timeouts / log retention ---------------------------------------------
 
 # Wall-clock cap on a single reposync invocation. Behind a flaky proxy
 # reposync can hang for days while holding the sync lock, which silently

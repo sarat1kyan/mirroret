@@ -1,11 +1,11 @@
 # Quick Reference Card - Local Repository Server
 
-## 🚀 Installation (One Command)
+## Installation (One Command)
 ```bash
 sudo ./mirroret-server-install.sh
 ```
 
-## 📍 Important Locations
+## Important Locations
 
 | Location | Purpose |
 |----------|---------|
@@ -16,7 +16,7 @@ sudo ./mirroret-server-install.sh
 | `/var/mirroret/config/` | Client configuration files |
 | `/var/mirroret/logs/` | All system logs |
 
-## 🔧 Essential Commands
+## Essential Commands
 
 ### Server Management
 ```bash
@@ -84,7 +84,7 @@ find /var/mirroret/logs -mtime +30 -delete
 crontab -l | grep sync-mirror
 ```
 
-## 🖥️ Client Setup Commands
+## Client Setup Commands
 
 ### Ubuntu/Debian Clients
 ```bash
@@ -117,7 +117,7 @@ sudo mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/
 sudo dnf install htop
 ```
 
-## 🌐 Network Information
+## Network Information
 
 ### Ports
 - **8080** - HTTP (Repository Access)
@@ -139,7 +139,7 @@ sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address
 sudo firewall-cmd --reload
 ```
 
-## 📊 Workflow Cheat Sheet
+## Workflow Cheat Sheet
 
 ### Daily Routine (5 min)
 ```bash
@@ -174,14 +174,14 @@ scp /var/mirroret/config/localrepo.list user@client:/tmp/
 wget http://SERVER_IP:8080/config/localrepo.list
 ```
 
-## 🔍 Troubleshooting Quick Fixes
+## Troubleshooting Quick Fixes
 
 ### Nginx Not Working
 ```bash
-sudo nginx -t                    # Test config
-sudo systemctl restart nginx     # Restart
-sudo systemctl status nginx      # Check status
-sudo journalctl -u nginx -f      # View logs
+sudo nginx -t # Test config
+sudo systemctl restart nginx # Restart
+sudo systemctl status nginx # Check status
+sudo journalctl -u nginx -f # View logs
 ```
 
 ### Sync Failed
@@ -237,7 +237,7 @@ createrepo --update /var/mirroret/approved/centos/9/baseos
 sudo systemctl restart nginx
 ```
 
-## 📝 Configuration File Locations
+## Configuration File Locations
 
 | File | Purpose |
 |------|---------|
@@ -248,12 +248,12 @@ sudo systemctl restart nginx
 | `/var/mirroret/config/approved-packages.txt` | Package whitelist |
 | `/var/mirroret/config/approval-rules.conf` | Auto-approval rules |
 
-## ⚡ Performance Tuning
+## Performance Tuning
 
 ### Increase Sync Speed
 ```bash
 # Edit /etc/apt/mirror.list
-set nthreads 20  # More parallel downloads
+set nthreads 20 # More parallel downloads
 ```
 
 ### Optimize Nginx
@@ -270,7 +270,7 @@ worker_connections 4096;
 # With: http://us.archive.ubuntu.com (or closest)
 ```
 
-## 🔐 Security Quick Tips
+## Security Quick Tips
 
 ### Enable HTTPS
 ```bash
@@ -300,7 +300,7 @@ allow 192.168.1.0/24;
 deny all;
 ```
 
-## 📅 Scheduled Tasks
+## Scheduled Tasks
 
 ### Current Cron Jobs
 ```bash
@@ -318,7 +318,7 @@ crontab -e
 # Change hour: 0 2 * * * (2 AM) to 0 4 * * * (4 AM)
 ```
 
-## 📞 Emergency Contacts & Info
+## Emergency Contacts & Info
 
 | Item | Value |
 |------|-------|
@@ -328,7 +328,7 @@ crontab -e
 | Nginx Errors | `/var/log/nginx/mirroret-error.log` |
 | Documentation | `/var/mirroret/README.md` |
 
-## 🎯 One-Liners for Common Tasks
+## One-Liners for Common Tasks
 
 ```bash
 # Quick status check
@@ -344,7 +344,7 @@ tail -1000 /var/log/nginx/mirroret-access.log | awk '{print $1}' | sort -u
 tail -1000 /var/log/nginx/mirroret-access.log | grep -oP '/[^/]+\.(deb|rpm)' | sort | uniq -c | sort -rn | head -10
 ```
 
-## 🆘 Getting Help
+## Getting Help
 
 1. Check logs first: `tail -f /var/mirroret/logs/*.log`
 2. Review documentation: `cat /var/mirroret/README.md`
@@ -355,7 +355,7 @@ tail -1000 /var/log/nginx/mirroret-access.log | grep -oP '/[^/]+\.(deb|rpm)' | s
 
 **Print this card and keep it handy for quick reference!**
 
-**Server IP**: _______________  
-**Port**: 8080  
-**First Install Date**: _______________  
+**Server IP**: _______________
+**Port**: 8080
+**First Install Date**: _______________
 **Admin Contact**: _______________

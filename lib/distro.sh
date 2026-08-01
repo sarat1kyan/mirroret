@@ -44,12 +44,12 @@ detect_distro() {
     export DISTRO_TYPE OS_ID OS_VER OS_CODENAME PKG_MGR PKG_MGR_INSTALL
 }
 
-# rhel_major_version — print just the major version number.
+# rhel_major_version - print just the major version number.
 rhel_major_version() {
     echo "${OS_VER%%.*}"
 }
 
-# ubuntu_codename — print the Ubuntu codename.
+# ubuntu_codename - print the Ubuntu codename.
 # Priority: MIRRORET_UBUNTU_CODENAME > OS_CODENAME > derive from OS_VER.
 ubuntu_codename() {
     if [[ -n "${MIRRORET_UBUNTU_CODENAME:-}" ]]; then
@@ -64,12 +64,12 @@ ubuntu_codename() {
             20.04) echo "focal" ;;
             22.04) echo "jammy" ;;
             24.04) echo "noble" ;;
-            *)     die "Unknown Ubuntu version ${OS_VER}; set MIRRORET_UBUNTU_CODENAME manually." ;;
+            *) die "Unknown Ubuntu version ${OS_VER}; set MIRRORET_UBUNTU_CODENAME manually." ;;
         esac
     fi
 }
 
-# selinux_mode — print the current SELinux mode: enforcing, permissive,
+# selinux_mode - print the current SELinux mode: enforcing, permissive,
 # disabled, or absent. Never fails, never errors.
 selinux_mode() {
     if [[ ! -f /sys/fs/selinux/enforce ]]; then
@@ -83,12 +83,12 @@ selinux_mode() {
     esac
 }
 
-# selinux_enforcing — true if SELinux is in enforcing mode.
+# selinux_enforcing - true if SELinux is in enforcing mode.
 selinux_enforcing() {
     [[ "$(selinux_mode)" == "enforcing" ]]
 }
 
-# selinux_active — true if SELinux is enforcing OR permissive (i.e., loaded).
+# selinux_active - true if SELinux is enforcing OR permissive (i.e., loaded).
 # We want to apply contexts and booleans even in permissive mode so that
 # a future switch to enforcing doesn't surprise the operator.
 selinux_active() {
@@ -98,7 +98,7 @@ selinux_active() {
     esac
 }
 
-# set_selinux_context <path> — set the correct SELinux context for web content
+# set_selinux_context <path> - set the correct SELinux context for web content
 # AND enable httpd_can_network_connect so nginx can reverse-proxy to local
 # backends (pypiserver, Verdaccio, the Docker registry). Non-fatal: SELinux
 # tooling is sometimes absent on minimal images.
@@ -106,7 +106,7 @@ set_selinux_context() {
     local path="$1"
 
     if ! selinux_active; then
-        debug "SELinux not active — skipping context + boolean setup."
+        debug "SELinux not active - skipping context + boolean setup."
         return 0
     fi
 
@@ -121,7 +121,7 @@ set_selinux_context() {
         xrun restorecon -Rv "$path" || true
     fi
 
-    # Booleans: nginx → pypiserver/Verdaccio/registry on loopback ports.
+    # Booleans: nginx -> pypiserver/Verdaccio/registry on loopback ports.
     # Without httpd_can_network_connect, nginx will return 502 from /pip/,
     # /npm/, /v2/ on every enforcing-SELinux host.
     if check_command setsebool; then
@@ -130,6 +130,6 @@ set_selinux_context() {
             warn "Failed to enable httpd_can_network_connect. nginx may 502 on /pip /npm /v2."
     else
         warn "setsebool not found. nginx may 502 on proxied locations until you run:"
-        warn "    setsebool -P httpd_can_network_connect 1"
+        warn " setsebool -P httpd_can_network_connect 1"
     fi
 }

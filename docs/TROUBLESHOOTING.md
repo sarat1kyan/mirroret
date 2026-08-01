@@ -28,7 +28,7 @@ ls -lth /srv/mirroret/logs/
 ### nginx fails to start
 
 ```bash
-sudo nginx -t           # check config syntax
+sudo nginx -t # check config syntax
 sudo journalctl -u nginx -n 100 --no-pager
 ```
 
@@ -95,7 +95,7 @@ The repository is not signed or the keyring has not been distributed to clients.
 ```bash
 # Option 1: configure GPG signing (production):
 sudo ./install.sh --gpg-auto
-# Then distribute the key — see docs/SECURITY.md.
+# Then distribute the key - see docs/SECURITY.md.
 
 # Option 2: insecure mode (lab only):
 sudo MIRRORET_APT_INSECURE=1 ./install.sh
@@ -229,12 +229,12 @@ systemctl restart docker-registry
 ```bash
 # Option 1: configure TLS on nginx (preferred):
 sudo ./install.sh --tls-self-signed
-# Then distribute the cert — see docs/SECURITY.md.
+# Then distribute the cert - see docs/SECURITY.md.
 
 # Option 2: insecure registry (lab only):
 sudo MIRRORET_DOCKER_INSECURE=1 ./install.sh
 # On each client, add to /etc/docker/daemon.json:
-#   {"insecure-registries": ["<mirror-ip>:5000"]}
+# {"insecure-registries": ["<mirror-ip>:5000"]}
 # Then: sudo systemctl restart docker
 ```
 
@@ -304,7 +304,7 @@ npm install express --registry http://<mirror-ip>:4873/
 ```bash
 # Verify the cert and key are a matched pair:
 openssl x509 -noout -modulus -in /etc/mirroret/tls/cert.pem | md5sum
-openssl rsa  -noout -modulus -in /etc/mirroret/tls/key.pem  | md5sum
+openssl rsa -noout -modulus -in /etc/mirroret/tls/key.pem | md5sum
 # Both hashes must match.
 
 # Check the TLS server block was appended to the nginx config:
@@ -464,7 +464,7 @@ sudo ./install.sh --check
 | `Permission denied` | Not running as root | `sudo ./install.sh` |
 | `nginx: [emerg] bind() failed` | Port already in use | `ss -tlnp \| grep <port>` |
 | `NO_PUBKEY` on APT clients | Missing GPG key distribution | See [SECURITY.md](SECURITY.md) |
-| `No space left on device` | Disk full | `df -h /srv/mirroret` — free space or expand volume |
+| `No space left on device` | Disk full | `df -h /srv/mirroret` - free space or expand volume |
 | `Could not connect to server` | nginx not running | `systemctl start nginx` |
 | `Container already exists` | Re-run after partial failure | `docker rm mirroret-registry` |
 | `SSL: CERTIFICATE_VERIFY_FAILED` | Self-signed cert not imported | See TLS section above |

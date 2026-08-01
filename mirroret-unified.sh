@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #######################################################################
-# LEGACY — DO NOT USE
+# LEGACY - DO NOT USE
 # This file is the original unified monolithic installer. It contains
 # every critical issue documented in docs/DEEP_REVIEW.md and is preserved
 # only for historical comparison.
@@ -19,7 +19,7 @@ case "${MIRRORET_ALLOW_LEGACY:-0}" in
         ;;
 esac
 
-set -e  # Exit on error
+set -e # Exit on error
 
 # Colors for output
 RED='\033[0;31m'
@@ -36,9 +36,9 @@ WEB_PORT=8080
 DOCKER_REGISTRY_PORT=5000
 PIP_PORT=8081
 NPM_PORT=4873
-SYNC_HOUR=2  # Hour for daily sync (2 AM)
+SYNC_HOUR=2 # Hour for daily sync (2 AM)
 SERVER_IP=$(hostname -I | awk '{print $1}')
-DOMAIN_NAME="${SERVER_IP}"  # Can be changed to actual domain
+DOMAIN_NAME="${SERVER_IP}" # Can be changed to actual domain
 
 # Logging
 LOG_FILE="/var/log/unified-repo-setup.log"
@@ -50,26 +50,26 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 print_header() {
     echo -e "${BLUE}"
-    echo "═══════════════════════════════════════════════════════════"
-    echo "  $1"
-    echo "═══════════════════════════════════════════════════════════"
+    echo "==========================================================="
+    echo " $1"
+    echo "==========================================================="
     echo -e "${NC}"
 }
 
 print_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "${GREEN}[ok] $1${NC}"
 }
 
 print_error() {
-    echo -e "${RED}✗ $1${NC}"
+    echo -e "${RED}[no] $1${NC}"
 }
 
 print_warning() {
-    echo -e "${YELLOW}⚠ $1${NC}"
+    echo -e "${YELLOW}[warn] $1${NC}"
 }
 
 print_info() {
-    echo -e "${CYAN}ℹ $1${NC}"
+    echo -e "${CYAN}[info] $1${NC}"
 }
 
 #######################################################################
@@ -216,15 +216,15 @@ configure_apt_mirror() {
     
     cat > /etc/apt/mirror.list << 'EOF'
 ############# config ##################
-set base_path    /srv/localrepo/debian/mirror
-set mirror_path  $base_path/mirror
-set skel_path    $base_path/skel
-set var_path     $base_path/var
-set cleanscript  $var_path/clean.sh
-set defaultarch  amd64
+set base_path /srv/localrepo/debian/mirror
+set mirror_path $base_path/mirror
+set skel_path $base_path/skel
+set var_path $base_path/var
+set cleanscript $var_path/clean.sh
+set defaultarch amd64
 set postmirror_script $var_path/postmirror.sh
 set run_postmirror 0
-set nthreads     20
+set nthreads 20
 set _tilde 0
 #
 ############# end config ##############
@@ -626,9 +626,9 @@ create_master_sync_script() {
 LOG_DIR="/srv/localrepo/logs"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 
-echo "════════════════════════════════════════════════════════"
-echo "  UNIFIED REPOSITORY SYNC - $(date)"
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
+echo " UNIFIED REPOSITORY SYNC - $(date)"
+echo "========================================================"
 
 # Sync Debian/Ubuntu
 echo "[1/5] Syncing Debian/Ubuntu repositories..."
@@ -651,9 +651,9 @@ echo "[5/5] Syncing npm packages..."
 /srv/localrepo/scripts/sync-npm-packages.sh
 
 echo ""
-echo "════════════════════════════════════════════════════════"
-echo "  SYNC COMPLETED - $(date)"
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
+echo " SYNC COMPLETED - $(date)"
+echo "========================================================"
 EOF
     
     chmod +x "$REPO_BASE_DIR/scripts/sync-all-repos.sh"
@@ -672,9 +672,9 @@ create_approval_scripts() {
 
 REPO_BASE="/srv/localrepo"
 
-echo "════════════════════════════════════════════════════════"
-echo "  Approving All Packages"
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
+echo " Approving All Packages"
+echo "========================================================"
 
 # Approve Debian packages
 echo "[1/5] Approving Debian/Ubuntu packages..."
@@ -703,9 +703,9 @@ echo "[5/5] Approving npm packages..."
 # Verdaccio auto-handles this through proxy
 
 echo ""
-echo "════════════════════════════════════════════════════════"
-echo "  All packages approved!"
-echo "════════════════════════════════════════════════════════"
+echo "========================================================"
+echo " All packages approved!"
+echo "========================================================"
 EOF
     
     chmod +x "$REPO_BASE_DIR/scripts/approve-all-packages.sh"
@@ -824,23 +824,23 @@ generate_documentation() {
 - **npm Registry Port**: $NPM_PORT
 
 ## Repository Types Supported
-1. ✅ Debian/Ubuntu (.deb)
-2. ✅ RHEL/CentOS/Fedora (.rpm)
-3. ✅ Python pip packages
-4. ✅ Docker images
-5. ✅ npm packages
+1. [ok] Debian/Ubuntu (.deb)
+2. [ok] RHEL/CentOS/Fedora (.rpm)
+3. [ok] Python pip packages
+4. [ok] Docker images
+5. [ok] npm packages
 
 ## Directory Structure
 \`\`\`
 $REPO_BASE_DIR/
-├── debian/          # Debian/Ubuntu packages
-├── redhat/          # RHEL/CentOS packages
-├── pip/             # Python pip packages
-├── docker/          # Docker registry
-├── npm/             # npm packages
-├── scripts/         # Management scripts
-├── config/          # Client configurations
-└── logs/            # All logs
++-- debian/ # Debian/Ubuntu packages
++-- redhat/ # RHEL/CentOS packages
++-- pip/ # Python pip packages
++-- docker/ # Docker registry
++-- npm/ # npm packages
++-- scripts/ # Management scripts
++-- config/ # Client configurations
++-- logs/ # All logs
 \`\`\`
 
 ## Management Commands
@@ -938,51 +938,51 @@ print_summary() {
     print_header "UNIFIED REPOSITORY SERVER - INSTALLATION COMPLETE!"
     
     echo ""
-    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  Installation Successful!${NC}"
-    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}============================================================${NC}"
+    echo -e "${GREEN} Installation Successful!${NC}"
+    echo -e "${GREEN}============================================================${NC}"
     echo ""
     echo -e "${CYAN}Server Information:${NC}"
-    echo "  • Server IP: $SERVER_IP"
-    echo "  • Main Web Port: $WEB_PORT"
-    echo "  • Docker Registry: $SERVER_IP:$DOCKER_REGISTRY_PORT"
-    echo "  • pip Index: $SERVER_IP:$PIP_PORT"
-    echo "  • npm Registry: $SERVER_IP:$NPM_PORT"
+    echo " * Server IP: $SERVER_IP"
+    echo " * Main Web Port: $WEB_PORT"
+    echo " * Docker Registry: $SERVER_IP:$DOCKER_REGISTRY_PORT"
+    echo " * pip Index: $SERVER_IP:$PIP_PORT"
+    echo " * npm Registry: $SERVER_IP:$NPM_PORT"
     echo ""
     echo -e "${CYAN}Repository Types Configured:${NC}"
-    echo "  ✅ Debian/Ubuntu packages (.deb)"
-    echo "  ✅ RHEL/CentOS packages (.rpm)"
-    echo "  ✅ Python pip packages"
-    echo "  ✅ Docker images"
-    echo "  ✅ npm packages"
+    echo " [ok] Debian/Ubuntu packages (.deb)"
+    echo " [ok] RHEL/CentOS packages (.rpm)"
+    echo " [ok] Python pip packages"
+    echo " [ok] Docker images"
+    echo " [ok] npm packages"
     echo ""
     echo -e "${CYAN}Quick Start:${NC}"
-    echo "  1. Initial sync:"
-    echo "     $REPO_BASE_DIR/scripts/sync-all-repos.sh"
+    echo " 1. Initial sync:"
+    echo " $REPO_BASE_DIR/scripts/sync-all-repos.sh"
     echo ""
-    echo "  2. Approve packages:"
-    echo "     $REPO_BASE_DIR/scripts/approve-all-packages.sh"
+    echo " 2. Approve packages:"
+    echo " $REPO_BASE_DIR/scripts/approve-all-packages.sh"
     echo ""
-    echo "  3. Configure clients (see documentation)"
+    echo " 3. Configure clients (see documentation)"
     echo ""
     echo -e "${CYAN}Web Interfaces:${NC}"
-    echo "  • Main: http://$SERVER_IP:$WEB_PORT/"
-    echo "  • Docker: http://$SERVER_IP:$DOCKER_REGISTRY_PORT/v2/_catalog"
-    echo "  • pip: http://$SERVER_IP:$PIP_PORT/"
-    echo "  • npm: http://$SERVER_IP:$NPM_PORT/"
+    echo " * Main: http://$SERVER_IP:$WEB_PORT/"
+    echo " * Docker: http://$SERVER_IP:$DOCKER_REGISTRY_PORT/v2/_catalog"
+    echo " * pip: http://$SERVER_IP:$PIP_PORT/"
+    echo " * npm: http://$SERVER_IP:$NPM_PORT/"
     echo ""
     echo -e "${CYAN}Documentation:${NC}"
-    echo "  • Full guide: $REPO_BASE_DIR/README.md"
-    echo "  • Client configs: $REPO_BASE_DIR/config/"
-    echo "  • Logs: $REPO_BASE_DIR/logs/"
+    echo " * Full guide: $REPO_BASE_DIR/README.md"
+    echo " * Client configs: $REPO_BASE_DIR/config/"
+    echo " * Logs: $REPO_BASE_DIR/logs/"
     echo ""
     echo -e "${YELLOW}Next Steps:${NC}"
-    echo "  1. Run initial sync (will take several hours)"
-    echo "  2. Approve all packages"
-    echo "  3. Configure your first client machine"
-    echo "  4. Test package installation"
+    echo " 1. Run initial sync (will take several hours)"
+    echo " 2. Approve all packages"
+    echo " 3. Configure your first client machine"
+    echo " 4. Test package installation"
     echo ""
-    echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}============================================================${NC}"
 }
 
 #######################################################################
@@ -995,11 +995,11 @@ main() {
     
     echo -e "${YELLOW}"
     echo "This script will install a complete unified repository server supporting:"
-    echo "  • Debian/Ubuntu packages"
-    echo "  • RHEL/CentOS/Fedora packages"
-    echo "  • Python pip packages"
-    echo "  • Docker images"
-    echo "  • npm packages"
+    echo " * Debian/Ubuntu packages"
+    echo " * RHEL/CentOS/Fedora packages"
+    echo " * Python pip packages"
+    echo " * Docker images"
+    echo " * npm packages"
     echo ""
     echo "Installation will take approximately 10-15 minutes."
     echo -e "${NC}"

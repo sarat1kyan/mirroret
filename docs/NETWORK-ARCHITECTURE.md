@@ -3,44 +3,44 @@
 ## Network Topology
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                    Local Repository Server                     │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Nginx Web Server (Port 8080)                            │  │
-│  │  ├── /mirror/     (Downloaded packages)                  │  │
-│  │  └── /approved/   (Approved packages for clients)        │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  Automatic Sync Service (Cron)                           │  │
-│  │  ├── Daily sync at 2 AM                                  │  │
-│  │  ├── Package approval workflow                           │  │
-│  │  └── Repository metadata generation                      │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                │
-│  Directory Structure: /var/mirroret/                           │
-│  ├── mirror/       # Official repo downloads                   │
-│  ├── approved/     # Packages ready for client use             │
-│  ├── staging/      # Temporary area for review                 │
-│  ├── logs/         # Sync and operation logs                   │
-│  ├── scripts/      # Management automation                     │
-│  └── config/       # Client configuration files                │
-└────────────────────────────────────────────────────────────────┘
-                              │
++----------------------------------------------------------------+
+| Local Repository Server |
+| +----------------------------------------------------------+ |
+| | Nginx Web Server (Port 8080) | |
+| | +-- /mirror/ (Downloaded packages) | |
+| | +-- /approved/ (Approved packages for clients) | |
+| +----------------------------------------------------------+ |
+| |
+| +----------------------------------------------------------+ |
+| | Automatic Sync Service (Cron) | |
+| | +-- Daily sync at 2 AM | |
+| | +-- Package approval workflow | |
+| | +-- Repository metadata generation | |
+| +----------------------------------------------------------+ |
+| |
+| Directory Structure: /var/mirroret/ |
+| +-- mirror/ # Official repo downloads |
+| +-- approved/ # Packages ready for client use |
+| +-- staging/ # Temporary area for review |
+| +-- logs/ # Sync and operation logs |
+| +-- scripts/ # Management automation |
+| +-- config/ # Client configuration files |
++----------------------------------------------------------------+
+                              |
                     HTTP Port 8080
-                              │
-        ┌─────────────────────┼─────────────────────┐
-        │                     │                     │
-        ▼                     ▼                     ▼
-┌───────────────┐    ┌───────────────┐    ┌───────────────┐
-│ Client 1      │    │ Client 2      │    │ Client 3      │
-│ Ubuntu 22.04  │    │ CentOS 9      │    │ Debian 12     │
-├───────────────┤    ├───────────────┤    ├───────────────┤
-│ apt client    │    │ dnf/yum       │    │ apt client    │
-│               │    │               │    │               │
-│ Sources:      │    │ Repos:        │    │ Sources:      │
-│ localrepo     │    │ localrepo     │    │ localrepo     │
-└───────────────┘    └───────────────┘    └───────────────┘
+                              |
+        +---------------------+---------------------+
+        | | |
+        v v v
++---------------+ +---------------+ +---------------+
+| Client 1 | | Client 2 | | Client 3 |
+| Ubuntu 22.04 | | CentOS 9 | | Debian 12 |
++---------------| +---------------| +---------------|
+| apt client | | dnf/yum | | apt client |
+| | | | | |
+| Sources: | | Repos: | | Sources: |
+| localrepo | | localrepo | | localrepo |
++---------------+ +---------------+ +---------------+
 ```
 
 ## Port Configuration
@@ -71,7 +71,7 @@ sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
 #### Step 3: Add Local Repository
 ```bash
 # Download the configuration from repo server
-REPO_SERVER="192.168.1.100"  # Replace with your server IP
+REPO_SERVER="192.168.1.100" # Replace with your server IP
 REPO_PORT="8080"
 
 wget http://${REPO_SERVER}:${REPO_PORT}/config/localrepo.list -O /tmp/localrepo.list
@@ -139,7 +139,7 @@ sudo yum-config-manager --disable \*
 #### Step 3: Add Local Repository
 ```bash
 # Download the configuration
-REPO_SERVER="192.168.1.100"  # Replace with your server IP
+REPO_SERVER="192.168.1.100" # Replace with your server IP
 REPO_PORT="8080"
 
 wget http://${REPO_SERVER}:${REPO_PORT}/config/localrepo.repo -O /tmp/localrepo.repo
@@ -202,7 +202,7 @@ sudo dnf install htop
 #!/bin/bash
 # save as: configure-mirroret-debian.sh
 
-REPO_SERVER="192.168.1.100"  # CHANGE THIS
+REPO_SERVER="192.168.1.100" # CHANGE THIS
 REPO_PORT="8080"
 
 echo "Configuring local repository client..."
@@ -232,7 +232,7 @@ echo "Configuration complete!"
 #!/bin/bash
 # save as: configure-mirroret-rhel.sh
 
-REPO_SERVER="192.168.1.100"  # CHANGE THIS
+REPO_SERVER="192.168.1.100" # CHANGE THIS
 REPO_PORT="8080"
 
 echo "Configuring local repository client..."
@@ -357,17 +357,17 @@ echo "Testing connection to repository server..."
 
 # Test HTTP connectivity
 if curl -s --connect-timeout 5 http://${REPO_SERVER}:${REPO_PORT}/ > /dev/null; then
-    echo "✓ Repository server is reachable"
+    echo "[ok] Repository server is reachable"
 else
-    echo "✗ Cannot reach repository server"
+    echo "[no] Cannot reach repository server"
     exit 1
 fi
 
 # Test package manager
 if [ -f /etc/debian_version ]; then
-    sudo apt update 2>&1 | grep -q "mirroret" && echo "✓ APT configured correctly"
+    sudo apt update 2>&1 | grep -q "mirroret" && echo "[ok] APT configured correctly"
 elif [ -f /etc/redhat-release ]; then
-    sudo dnf repolist 2>&1 | grep -q "localrepo" && echo "✓ DNF configured correctly"
+    sudo dnf repolist 2>&1 | grep -q "localrepo" && echo "[ok] DNF configured correctly"
 fi
 ```
 

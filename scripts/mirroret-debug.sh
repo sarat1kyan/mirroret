@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mirroret-debug.sh — read-only diagnostic snapshot.
+# mirroret-debug.sh - read-only diagnostic snapshot.
 #
 # Prints a PASS/WARN/FAIL line for each check and ends with a short
 # root-cause summary. Reads files, queries systemd, runs `nginx -t`, runs
@@ -10,9 +10,9 @@
 # pulls. Safe to run on a production host.
 #
 # Usage:
-#   sudo ./scripts/mirroret-debug.sh           # passive snapshot
-#   sudo ./scripts/mirroret-debug.sh --net     # also test outbound HTTPS
-#   sudo ./scripts/mirroret-debug.sh --bundle  # write a tarball to /tmp
+# sudo ./scripts/mirroret-debug.sh # passive snapshot
+# sudo ./scripts/mirroret-debug.sh --net # also test outbound HTTPS
+# sudo ./scripts/mirroret-debug.sh --bundle # write a tarball to /tmp
 #
 # Exit code is the number of FAIL lines (0 = clean).
 
@@ -34,7 +34,7 @@ source "${REPO_DIR}/lib/common.sh"
 # shellcheck source=../lib/distro.sh
 source "${REPO_DIR}/lib/distro.sh"
 
-# ── Output helpers ────────────────────────────────────────────────────────────
+# -- Output helpers ------------------------------------------------------------
 
 # Terminal colors only if stdout is a TTY.
 if [[ -t 1 ]]; then
@@ -49,34 +49,34 @@ FAIL_COUNT=0
 ROOT_CAUSE_HINTS=()
 
 pass() {
-    printf "${C_PASS}PASS${C_OFF}  %s\n" "$*"
+    printf "${C_PASS}PASS${C_OFF} %s\n" "$*"
     PASS_COUNT=$(( PASS_COUNT + 1 ))
 }
 note() {
-    printf "${C_INFO}NOTE${C_OFF}  %s\n" "$*"
+    printf "${C_INFO}NOTE${C_OFF} %s\n" "$*"
 }
 warning() {
-    printf "${C_WARN}WARN${C_OFF}  %s\n" "$*"
+    printf "${C_WARN}WARN${C_OFF} %s\n" "$*"
     WARN_COUNT=$(( WARN_COUNT + 1 ))
 }
 failure() {
-    printf "${C_FAIL}FAIL${C_OFF}  %s\n" "$*"
+    printf "${C_FAIL}FAIL${C_OFF} %s\n" "$*"
     FAIL_COUNT=$(( FAIL_COUNT + 1 ))
 }
 hint() {
     ROOT_CAUSE_HINTS+=("$*")
 }
 section_h() {
-    printf "\n${C_INFO}══ %s ══${C_OFF}\n" "$*"
+    printf "\n${C_INFO}== %s ==${C_OFF}\n" "$*"
 }
 
-# ── Argument parsing ──────────────────────────────────────────────────────────
+# -- Argument parsing ----------------------------------------------------------
 RUN_NET=0
 DO_BUNDLE=0
 for arg in "$@"; do
     case "$arg" in
         --net|--network) RUN_NET=1 ;;
-        --bundle)        DO_BUNDLE=1 ;;
+        --bundle) DO_BUNDLE=1 ;;
         -h|--help)
             grep '^# ' "$0" | sed 's/^# \?//'
             exit 0
@@ -88,7 +88,7 @@ for arg in "$@"; do
     esac
 done
 
-# ── Checks ────────────────────────────────────────────────────────────────────
+# -- Checks --------------------------------------------------------------------
 
 check_user() {
     section_h "Privilege"
@@ -124,17 +124,17 @@ check_distro() {
 check_systemd() {
     section_h "systemd"
     if ! command -v systemctl >/dev/null 2>&1; then
-        warning "systemctl not found — running on a non-systemd host"
+        warning "systemctl not found - running on a non-systemd host"
         hint "mirroret manages services with systemd. Service state checks will be skipped."
         return
     fi
     local state
     state="$(systemctl is-system-running 2>/dev/null || true)"
     case "${state}" in
-        running)              pass "systemd: running" ;;
-        degraded)             warning "systemd: degraded — at least one unit has failed" ;;
+        running) pass "systemd: running" ;;
+        degraded) warning "systemd: degraded - at least one unit has failed" ;;
         starting|maintenance) note "systemd: ${state}" ;;
-        *)                    warning "systemd: ${state:-unknown}" ;;
+        *) warning "systemd: ${state:-unknown}" ;;
     esac
 }
 
@@ -246,18 +246,18 @@ check_dns() {
     local hosts=()
     [[ "${MIRRORET_ENABLE_APT:-1}" == "1" ]] && case "${ID:-}" in
         debian) hosts+=(deb.debian.org) ;;
-        *)      hosts+=(archive.ubuntu.com) ;;
+        *) hosts+=(archive.ubuntu.com) ;;
     esac
     [[ "${MIRRORET_ENABLE_RPM:-1}" == "1" ]] && case "${ID:-}" in
         rocky|almalinux) hosts+=(dl.rockylinux.org) ;;
         rhel) hosts+=(cdn.redhat.com) ;;
-        ol)   hosts+=(yum.oracle.com) ;;
+        ol) hosts+=(yum.oracle.com) ;;
         fedora) hosts+=(dl.fedoraproject.org) ;;
         centos) hosts+=(mirror.stream.centos.org) ;;
     esac
-    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && hosts+=(pypi.org)
+    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]] && hosts+=(pypi.org)
     [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && hosts+=(registry-1.docker.io)
-    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && hosts+=(registry.npmjs.org)
+    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]] && hosts+=(registry.npmjs.org)
     [[ ${#hosts[@]} -eq 0 ]] && { note "Nothing to resolve."; return; }
 
     local fails=()
@@ -278,7 +278,7 @@ check_ports() {
     section_h "Listening ports"
     local ports=("${MIRRORET_WEB_PORT:-8080}" "${MIRRORET_PIP_PORT:-8081}" "${MIRRORET_DOCKER_REGISTRY_PORT:-5000}" "${MIRRORET_NPM_PORT:-4873}")
     if ! command -v ss >/dev/null 2>&1 && ! command -v netstat >/dev/null 2>&1; then
-        warning "Neither ss nor netstat available — cannot probe ports."
+        warning "Neither ss nor netstat available - cannot probe ports."
         return
     fi
     for p in "${ports[@]}"; do
@@ -299,7 +299,7 @@ check_ports() {
 check_services() {
     section_h "Services"
     if ! command -v systemctl >/dev/null 2>&1; then
-        warning "systemctl missing — skipping."
+        warning "systemctl missing - skipping."
         return
     fi
     for svc in nginx pypiserver verdaccio docker-distribution docker-registry mirroret-registry; do
@@ -371,7 +371,7 @@ check_recent_sync_logs() {
         return
     fi
     printf "%s\n" "$latest" | while IFS= read -r f; do
-        note "$(basename "$f")  $(wc -l < "$f") lines  last: $(tail -1 "$f" 2>/dev/null)"
+        note "$(basename "$f") $(wc -l < "$f") lines last: $(tail -1 "$f" 2>/dev/null)"
     done
 }
 
@@ -391,7 +391,7 @@ check_cron() {
     managed="$(printf '%s\n' "$entries" | awk '/>>> mirroret managed/{f=1;next}/<<< mirroret managed/{f=0}f')"
     if [[ -n "$managed" ]]; then
         pass "mirroret cron block present"
-        printf '%s\n' "$managed" | sed 's/^/    /'
+        printf '%s\n' "$managed" | sed 's/^/ /'
     else
         warning "No mirroret cron block found in root crontab."
     fi
@@ -401,15 +401,15 @@ check_outbound_https() {
     [[ "$RUN_NET" -eq 1 ]] || { note "Network probes disabled (pass --net to enable)."; return; }
     section_h "Outbound HTTPS"
     if ! command -v curl >/dev/null 2>&1; then
-        warning "curl missing — cannot probe."
+        warning "curl missing - cannot probe."
         return
     fi
-    # host|path|expected_codes — many upstreams legitimately return 401 or
+    # host|path|expected_codes - many upstreams legitimately return 401 or
     # 404 at /, so we treat ANY HTTP response (not just 2xx) as success.
     # 000 = TLS/network failure, which is what we actually want to flag.
     local targets=()
-    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]    && targets+=("pypi.org|/" "files.pythonhosted.org|/")
-    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]    && targets+=("registry.npmjs.org|/")
+    [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]] && targets+=("pypi.org|/" "files.pythonhosted.org|/")
+    [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]] && targets+=("registry.npmjs.org|/")
     # Docker Hub registry returns 401 at /v2/ and 404 at /. Both prove it's
     # reachable. Auth service returns 404 at / but 400 at /token (no args).
     [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && targets+=("registry-1.docker.io|/v2/" "auth.docker.io|/token")
@@ -444,7 +444,7 @@ check_docker_mode() {
         if grep -q 'remoteurl:' "$conf"; then
             pass "Registry mode: cache (proxy.remoteurl present)"
             if [[ -x "${MIRRORET_BASE_DIR:-/srv/mirroret}/scripts/sync-docker-images.sh" ]]; then
-                failure "Active sync-docker-images.sh found in cache mode — it will fail (registry rejects pushes)"
+                failure "Active sync-docker-images.sh found in cache mode - it will fail (registry rejects pushes)"
                 hint "Run install.sh with MIRRORET_DOCKER_MODE=hosted, OR move/remove sync-docker-images.sh."
             fi
         fi
@@ -470,7 +470,7 @@ check_apt_signed_by() {
     fi
 }
 
-# ── Optional bundle output ────────────────────────────────────────────────────
+# -- Optional bundle output ----------------------------------------------------
 
 write_bundle() {
     local out stage
@@ -479,7 +479,7 @@ write_bundle() {
 
     # nginx config (filenames only, redacted of secrets is just configs)
     cp /etc/nginx/nginx.conf "${stage}/nginx.conf" 2>/dev/null || true
-    [[ -d /etc/nginx/conf.d ]]          && cp -a /etc/nginx/conf.d          "${stage}/conf.d" 2>/dev/null || true
+    [[ -d /etc/nginx/conf.d ]] && cp -a /etc/nginx/conf.d "${stage}/conf.d" 2>/dev/null || true
     [[ -d /etc/nginx/sites-available ]] && cp -a /etc/nginx/sites-available "${stage}/sites-available" 2>/dev/null || true
     # systemd units
     for u in pypiserver verdaccio mirroret-registry docker-distribution docker-registry; do
@@ -507,10 +507,10 @@ write_bundle() {
     note "Bundle written: $out"
 }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 
 main() {
-    printf "${C_INFO}mirroret-debug.sh — read-only diagnostic snapshot${C_OFF}\n"
+    printf "${C_INFO}mirroret-debug.sh - read-only diagnostic snapshot${C_OFF}\n"
     printf "Date: %s\n" "$(date '+%Y-%m-%d %H:%M:%S')"
     printf "Host: %s\n" "$(hostname 2>/dev/null || echo unknown)"
     printf "User: %s (uid=%s)\n" "$(id -un)" "$(id -u)"
@@ -535,14 +535,14 @@ main() {
     check_outbound_https
 
     section_h "Summary"
-    printf "${C_PASS}PASS:${C_OFF} %d   ${C_WARN}WARN:${C_OFF} %d   ${C_FAIL}FAIL:${C_OFF} %d\n" \
+    printf "${C_PASS}PASS:${C_OFF} %d ${C_WARN}WARN:${C_OFF} %d ${C_FAIL}FAIL:${C_OFF} %d\n" \
         "$PASS_COUNT" "$WARN_COUNT" "$FAIL_COUNT"
 
     if [[ ${#ROOT_CAUSE_HINTS[@]} -gt 0 ]]; then
         printf "\nLikely root causes / actions:\n"
         local i=1
         for h in "${ROOT_CAUSE_HINTS[@]}"; do
-            printf "  %d. %s\n" "$i" "$h"
+            printf " %d. %s\n" "$i" "$h"
             i=$(( i + 1 ))
         done
     fi

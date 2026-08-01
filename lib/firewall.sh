@@ -3,7 +3,7 @@
 # Source this file; do not execute it directly.
 # Requires logging.sh, common.sh.
 
-# configure_firewall <port> [port...] — open one or more TCP ports.
+# configure_firewall <port> [port...] - open one or more TCP ports.
 # Does nothing if no firewall is detected.
 # Uses MIRRORET_FIREWALL_SOURCE to restrict by source CIDR if set.
 configure_firewall() {
@@ -27,7 +27,7 @@ configure_firewall() {
         warn "Please manually allow TCP ports: ${ports[*]}"
         info "Required ports:"
         for p in "${ports[@]}"; do
-            info "  TCP ${p}"
+            info " TCP ${p}"
         done
         return 0
     fi
@@ -80,19 +80,19 @@ _configure_iptables() {
     warn "iptables rules added but not persisted. Run 'iptables-save' to persist them."
 }
 
-# list_required_ports — print all ports required by the configured components.
+# list_required_ports - print all ports required by the configured components.
 list_required_ports() {
     echo ""
     echo "Required firewall ports:"
-    echo "  TCP ${MIRRORET_WEB_PORT:-8080}    nginx (APT/RPM repository browser)"
+    echo " TCP ${MIRRORET_WEB_PORT:-8080} nginx (APT/RPM repository browser)"
     if [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]; then
-        echo "  TCP ${MIRRORET_PIP_PORT:-8081}    pypiserver (pip index)"
+        echo " TCP ${MIRRORET_PIP_PORT:-8081} pypiserver (pip index)"
     fi
     if [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]]; then
-        echo "  TCP ${MIRRORET_DOCKER_REGISTRY_PORT:-5000}    Docker registry"
+        echo " TCP ${MIRRORET_DOCKER_REGISTRY_PORT:-5000} Docker registry"
     fi
     if [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]; then
-        echo "  TCP ${MIRRORET_NPM_PORT:-4873}    Verdaccio (npm registry)"
+        echo " TCP ${MIRRORET_NPM_PORT:-4873} Verdaccio (npm registry)"
     fi
     echo ""
 }

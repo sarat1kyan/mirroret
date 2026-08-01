@@ -16,13 +16,13 @@ load_lib() {
     source "${SCRIPT_DIR}/lib/common.sh"
 }
 
-# load_distro_lib — load the distro module with a mocked /etc/os-release.
+# load_distro_lib - load the distro module with a mocked /etc/os-release.
 load_distro_lib() {
     load_lib
     source "${SCRIPT_DIR}/lib/distro.sh"
 }
 
-# mock_os_release <id> <version_id> [codename] — write a fake /etc/os-release
+# mock_os_release <id> <version_id> [codename] - write a fake /etc/os-release
 # to a temp file and point OS detection at it.
 mock_os_release() {
     local id="$1"
@@ -37,7 +37,7 @@ mock_os_release() {
     export MOCK_OS_RELEASE
 }
 
-# detect_distro_from_mock — run detect_distro sourcing the mock file.
+# detect_distro_from_mock - run detect_distro sourcing the mock file.
 detect_distro_from_mock() {
     if [[ -z "${MOCK_OS_RELEASE:-}" ]]; then
         echo "ERROR: call mock_os_release first" >&2
