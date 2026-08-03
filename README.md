@@ -254,6 +254,7 @@ make dry-run # run install.sh --dry-run
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Daily ops: sync, approval workflow, Docker backend, disk management |
 | [docs/NATIVE_MODE.md](docs/NATIVE_MODE.md) | Running without Docker: native Linux services on RHEL and Debian |
 | [docs/ROLLBACK.md](docs/ROLLBACK.md) | Backup and rollback procedures |
+| [DEPLOY-RUNBOOK.md](DEPLOY-RUNBOOK.md) | Step by step deploy runbook for an admin (zip transfer, verify, sync, client setup) |
 | [docs/UNINSTALL.md](docs/UNINSTALL.md) | Selective and full uninstall (`./uninstall.sh`) |
 | [docs/RETENTION.md](docs/RETENTION.md) | Mirror data retention/cleanup + safe upgrade workflow |
 | [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Diagnostic steps for all components |

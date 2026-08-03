@@ -9,7 +9,10 @@
 # ("rocky", "almalinux", "rhel", "ol", "centos", "fedora")
 # MIRRORET_RPM_REPOS space-separated repo list (default depends on distro)
 # MIRRORET_RPM_GPGKEY_URL URL where clients fetch the repo's signing key
-# MIRRORET_RPM_ARCH arch to mirror (default: x86_64). noarch always added.
+# MIRRORET_RPM_ARCH space-separated arch list (default: x86_64). noarch is
+# always added. Add i686 when clients install 32-bit
+# multilib packages such as glibc.i686, otherwise dnf on
+# the client fails with "no package glibc-*.i686 available".
 # MIRRORET_RPM_NEWEST_ONLY 1 (default) = only newest build of each package.
 # 0 = full history (WARNING: terabytes on some repos).
 # MIRRORET_RPM_SOURCE 0 (default) = skip .src.rpm. 1 = include source RPMs
@@ -137,6 +140,11 @@ configure_createrepo() {
     info "Repo tree: ${base_dir}/redhat/mirror/${flavor}/${rhel_ver}/"
     info "Repos to sync: ${repos}"
     info "Arch: ${rpm_arch} (+noarch)"
+    if [[ " ${rpm_arch} " != *" i686 "* ]]; then
+        info "Note: i686 is not mirrored. Clients that install 32-bit multilib"
+        info "      packages (glibc.i686, libstdc++.i686) need"
+        info "      MIRRORET_RPM_ARCH=\"${rpm_arch} i686\"."
+    fi
     info "Newest only: ${newest_only} Source RPMs: ${include_source} Delete removed: ${delete_removed}"
     info "Disk floor: ${min_free_gb} GB (sync aborts below this)"
     if [[ "${include_source}" == "1" ]]; then
@@ -256,8 +264,13 @@ _check_disk || exit 4
 # --arch pins the architecture. WITHOUT this, reposync on some repos
 # (notably OL9 appstream) also pulls every .src.rpm - 44k packages at
 # 400-600 MB each. That is the single most destructive default here.
-REPOSYNC_ARGS=(--download-metadata --arch "\${ARCH}" --arch noarch
+REPOSYNC_ARGS=(--download-metadata
     --setopt=timeout=60 --setopt=minrate=1000 --setopt=retries=3)
+# ARCH may list several architectures. noarch is always included; without
+# it every architecture-independent package is skipped.
+for _a in \${ARCH} noarch; do
+    REPOSYNC_ARGS+=(--arch "\${_a}")
+done
 
 # Estimate the download before committing to it. reposync gives no size
 # preview, so a 4-repo OL9 sync could silently need more than the volume

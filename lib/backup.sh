@@ -70,7 +70,12 @@ list_backups() {
         echo " ${id} (${count} files)"
         found=1
     done
-    [[ "$found" == "0" ]] && info "No backups found."
+    # Not a trailing '&&': with found=1 the test is false and list_backups
+    # would return 1 whenever backups actually exist.
+    if [[ "$found" == "0" ]]; then
+        info "No backups found."
+    fi
+    return 0
 }
 
 # -- Rollback -----------------------------------------------------------------

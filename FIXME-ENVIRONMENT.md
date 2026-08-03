@@ -9,83 +9,113 @@ that performs TLS inspection.
 
 ---
 
-## BLOCKER 1 - Corporate TLS inspection breaks all upstream sync
+## BLOCKER 1 - Proxy refuses CONNECT to some upstreams (403)
 
 ### Symptom
 
 ```
-Curl error (35): SSL connect error for https://yum.oracle.com/...
-[error:0A0000C6:SSL routines::packet length too long]
+curl: (56) Received HTTP code 403 from proxy after CONNECT
+pypi=000
+curl: (56) Received HTTP code 403 from proxy after CONNECT
+npm=000
+docker=401
 ```
 
-Also seen against `cdn.redhat.com`, and earlier against
-`registry.npmjs.org`.
+Earlier the same problem surfaced as:
 
-### Cause
+```
+Curl error (35): SSL connect error ... [error:0A0000C6:SSL routines::packet length too long]
+```
 
-The proxy at `192.168.30.243:3128` intercepts TLS and re-signs traffic
-with a private CA. Your host does not trust that CA, so every HTTPS
-handshake to an upstream repo fails. `packet length too long` is the
-classic signature of a TLS client receiving a non-TLS (or
-differently-signed) response.
+Those are the same fault. When the proxy answers a CONNECT with a
+plaintext HTTP 403 block page, a TLS client reports "packet length too
+long" because it is trying to parse HTML as a TLS record.
 
-`No custom CA anchors detected` in `mirroret-debug.sh` output confirms
-the CA was never installed.
+### This is NOT TLS inspection
 
-### Fix A (preferred) - trust the corporate CA
-
-Get the root CA certificate from your IT/security team. It will be a
-`.crt` or `.pem` file. Then:
+Confirmed by asking the proxy what chain it presents:
 
 ```bash
-sudo cp corp-root-ca.crt /etc/pki/ca-trust/source/anchors/
-sudo update-ca-trust extract
-
-# Verify - all three must print 200 (or 401 for the docker one):
-curl -sS -o /dev/null -w '%{http_code}\n' https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/repodata/repomd.xml
-curl -sS -o /dev/null -w '%{http_code}\n' https://cdn.redhat.com/
-curl -sS -o /dev/null -w '%{http_code}\n' https://registry-1.docker.io/v2/
+openssl s_client -connect yum.oracle.com:443 -proxy PROXY_HOST:PORT -showcerts </dev/null 2>/dev/null \
+  | grep -E '^ *[0-9]+ s:|^ *i:'
 ```
 
-Tools with their own trust store need telling separately:
+On this environment that returns:
+
+```
+0 s: O=Oracle Corporation, CN=yum.oracle.com
+  i: O=DigiCert Inc, CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1
+1 s: O=DigiCert Inc, CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1
+  i: O=DigiCert Inc, CN=DigiCert Global Root G3
+```
+
+That is the real Oracle certificate signed by a public CA. Nothing is
+being re-signed, so there is no corporate CA to install. Do not install a
+CA file to fix this, and do not copy a private key off the proxy.
+
+If instead you see a corporate name in the issuer chain, you DO have TLS
+inspection; follow docs/PROXY_AND_CA.md section 3 in that case.
+
+### Determine exactly which hosts are blocked
 
 ```bash
-# pip
-sudo tee /etc/pip.conf <<'EOF'
-[global]
-cert = /etc/pki/tls/cert.pem
-proxy = http://192.168.30.243:3128
-EOF
-
-# npm
-sudo npm config set cafile /etc/pki/tls/cert.pem --location=global
-
-# podman / docker - per upstream registry
-sudo mkdir -p /etc/containers/certs.d/registry-1.docker.io
-sudo cp corp-root-ca.crt /etc/containers/certs.d/registry-1.docker.io/ca.crt
+for h in \
+  yum.oracle.com \
+  cdn.redhat.com \
+  pypi.org \
+  files.pythonhosted.org \
+  registry.npmjs.org \
+  registry-1.docker.io \
+  auth.docker.io ; do
+    printf '%-32s %s\n' "$h" \
+      "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://$h/" 2>/dev/null)"
+done
 ```
 
-### Fix B - ask for a proxy allow-list
+Reading the results:
 
-If IT will not release the CA, ask them to **bypass TLS inspection** for
-these hosts:
+| Code | Meaning |
+|---|---|
+| 200, 301, 302, 401, 403 from the SITE | reachable, fine |
+| 000 plus "403 from proxy after CONNECT" | blocked by proxy policy |
+
+Note 401 from registry-1.docker.io is correct and means reachable.
+
+### Fix: proxy allow-list
+
+There is nothing to change on the mirror server. Ask the proxy team to
+permit CONNECT on port 443 to whichever of these came back blocked:
 
 ```
-yum.oracle.com
-cdn.redhat.com
-subscription.rhsm.redhat.com
 pypi.org
 files.pythonhosted.org
 registry.npmjs.org
-registry-1.docker.io
 auth.docker.io
 production.cloudflare.docker.com
+cdn.redhat.com
 ```
 
-### Until this is fixed
+files.pythonhosted.org matters as much as pypi.org. That is where wheel
+files are served from; allowing only pypi.org lets metadata through and
+still fails every download.
 
-No upstream sync will work. `pip` currently succeeds only because the
-packages were already cached locally from an earlier successful run.
+### You can start before this is fixed
+
+If yum.oracle.com is already reachable, the RPM mirror (the bulk of the
+data) can sync now:
+
+```bash
+sudo ./mirroretctl sync rpm
+```
+
+pip and npm stay broken until the allow-list lands. Either skip them:
+
+```bash
+sudo ./install.sh --upgrade --no-pip --no-npm
+```
+
+or leave them configured and accept that those two steps fail nightly
+until the proxy is opened.
 
 ---
 

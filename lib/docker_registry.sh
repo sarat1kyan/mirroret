@@ -217,7 +217,7 @@ log:
   fields:
     service: registry
 storage:
-  # delete.enabled is required for `registry garbage-collect` to be able
+  # delete.enabled is required for 'registry garbage-collect' to be able
   # to remove unreferenced blobs. Without it retention_docker_gc can
   # never reclaim anything.
   delete:

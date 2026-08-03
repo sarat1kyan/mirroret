@@ -206,9 +206,14 @@
 
 # -- RPM sync safety (IMPORTANT) -----------------------------------------------
 
-# Architecture to mirror. "noarch" is always included in addition.
+# Architectures to mirror, space separated. "noarch" is always included in
+# addition, so architecture-independent packages are never skipped.
+# Add i686 if any client installs 32-bit multilib packages. Without it
+# "dnf install glibc.i686" on a client fails with "No match for argument",
+# because the i686 subpackages were never downloaded. Cost: roughly 10-15
+# percent more disk on baseos/appstream.
 # Default: x86_64
-#MIRRORET_RPM_ARCH=x86_64
+#MIRRORET_RPM_ARCH="x86_64 i686"
 
 # Only mirror the newest build of each package.
 # Default: 1 (ON). Set 0 for full version history - this multiplies disk

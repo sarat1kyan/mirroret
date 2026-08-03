@@ -555,7 +555,8 @@ EOF
     DRY_RUN=0
     configure_createrepo "id"
     grep -q -- '--arch' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
-    grep -q 'arch noarch' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    # One --arch per entry in ARCH, plus noarch, emitted by a loop.
+    grep -q 'for _a in ${ARCH} noarch' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
 }
 
 @test "rpm: source RPMs default to OFF" {
@@ -754,4 +755,103 @@ EOF
     for v in MIRRORET_CA_BUNDLE MIRRORET_SYNC_TIMEOUT MIRRORET_LOG_KEEP_DAYS https_proxy; do
         grep -q "$v" "${SCRIPT_DIR}/config/mirroret.conf.example"
     done
+}
+
+# ============ heredoc command substitution + multi-arch ============
+
+@test "no backticks inside expanding heredocs (bash would execute them)" {
+    # A backtick in an unquoted heredoc is command substitution. A comment
+    # reading `registry garbage-collect` made bash try to run `registry`,
+    # producing "command not found" and exit 127 mid-install.
+    run python3 - "${SCRIPT_DIR}" <<'PY'
+import re, sys, os
+root = sys.argv[1]
+targets = ['install.sh','uninstall.sh','mirroretctl','scripts/mirroret-debug.sh']
+targets += ['lib/'+f for f in os.listdir(os.path.join(root,'lib')) if f.endswith('.sh')]
+bad = []
+for rel in targets:
+    p = os.path.join(root, rel)
+    if not os.path.isfile(p):
+        continue
+    delim = None; quoted = False
+    for i, ln in enumerate(open(p).read().split('\n'), 1):
+        if delim is None:
+            m = re.search(r'<<-?\s*(["\']?)([A-Za-z_][A-Za-z_0-9]*)\1\s*$', ln)
+            if m:
+                quoted = bool(m.group(1)); delim = m.group(2)
+            continue
+        if ln.strip() == delim:
+            delim = None; continue
+        if not quoted and '`' in ln and '\\`' not in ln:
+            bad.append(f"{rel}:{i}")
+print('\n'.join(bad))
+sys.exit(1 if bad else 0)
+PY
+    [ "$status" -eq 0 ]
+}
+
+@test "rpm: MIRRORET_RPM_ARCH accepts a space-separated list" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_RPM_ARCH="x86_64 i686"
+    DRY_RUN=0
+    configure_createrepo "id"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'ARCH="x86_64 i686"' "$s"
+    # One --arch per requested arch, plus noarch, built in a loop.
+    grep -q 'for _a in ${ARCH} noarch' "$s"
+    bash -n "$s"
+}
+
+@test "rpm: noarch is always added even with a single arch" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_RPM_ARCH="x86_64"
+    DRY_RUN=0
+    configure_createrepo "id"
+    grep -q 'for _a in ${ARCH} noarch' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+@test "rpm: install notes that i686 is missing when only x86_64 requested" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_RPM_ARCH="x86_64"
+    DRY_RUN=1
+    run configure_createrepo "id"
+    [[ "$output" == *"i686 is not mirrored"* ]]
+}
+
+@test "rpm: no multilib note when i686 already requested" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_RPM_ARCH="x86_64 i686"
+    DRY_RUN=1
+    run configure_createrepo "id"
+    [[ "$output" != *"i686 is not mirrored"* ]]
+}
+
+@test "docker: registry config comment does not trigger command substitution" {
+    MIRRORET_DOCKER_MODE=cache
+    run _emit_registry_config "${TMPDIR}/reg.yml"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"command not found"* ]]
+    grep -q "'registry garbage-collect'" "${TMPDIR}/reg.yml"
+    grep -q 'enabled: true' "${TMPDIR}/reg.yml"
+}
+
+@test "backup: list_backups returns 0 when backups exist" {
+    # Same trailing-&& bug class as cmd_sync_status: with found=1 the
+    # `[[ $found == 0 ]]` test is false and the function returned 1.
+    mkdir -p "${MIRRORET_BACKUP_BASE}/20260101-000000"
+    printf '/etc/nginx/nginx.conf\n' > "${MIRRORET_BACKUP_BASE}/20260101-000000/backup.manifest"
+    run list_backups
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"20260101-000000"* ]]
+}
+
+@test "backup: list_backups returns 0 when no backups exist" {
+    rm -rf "${MIRRORET_BACKUP_BASE}"
+    mkdir -p "${MIRRORET_BACKUP_BASE}"
+    run list_backups
+    [ "$status" -eq 0 ]
 }
