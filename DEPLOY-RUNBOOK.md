@@ -3,7 +3,7 @@
 For the admin deploying mirroret to the mirror server.
 
 Target: RHEL 9 host serving Oracle Linux 9 clients, behind an HTTP proxy
-that performs TLS inspection.
+that restricts which upstream hosts it will connect to.
 
 Work through the parts in order. Each part ends with a verification step.
 If a verification fails, stop and report it. Do not continue past a failed
@@ -15,8 +15,8 @@ STOP checkpoint.
 
 - SSH or console access to the mirror server, with sudo
 - A machine that can reach github.com (your laptop)
-- The corporate root CA certificate as a .crt or .pem file, from IT
-  (see Part 3; nothing syncs without it)
+- A contact on the proxy team. Part 3 identifies which upstream hosts are
+  blocked; opening them is the one thing you cannot do yourself.
 - The proxy address. In this environment: http://192.168.30.243:3128
 
 ---
@@ -133,61 +133,76 @@ Linux repos.
 
 ---
 
-## Part 3. Corporate CA (this is the blocker)
+## Part 3. Proxy reachability (this is the blocker)
 
-Every upstream fetch currently fails like this:
+Some upstreams are refused by the proxy. Find out which before doing
+anything else.
 
-```
-Curl error (35): SSL connect error for https://yum.oracle.com/...
-[error:0A0000C6:SSL routines::packet length too long]
-```
-
-The proxy intercepts TLS and re-signs it with a private CA the host does
-not trust. Until this is fixed, no sync can succeed, no matter what the
-tool does.
-
-### Option A, preferred. Trust the CA
-
-Get the root CA from IT, then:
+### 3a. Check whether TLS is being inspected
 
 ```bash
-sudo cp corp-root-ca.crt /etc/pki/ca-trust/source/anchors/
-sudo update-ca-trust extract
+openssl s_client -connect yum.oracle.com:443 -proxy 192.168.30.243:3128 -showcerts </dev/null 2>/dev/null \
+  | grep -E '^ *[0-9]+ s:|^ *i:'
 ```
 
-### Option B. Have IT bypass TLS inspection
+If the issuers are public CAs (DigiCert, Sectigo, Let's Encrypt, and so
+on) there is **no TLS inspection** and you need no certificate file.
+Skip to 3b.
 
-Ask for these hosts to be excluded from inspection:
+If an issuer carries your company name, you do have inspection: follow
+docs/PROXY_AND_CA.md section 3 to install the corporate root CA, then
+continue.
 
-```
-yum.oracle.com
-cdn.redhat.com
-subscription.rhsm.redhat.com
-pypi.org
-files.pythonhosted.org
-registry.npmjs.org
-registry-1.docker.io
-auth.docker.io
-production.cloudflare.docker.com
-```
+Do not copy a private key from the proxy under any circumstances.
 
-### VERIFY
+### 3b. Find which hosts the proxy blocks
 
 ```bash
-curl -sS -o /dev/null -w 'oracle=%{http_code}\n' https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/repodata/repomd.xml
-curl -sS -o /dev/null -w 'pypi=%{http_code}\n'   https://pypi.org/
-curl -sS -o /dev/null -w 'npm=%{http_code}\n'    https://registry.npmjs.org/
-curl -sS -o /dev/null -w 'docker=%{http_code}\n' https://registry-1.docker.io/v2/
+for h in \
+  yum.oracle.com \
+  cdn.redhat.com \
+  pypi.org \
+  files.pythonhosted.org \
+  registry.npmjs.org \
+  registry-1.docker.io \
+  auth.docker.io ; do
+    printf '%-32s %s\n' "$h" \
+      "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://$h/" 2>/dev/null)"
+done
 ```
 
-Required: oracle=200, pypi=200, npm=200, docker=401.
+Interpretation:
 
-docker=401 is correct. Docker Hub returns 401 at /v2/ for unauthenticated
-callers, which proves the endpoint is reachable.
+| Code | Meaning |
+|---|---|
+| 200 / 301 / 302 | reachable |
+| 401 from registry-1.docker.io | reachable, this is expected |
+| 000 | blocked by the proxy |
 
-Anything returning 000 means TLS is still failing.
+### 3c. Request an allow-list for anything showing 000
 
-STOP if this fails. Everything below depends on it.
+Send the proxy team the blocked hostnames and ask for CONNECT on port 443.
+
+`files.pythonhosted.org` is required in addition to `pypi.org`. Wheels are
+served from it; allowing only pypi.org fails every download.
+
+### What you can do before the allow-list lands
+
+If `yum.oracle.com` is reachable, the RPM mirror is the bulk of the data
+and can sync now. Continue through the runbook, and at Part 9 run only:
+
+```bash
+sudo ./mirroretctl sync rpm
+```
+
+Leave pip and npm until their hosts are unblocked. To stop them failing
+nightly in the meantime, install without them:
+
+```bash
+sudo ./install.sh --upgrade --no-pip --no-npm
+```
+
+STOP only if `yum.oracle.com` shows 000. Nothing can sync in that case.
 
 ---
 
