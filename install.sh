@@ -580,7 +580,7 @@ write_master_sync_script() {
         docker_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
     fi
 
-    # We do NOT use `set -e` for the script body: we WANT the master to
+    # We do NOT use 'set -e' for the script body: we WANT the master to
     # run every step even if an earlier one fails, and we exit with the
     # accumulated failure count.
     cat > "$sync_script" <<SYNC_EOF
@@ -998,7 +998,7 @@ main() {
     fi
 
     # Install system packages. In --upgrade mode we skip this because
-    # dnf/apt-get with `-y` on already-installed packages is a slow no-op
+    # dnf/apt-get with -y on already-installed packages is a slow no-op
     # (and can hit repo issues) - the operator is on the same code path
     # they already installed with, they just want configs refreshed.
     if [[ "${MODE_UPGRADE}" == "1" ]]; then

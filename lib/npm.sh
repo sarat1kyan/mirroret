@@ -441,7 +441,7 @@ else
 fi
 failed=0
 
-# Start from a clean work dir so `ls -t | head -1` cannot pick up a tarball
+# Start from a clean work dir so 'ls -t | head -1' cannot pick up a tarball
 # left behind by an earlier run (which would publish the wrong package).
 if [[ "\${APPROVAL_MODE}" != "1" ]]; then
     find "\${WORK_DIR}" -maxdepth 1 -name '*.tgz' -delete 2>/dev/null || true

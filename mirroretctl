@@ -212,7 +212,13 @@ cmd_sync_status() {
             found=1
         fi
     done
-    [[ "$found" -eq 0 ]] && _in "none"
+    # Must not be a trailing '&&': when found=1 the test is false and the
+    # function would return 1, i.e. "sync status" would fail exactly when a
+    # sync is running.
+    if [[ "$found" -eq 0 ]]; then
+        _in "none"
+    fi
+    return 0
 }
 
 cmd_sync_last() {

@@ -168,6 +168,86 @@ Re-run `scripts/mirroret-debug.sh --net` from a non-interactive shell
 
 ---
 
+## 2b. First: confirm whether you actually HAVE TLS inspection
+
+Do not install a CA before checking. A proxy that refuses CONNECT and a
+proxy that re-signs TLS produce similar-looking errors, but the fixes are
+completely different.
+
+Ask the proxy what certificate chain it presents:
+
+```bash
+openssl s_client -connect yum.oracle.com:443 -proxy PROXY_HOST:PORT -showcerts </dev/null 2>/dev/null \
+  | grep -E '^ *[0-9]+ s:|^ *i:'
+```
+
+**No inspection** (issuer is a real public CA, nothing to install):
+
+```
+0 s: O=Oracle Corporation, CN=yum.oracle.com
+  i: O=DigiCert Inc, CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1
+1 s: O=DigiCert Inc, CN=DigiCert Global G3 TLS ECC SHA384 2020 CA1
+  i: O=DigiCert Inc, CN=DigiCert Global Root G3
+```
+
+**Inspection present** (issuer is a corporate name, section 3 applies):
+
+```
+0 s: CN=yum.oracle.com
+  i: CN=Acme Issuing CA
+1 s: CN=Acme Issuing CA
+  i: CN=Acme Root CA
+```
+
+### Telling the two failures apart
+
+| Observed | Cause | Fix |
+|---|---|---|
+| `403 from proxy after CONNECT`, code 000 | proxy policy blocks the host | allow-list, section 2c |
+| `packet length too long` | proxy returned a plaintext HTML block page where TLS was expected. Same as above. | allow-list, section 2c |
+| `certificate verify failed`, `unable to get local issuer certificate` | genuine TLS inspection | install the CA, section 3 |
+| Corporate name in the issuer chain above | genuine TLS inspection | install the CA, section 3 |
+
+`packet length too long` is the confusing one. It reads like a TLS problem
+but it usually means the proxy blocked the request and the client parsed
+the error page as a TLS record.
+
+---
+
+## 2c. Proxy allow-list
+
+When the proxy blocks by policy there is nothing to configure on the
+mirror server. Find out which hosts are blocked:
+
+```bash
+for h in \
+  yum.oracle.com \
+  cdn.redhat.com \
+  pypi.org \
+  files.pythonhosted.org \
+  registry.npmjs.org \
+  registry-1.docker.io \
+  auth.docker.io ; do
+    printf '%-32s %s\n' "$h" \
+      "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://$h/" 2>/dev/null)"
+done
+```
+
+Any host returning 000 is blocked. Anything returning an HTTP code,
+including 401 and 403 from the site itself, is reachable.
+
+Then ask the proxy team to permit CONNECT on 443 to the blocked ones.
+
+Do not overlook `files.pythonhosted.org`. Allowing only `pypi.org` passes
+metadata but fails every actual download.
+
+Never resolve a policy block by copying a private key off the proxy, and
+never disable certificate verification (`npm config set strict-ssl false`,
+`pip --trusted-host`) to work around it. Neither fixes a 403 and both
+weaken every other fetch.
+
+---
+
 ## 3. Corporate TLS inspection: trusting a private CA
 
 When a middlebox re-signs HTTPS traffic, every tool independently rejects
