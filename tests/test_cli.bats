@@ -439,3 +439,22 @@ EOF
         grep -q "$v" "${SCRIPT_DIR}/config/mirroret.conf.example"
     done
 }
+
+@test "cli: sync status exits 0 even when a sync process is running" {
+    # Regression: the function ended in `[[ $found -eq 0 ]] && _in "none"`,
+    # so a running sync (found=1) made the whole subcommand return 1.
+    # Fake a matching process so pgrep -af finds something.
+    bash -c 'exec -a sync-redhat-repos.sh sleep 5' &
+    fake_pid=$!
+    run bash "${CTL}" sync status
+    kill "$fake_pid" 2>/dev/null || true
+    wait "$fake_pid" 2>/dev/null || true
+    [ "$status" -eq 0 ]
+}
+
+@test "cli: sync status has no trailing short-circuit as its last statement" {
+    # Guard the shape, not just the behaviour: a bare `cond && cmd` at the
+    # tail of a function leaks the condition's falsity as the exit status.
+    run bash -c "sed -n '/^cmd_sync_status()/,/^}/p' '${CTL}' | grep -c 'found.*-eq 0.*&&'"
+    [ "$output" = "0" ]
+}
