@@ -159,6 +159,28 @@ caps() {
     return 0
 }
 
+# _mtime <path> - epoch seconds, GNU stat then BSD stat.
+_mtime() {
+    stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null || echo 0
+}
+
+# _newest_rpm_mtime <dir> - epoch seconds of the newest .rpm beneath dir.
+_newest_rpm_mtime() {
+    local d="$1" t
+    t="$(find "$d" -name '*.rpm' -printf '%T@\n' 2>/dev/null \
+         | sort -rn | head -1 | cut -d. -f1)"
+    if [[ -n "${t}" ]]; then printf '%s' "${t}"; return 0; fi
+    # No -printf (BSD find): compare one at a time, capped so a huge tree
+    # cannot make the collector crawl.
+    local f best=0 m n=0
+    while read -r f; do
+        m="$(_mtime "$f")"
+        [[ "${m}" -gt "${best}" ]] && best="${m}"
+        n=$(( n + 1 )); [[ "${n}" -ge 2000 ]] && break
+    done < <(find "$d" -name '*.rpm' 2>/dev/null)
+    printf '%s' "${best}"
+}
+
 # note_timeout <rc> <label>
 # 124 is timeout's own exit code; 137 is SIGKILL after -k. Either means the
 # probe was cut off, which is a finding in its own right.
@@ -611,50 +633,122 @@ caps "repo directories" "find '${RPM_ROOT}' -maxdepth 3 -type d 2>/dev/null | so
 
 if [[ -d "${RPM_ROOT}" ]]; then
     sub "per-repo package counts and sizes"
-    printf '%-46s %8s %8s %8s %8s  %s\n' \
-        "REPO (relative to mirror root)" "TOTAL" "x86_64" "noarch" "i686" "SIZE" >>"${BODY}"
+    printf '%-40s %8s %8s %8s %8s %8s  %s\n' \
+        "REPO (relative to mirror root)" "TOTAL" "x86_64" "noarch" "i686" "SIZE" \
+        "PKG SUBDIR" >>"${BODY}"
     # Leaf dirs only: those that directly hold at least one .rpm. Deriving
     # the list from the files themselves avoids counting a package once per
     # ancestor directory.
-    REPO_LEAF_DIRS="$(find "${RPM_ROOT}" -type f -name '*.rpm' 2>/dev/null \
-                      | sed 's#/[^/]*$##' | sort -u)"
-    SRC_TOTAL=0
+    # Directories that directly hold .rpm files.
+    PKG_DIRS="$(find "${RPM_ROOT}" -type f -name '*.rpm' 2>/dev/null \
+                | sed 's#/[^/]*$##' | sort -u)"
+
+    # Map a package dir to its REPO ROOT: the nearest ancestor (or itself)
+    # holding repodata/repomd.xml. Layouts differ by vendor. Oracle serves
+    # <repo>/getPackage/*.rpm with <repo>/repodata/ one level up; Fedora and
+    # EPEL nest deeper as Packages/a/, Packages/b/. Assuming repodata sits
+    # beside the packages reports every Oracle repo as broken.
+    _repo_root_for() {
+        local d="$1" cur="$1" hops=0
+        # Bounded walk: 5 levels is deeper than any real vendor layout.
+        while [[ "${hops}" -lt 5 ]]; do
+            hops=$(( hops + 1 ))
+            if [[ -f "${cur}/repodata/repomd.xml" ]]; then
+                printf '%s' "${cur}"; return 0
+            fi
+            # Never walk above the mirror root.
+            [[ "${cur}" == "${RPM_ROOT}" ]] && break
+            cur="$(dirname "${cur}")"
+            [[ "${cur}" == "/" ]] && break
+        done
+        # No metadata anywhere above: report the package dir itself.
+        printf '%s' "$d"
+        return 1
+    }
+
+    # Aggregate counts per repo root, not per package dir.
+    REPO_ROOTS=""
+    NO_META_DIRS=""
     while read -r d; do
         [[ -n "$d" ]] || continue
-        # -maxdepth 1 so nested dirs are attributed to themselves, not here.
-        tot=$(find "$d" -maxdepth 1 -name '*.rpm' 2>/dev/null | wc -l)
+        if root="$(_repo_root_for "$d")"; then
+            REPO_ROOTS="${REPO_ROOTS}${root}
+"
+        else
+            NO_META_DIRS="${NO_META_DIRS}${d}
+"
+        fi
+    done <<<"${PKG_DIRS}"
+    REPO_ROOTS="$(printf '%s' "${REPO_ROOTS}" | sort -u)"
+    # Include metadata-less dirs in the table too: their packages are real
+    # even though clients cannot see them yet.
+    INVENTORY_DIRS="$(printf '%s\n%s' "${REPO_ROOTS}" "${NO_META_DIRS}" \
+                      | grep -v '^$' | sort -u)"
+
+    # Count source RPMs across the whole tree, independent of the repo-root
+    # mapping: a .src.rpm in a metadata-less dir is still eating the disk.
+    SRC_TOTAL=$(( $(find "${RPM_ROOT}" -name '*.src.rpm' 2>/dev/null | wc -l) ))
+    while read -r d; do
+        [[ -n "$d" ]] || continue
+        # Recursive here on purpose: packages may live in getPackage/ or
+        # Packages/<letter>/ beneath the repo root.
+        tot=$(find "$d" -name '*.rpm' 2>/dev/null | wc -l)
         [[ "${tot}" -eq 0 ]] && continue
-        x86=$(find "$d" -maxdepth 1 -name '*.x86_64.rpm' 2>/dev/null | wc -l)
-        noa=$(find "$d" -maxdepth 1 -name '*.noarch.rpm' 2>/dev/null | wc -l)
-        i68=$(find "$d" -maxdepth 1 -name '*.i686.rpm' 2>/dev/null | wc -l)
-        src=$(find "$d" -maxdepth 1 -name '*.src.rpm' 2>/dev/null | wc -l)
+        x86=$(find "$d" -name '*.x86_64.rpm' 2>/dev/null | wc -l)
+        noa=$(find "$d" -name '*.noarch.rpm' 2>/dev/null | wc -l)
+        i68=$(find "$d" -name '*.i686.rpm' 2>/dev/null | wc -l)
         sz="$(du -sh "$d" 2>/dev/null | awk '{print $1}')"
         rel="${d#"${RPM_ROOT}"/}"
-        printf '%-46s %8d %8d %8d %8d  %s\n' \
-            "${rel}" "${tot}" "${x86}" "${noa}" "${i68}" "${sz:-?}" >>"${BODY}"
-        SRC_TOTAL=$(( SRC_TOTAL + src ))
+        # Pure parameter expansion: "$#" inside a double-quoted sed script
+        # expands as the shell's argument count and corrupts the expression.
+        pkgsub=""
+        while read -r _f; do
+            _rp="${_f#"$d"/}"
+            if [[ "${_rp}" == */* ]]; then _sd="${_rp%/*}"; else _sd="<flat>"; fi
+            case ",${pkgsub}," in
+                *",${_sd},"*) ;;
+                *) pkgsub="${pkgsub:+${pkgsub},}${_sd}" ;;
+            esac
+        done < <(find "$d" -type f -name '*.rpm' 2>/dev/null | head -50)
+        printf '%-40s %8d %8d %8d %8d %8s  %s\n' \
+            "${rel}" "${tot}" "${x86}" "${noa}" "${i68}" "${sz:-?}" \
+            "${pkgsub:-none}" >>"${BODY}"
         if [[ "${i68}" -eq 0 && "${x86}" -gt 0 ]]; then
             I686_EMPTY_REPOS="${I686_EMPTY_REPOS:-} ${rel}"
         fi
-    done <<<"${REPO_LEAF_DIRS}"
+    done <<<"${INVENTORY_DIRS}"
 
     if [[ "${SRC_TOTAL}" -gt 0 ]]; then
         finding FAIL "${SRC_TOTAL} .src.rpm files in the mirror. Source RPMs are hundreds of MB each and are almost never wanted; an unpinned reposync can pull tens of thousands. Set MIRRORET_RPM_SOURCE=0, pin MIRRORET_RPM_ARCH, then delete them."
     fi
 
     sub "repodata freshness per repo"
-    while read -r rd; do
-        [[ -n "${rd}" ]] || continue
-        caps "$(dirname "${rd}")" "stat -c 'repomd.xml mtime=%y' '${rd}/repomd.xml' 2>/dev/null; ls -la '${rd}' 2>/dev/null | head -n 12"
-    done < <(find "${RPM_ROOT}" -maxdepth 4 -type d -name repodata 2>/dev/null | sort | head -n 20)
-
-    # A repo dir with packages but no repodata is unusable by dnf.
     while read -r d; do
         [[ -n "$d" ]] || continue
-        if [[ ! -f "$d/repodata/repomd.xml" ]]; then
-            finding FAIL "$d holds RPMs but has no repodata/repomd.xml. dnf on clients fails with 'Failed to download metadata for repo'. Fix: createrepo_c '$d'"
+        caps "${d#"${RPM_ROOT}"/}" \
+            "stat -c 'repomd.xml mtime=%y size=%s' '${d}/repodata/repomd.xml' 2>/dev/null; ls -la '${d}/repodata' 2>/dev/null | head -n 12"
+    done <<<"${REPO_ROOTS}"
+
+    # Only a package dir with NO repodata at or above it is genuinely broken.
+    while read -r d; do
+        [[ -n "$d" ]] || continue
+        finding FAIL "${d} holds RPMs but no repodata/repomd.xml exists there or in any parent up to ${RPM_ROOT}. dnf on clients fails with 'Failed to download metadata for repo'. Fix: run createrepo_c on the repo root, or re-run the sync with --download-metadata."
+    done <<<"${NO_META_DIRS}"
+
+    # Metadata that predates the newest package means the repo is stale even
+    # though the files are present: dnf only sees what repomd.xml lists.
+    while read -r d; do
+        [[ -n "$d" ]] || continue
+        md="${d}/repodata/repomd.xml"
+        [[ -f "${md}" ]] || continue
+        md_t=$(_mtime "${md}")
+        newest_t=$(_newest_rpm_mtime "$d")
+        [[ -n "${newest_t}" && "${newest_t}" -gt 0 ]] || continue
+        if [[ "${newest_t}" -gt "${md_t}" ]]; then
+            skew=$(( (newest_t - md_t) / 3600 ))
+            finding FAIL "${d#"${RPM_ROOT}"/}: repodata is ${skew}h OLDER than the newest package in it. dnf only installs what repomd.xml lists, so those packages are invisible to clients. Fix: createrepo_c --update '${d}'"
         fi
-    done <<<"${REPO_LEAF_DIRS}"
+    done <<<"${REPO_ROOTS}"
 
     if [[ -n "${I686_EMPTY_REPOS:-}" ]]; then
         finding WARN "Zero i686 packages in:${I686_EMPTY_REPOS}. Confirms 32-bit multilib installs (glibc.i686 and friends) will fail on clients until MIRRORET_RPM_ARCH includes i686 and a re-sync completes."
@@ -990,8 +1084,8 @@ caps "grep" \
 
 # Stale mirror detection: newest RPM file mtime vs now.
 if [[ -d "${RPM_ROOT}" ]]; then
-    NEWEST="$(find "${RPM_ROOT}" -name '*.rpm' -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1)"
-    if [[ -n "${NEWEST}" ]]; then
+    NEWEST="$(_newest_rpm_mtime "${RPM_ROOT}")"
+    if [[ -n "${NEWEST}" && "${NEWEST}" -gt 0 ]]; then
         NOW="$(date +%s)"
         AGE_D=$(( (NOW - NEWEST) / 86400 ))
         out ""
