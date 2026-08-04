@@ -516,6 +516,17 @@ cmd_doctor() {
     fi
 }
 
+# ----------------------------------------------------------------- collect ----
+
+cmd_collect() {
+    local sc="${SCRIPT_DIR}/scripts/mirroret-collect.sh"
+    if [[ ! -x "$sc" ]]; then
+        _er "scripts/mirroret-collect.sh not found or not executable"
+        return 1
+    fi
+    "$sc" "$@"
+}
+
 # ------------------------------------------------------------------ config ----
 
 cmd_config() {
@@ -581,6 +592,7 @@ cmd_menu() {
   13) config edit       edit and then upgrade
   14) upgrade           re-apply config, regenerate scripts
   15) check             validate installation
+  16) report            write one shareable txt report
    q) quit
 MENU
         printf "select> "
@@ -602,6 +614,7 @@ MENU
             13) cmd_config edit ;;
             14) cmd_upgrade ;;
             15) cmd_check ;;
+            16) cmd_collect ;;
             q|Q|quit|exit) return 0 ;;
             "") ;;
             *)  _er "unknown selection: ${choice}" ;;
@@ -622,6 +635,7 @@ Usage:
 Inspect (no root needed):
   status                    services, ports, disk, last sync, cron
   doctor [--net] [--bundle] full read-only diagnostic
+  report [-o FILE]          write ONE txt file describing everything, for sharing
   sync status               which syncs are running, lock state
   sync last                 final line of the newest sync logs
   serve                     probe every HTTP endpoint locally
@@ -670,6 +684,7 @@ main() {
     case "$cmd" in
         status)              cmd_status ;;
         doctor|debug)        cmd_doctor "$@" ;;
+        report|collect)      cmd_collect "$@" ;;
         sync)
             case "${1:-all}" in
                 status) cmd_sync_status ;;

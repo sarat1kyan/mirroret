@@ -458,3 +458,29 @@ EOF
     run bash -c "sed -n '/^cmd_sync_status()/,/^}/p' '${CTL}' | grep -c 'found.*-eq 0.*&&'"
     [ "$output" = "0" ]
 }
+
+@test "cli: report subcommand is wired to the collector" {
+    run bash "${CTL}" report --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"read-only"* ]]
+}
+
+@test "cli: help lists the report subcommand" {
+    run bash "${CTL}" help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"report"* ]]
+}
+
+@test "cli: interactive menu has no duplicate numbers" {
+    # Appending an entry must not silently renumber the existing ones.
+    dupes="$(sed -n '/1) status/,/q) quit/p' "${CTL}" \
+             | grep -oE '^ *[0-9]+\)' | tr -d ' )' | sort | uniq -d)"
+    [ -z "$dupes" ]
+}
+
+@test "cli: every menu number has a case branch" {
+    nums="$(sed -n '/1) status/,/q) quit/p' "${CTL}" | grep -oE '^ *[0-9]+\)' | tr -d ' )')"
+    for n in $nums; do
+        grep -qE "^ +${n}\) +cmd_" "${CTL}"
+    done
+}
