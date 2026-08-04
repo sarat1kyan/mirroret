@@ -201,6 +201,11 @@ LOG_FILE="\${LOG_DIR}/sync-redhat-\$(date +%Y%m%d-%H%M%S).log"
 FLAVOR="${flavor}"
 RHEL_VER="${rhel_ver}"
 ARCH="${rpm_arch}"
+# reposync takes a repeated --arch flag, but dnf repoquery takes ONE
+# comma-separated list. Passing the space-separated form to repoquery makes
+# the argument invalid, it returns nothing, and the pre-sync size estimate
+# silently reads 0, which defeats the disk guard.
+ARCH_CSV="\${ARCH// /,}"
 NEWEST_ONLY="${newest_only}"
 INCLUDE_SOURCE="${include_source}"
 DELETE_REMOVED="${delete_removed}"
@@ -279,7 +284,7 @@ done
 _estimate_gb() {
     local repo="\$1" bytes
     command -v dnf >/dev/null 2>&1 || { printf '0'; return 0; }
-    bytes="\$(dnf repoquery --repo="\${repo}" --arch="\${ARCH},noarch" \
+    bytes="\$(dnf repoquery --repo="\${repo}" --arch="\${ARCH_CSV},noarch" \
         \${NEWEST_ONLY:+--latest-limit=1} \
         --queryformat='%{downloadsize}\\n' 2>/dev/null \
         | awk '/^[0-9]+\$/ {t+=\$1} END {print t+0}')"

@@ -855,3 +855,41 @@ PY
     run list_backups
     [ "$status" -eq 0 ]
 }
+
+@test "rpm: repoquery gets a comma-separated arch list, not spaces" {
+    # reposync takes repeated --arch flags; dnf repoquery takes ONE comma
+    # list. Passing "x86_64 i686,noarch" makes the argument invalid, so
+    # repoquery returns nothing and the pre-sync size estimate reads 0,
+    # which silently defeats the disk guard.
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_RPM_ARCH="x86_64 i686"
+    DRY_RUN=0
+    configure_createrepo "id"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'ARCH_CSV="${ARCH// /,}"' "$s"
+    grep -q 'repoquery .*--arch="${ARCH_CSV},noarch"' "$s"
+    # The space-separated form must not reach repoquery.
+    ! grep -q 'repoquery .*--arch="${ARCH},noarch"' "$s"
+}
+
+@test "rpm: ARCH_CSV collapses a multi-arch list correctly" {
+    ARCH="x86_64 i686"; ARCH_CSV="${ARCH// /,}"
+    [ "$ARCH_CSV" = "x86_64,i686" ]
+    ARCH="x86_64"; ARCH_CSV="${ARCH// /,}"
+    [ "$ARCH_CSV" = "x86_64" ]
+}
+
+@test "rpm: generated script builds one --arch flag per architecture" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_RPM_ARCH="x86_64 i686"
+    DRY_RUN=0
+    configure_createrepo "id"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    # Execute the real arg-building block from the generated file.
+    sed -n '/^ARCH=/p;/^REPOSYNC_ARGS=(/,/^done$/p' "$s" > "${TMPDIR}/block.sh"
+    run bash -c "set -Eeuo pipefail; source '${TMPDIR}/block.sh'; printf '%s' \"\${REPOSYNC_ARGS[*]}\""
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"--arch x86_64 --arch i686 --arch noarch"* ]]
+}
