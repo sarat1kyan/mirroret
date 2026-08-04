@@ -45,7 +45,24 @@ sudo ./install.sh --insecure
 sudo ./scripts/mirroret-debug.sh
 sudo ./scripts/mirroret-debug.sh --net # also probe outbound HTTPS
 sudo ./scripts/mirroret-debug.sh --bundle # write a /tmp tarball for support
+
+# Collect ONE text file describing the whole host, for sending to support:
+sudo ./scripts/mirroret-collect.sh
+sudo ./mirroretctl report # same thing via the CLI
 ```
+
+### Which diagnostic do I run?
+
+| Tool | Output | Use it when |
+|------|--------|-------------|
+| `mirroret-debug.sh` | PASS/WARN/FAIL lines on the terminal | You are at the console and want a fast verdict |
+| `mirroret-collect.sh` | One redacted `.txt` file, findings first | You need to hand the full picture to someone else |
+
+`mirroret-collect.sh` is read-only and standalone: it sources nothing from
+`lib/`, so it still runs when the install itself is broken. It writes 33
+sections of evidence plus an auto-computed findings list, bounds every probe
+with a timeout so a hung mount cannot stall the run, and masks passwords,
+tokens and proxy credentials before writing. The report is created mode 600.
 
 ### After installation
 
