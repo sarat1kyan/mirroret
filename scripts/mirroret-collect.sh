@@ -34,7 +34,13 @@
 # 'cmd | head' SIGPIPE into a spurious failure.
 set -u
 
-COLLECT_VERSION="1.0"
+COLLECT_VERSION="1.1"
+
+# Many probes cannot succeed without root: reading root's crontab, reading
+# 0600 nginx configs, listing another user's containers. Findings that depend
+# on them must not be reported as FAIL when the cause is simply privilege.
+IS_ROOT=0
+[[ "$(id -u)" -eq 0 ]] && IS_ROOT=1
 
 # -- Defaults ------------------------------------------------------------------
 
@@ -92,7 +98,11 @@ trap cleanup EXIT
 # Masks credential-shaped text on stdin. Applied to every captured block,
 # because the resulting report is intended to be shared off the host.
 redact() {
-    sed -E \
+    # Strip control bytes first. Captured output can contain binary (a log
+    # tail, a package name, a daemon dump); left in, it makes the finished
+    # report unusable with grep, sed and awk.
+    tr -d '\000-\010\013\014\016-\037' \
+    | LC_ALL=C sed -E \
         -e 's/((password|passwd|secret|token|api[_-]?key|auth[a-z_]*)[[:space:]]*[:=][[:space:]]*)[^[:space:]]+/\1***REDACTED***/Ig' \
         -e 's#((https?|ftp)://)[^:/@[:space:]]+:[^@[:space:]]+@#\1***REDACTED***@#g' \
         -e 's/(-----BEGIN [A-Z ]*PRIVATE KEY-----).*/\1 ***CONTENT WITHHELD***/' \
@@ -486,7 +496,20 @@ fi
 # 10  systemd units
 # =============================================================================
 sec "SYSTEMD UNITS"
-for u in nginx mirroret-pypiserver mirroret-verdaccio mirroret-registry docker podman; do
+# Enumerate what actually exists rather than only probing assumed names: a
+# service can be installed under verdaccio.service instead of
+# mirroret-verdaccio.service, and then a hardcoded list reports "not found"
+# for a unit that is running fine under another name.
+caps "all units matching mirroret/verdaccio/pypiserver/registry/distribution" \
+    "systemctl list-unit-files --no-legend --no-pager 2>/dev/null | grep -iE 'mirroret|verdaccio|pypiserver|registry|distribution'"
+DISCOVERED_UNITS="$(systemctl list-unit-files --no-legend --no-pager 2>/dev/null \
+    | awk '{print $1}' | grep -iE 'mirroret|verdaccio|pypiserver|registry|distribution' \
+    | sed 's/\.service$//' | sort -u | tr '\n' ' ')"
+out "discovered: ${DISCOVERED_UNITS:-<none>}"
+for u in nginx mirroret-pypiserver mirroret-verdaccio mirroret-registry docker podman ${DISCOVERED_UNITS}; do
+    # Skip duplicates from the discovery list.
+    case " ${_SEEN_UNITS:-} " in *" ${u} "*) continue ;; esac
+    _SEEN_UNITS="${_SEEN_UNITS:-} ${u}"
     sub "unit: ${u}"
     caps "is-enabled / is-active" \
         "systemctl is-enabled ${u} 2>&1; systemctl is-active ${u} 2>&1"
@@ -518,7 +541,19 @@ for u in nginx mirroret-pypiserver mirroret-verdaccio mirroret-registry docker p
     fi
     if systemctl is-enabled "${u}" >/dev/null 2>&1 && \
        ! systemctl is-active "${u}" >/dev/null 2>&1; then
-        finding FAIL "${u} is enabled but not active. It is supposed to be running and is not."
+        # A socket-activated or oneshot unit sitting inactive is normal, not
+        # a fault: podman.service is TriggeredBy podman.socket and exits 0
+        # after each use.
+        _trig="$(systemctl show -p TriggeredBy --value "${u}" 2>/dev/null)"
+        _type="$(systemctl show -p Type --value "${u}" 2>/dev/null)"
+        _res="$(systemctl show -p Result --value "${u}" 2>/dev/null)"
+        if [[ -n "${_trig}" ]]; then
+            out "[inactive but socket-activated by ${_trig}: normal]"
+        elif [[ "${_type}" == "oneshot" && "${_res}" == "success" ]]; then
+            out "[inactive oneshot that last succeeded: normal]"
+        else
+            finding FAIL "${u} is enabled but not active, and it is neither socket-activated nor a successful oneshot. It is supposed to be running and is not."
+        fi
     fi
 done
 
@@ -539,8 +574,19 @@ caps "dangling symlinks in sites-enabled" \
 caps "nginx error log tail" "tail -n ${LOG_TAIL_LINES} /var/log/nginx/error.log 2>/dev/null"
 caps "nginx access log tail" "tail -n 30 /var/log/nginx/access.log 2>/dev/null"
 
-if have nginx && ! nginx -t >/dev/null 2>&1; then
-    finding FAIL "nginx -t fails. nginx is serving the last good config or is down entirely; any config change since the last successful reload has not taken effect."
+if have nginx; then
+    _ngt=""; _ngrc=0
+    _ngt="$(nginx -t 2>&1)" || _ngrc=$?
+    if [[ "${_ngrc}" -ne 0 ]]; then
+        if [[ "${IS_ROOT}" -eq 0 && "${_ngt}" == *"Permission denied"* ]]; then
+            # nginx configs are commonly mode 0600 root-only, and the error
+            # log is unwritable by a normal user. As a non-root caller this
+            # says nothing about whether the config is valid.
+            finding INFO "nginx -t could not run as a non-root user (Permission denied reading the config or error log). This is expected and is NOT a config problem. Re-run with sudo to actually validate it."
+        else
+            finding FAIL "nginx -t fails. nginx is serving the last good config or is down entirely; any config change since the last successful reload has not taken effect. Error: $(printf '%s' "${_ngt}" | grep -m1 -iE 'emerg|error' || printf 'see section 11')"
+        fi
+    fi
 fi
 
 # Verify every alias/root target in the mirroret config actually exists. A
@@ -578,8 +624,37 @@ done
 
 for pair in "${WEB_PORT}:nginx" "${PIP_PORT}:pypiserver" "${NPM_PORT}:verdaccio" "${REG_PORT}:registry"; do
     p="${pair%%:*}"; svc="${pair##*:}"
-    if have ss && ! ss -tlnH "sport = :${p}" 2>/dev/null | grep -q .; then
+    if ! have ss; then continue; fi
+    _lst="$(ss -tlnH "sport = :${p}" 2>/dev/null)"
+    if [[ -z "${_lst}" ]]; then
         finding WARN "Nothing is listening on port ${p} (expected ${svc}). If that component is intentionally disabled this is fine; otherwise clients get connection refused."
+        continue
+    fi
+
+    # A service bound only to loopback serves this host and nothing else.
+    # Every client host gets connection refused. Checked per address family:
+    # 127.0.0.1 and [::1] are both loopback, 0.0.0.0 and [::] are not.
+    _routable=0
+    while read -r _addr; do
+        [[ -n "${_addr}" ]] || continue
+        case "${_addr}" in
+            127.*|'[::1]'*|::1*|localhost*) ;;
+            *) _routable=1 ;;
+        esac
+    done < <(printf '%s\n' "${_lst}" | awk '{print $4}' | sed 's/:[0-9]*$//')
+    if [[ "${_routable}" -eq 0 ]]; then
+        finding FAIL "Port ${p} (${svc}) is bound to LOOPBACK ONLY: $(printf '%s' "${_lst}" | awk '{print $4}' | tr '\n' ' '). It works on this host but every client host gets connection refused. Bind it to 0.0.0.0 (or the LAN address) instead."
+    fi
+
+    # Listening with no systemd unit means it dies at the next reboot.
+    if have systemctl; then
+        _managed=0
+        for _u in ${DISCOVERED_UNITS:-} nginx mirroret-pypiserver mirroret-verdaccio mirroret-registry; do
+            systemctl is-active "${_u}" >/dev/null 2>&1 && _managed=1
+        done
+        if [[ "${_managed}" -eq 0 ]]; then
+            finding FAIL "Port ${p} (${svc}) is listening but no matching systemd unit is active, so nothing will restart it. It will not survive a reboot. Run install.sh --upgrade to write the unit."
+        fi
     fi
 done
 
@@ -603,7 +678,13 @@ CRON_COUNT=$(( $(crontab -l 2>/dev/null | grep -c 'mirroret') ))
 out ""
 out "mirroret cron lines: ${CRON_COUNT}"
 if [[ "${CRON_COUNT}" -eq 0 ]]; then
-    finding WARN "No mirroret cron entries for root. Nothing will sync automatically; mirrors go stale until someone runs the sync scripts by hand."
+    if [[ "${IS_ROOT}" -eq 0 ]]; then
+        # "crontab -l" reads the INVOKING user's crontab. mirroret installs
+        # its schedule under root, so a non-root run always sees nothing.
+        finding INFO "No mirroret cron entries in this user's crontab, but 'crontab -l' as a non-root user cannot see root's crontab, which is where mirroret installs its schedule. Re-run with sudo to check. Lock file timestamps in section 22 show when syncs last ran."
+    else
+        finding WARN "No mirroret cron entries for root. Nothing will sync automatically; mirrors go stale until someone runs the sync scripts by hand."
+    fi
 fi
 if ! systemctl is-active crond >/dev/null 2>&1 && ! systemctl is-active cron >/dev/null 2>&1; then
     finding WARN "Neither crond nor cron is active. Scheduled syncs cannot fire even though crontab entries exist."
@@ -1049,18 +1130,39 @@ fi
 # =============================================================================
 sec "CLIENT CONFIGURATION TEMPLATES"
 caps "config dir" "ls -la '${BASE_DIR}/config' 2>/dev/null"
-for f in "${BASE_DIR}/config"/*; do
+# Include dotfiles: .npmrc is a client config and a plain * glob misses it.
+for f in "${BASE_DIR}/config"/* "${BASE_DIR}/config"/.[!.]*; do
     [[ -f "$f" ]] || continue
-    catfile "$f" 80
+    case "$f" in
+        # Key material is pages of base64 that tell us nothing. Fingerprint it.
+        *.asc|*.gpg|*.pem|*.crt|*.key)
+            sub "file: ${f} (key material, summarized)"
+            caps "stat" "stat -c '%A %U:%G %s bytes mtime=%y' '$f' 2>/dev/null"
+            caps "identity" "gpg --show-keys --with-fingerprint '$f' 2>/dev/null | head -n 6 || openssl x509 -in '$f' -noout -subject -dates -fingerprint 2>/dev/null"
+            ;;
+        *) catfile "$f" 80 ;;
+    esac
 done
 caps "server IP as detected" \
     "hostname -I 2>/dev/null; ip -4 -o addr show scope global 2>/dev/null | awk '{print \$2, \$4}'"
 
 # A client .repo pointing at 127.0.0.1 is useless to every other host.
-caps "loopback or localhost in client templates" \
-    "grep -rn '127.0.0.1\|localhost' '${BASE_DIR}/config' 2>/dev/null | head -n 20"
-if grep -rq '127\.0\.0\.1\|localhost' "${BASE_DIR}/config" 2>/dev/null; then
-    finding WARN "A client config template under ${BASE_DIR}/config references 127.0.0.1 or localhost. Copied to a client, it points that client at itself. MIRRORET_SERVER_IP was probably not detected correctly."
+# Only real client config text. A GPG key whose UID is
+# "mirroret@localhost" is not a misconfigured template, and binary keyrings
+# match on bytes that mean nothing here.
+_LOOPBACK_HITS=""
+for _cf in "${BASE_DIR}/config"/*.repo "${BASE_DIR}/config"/*.conf \
+           "${BASE_DIR}/config"/*.list "${BASE_DIR}/config"/*.json \
+           "${BASE_DIR}/config"/.npmrc "${BASE_DIR}/config"/*.npmrc; do
+    [[ -f "${_cf}" ]] || continue
+    if grep -qE '127\.0\.0\.1|localhost' "${_cf}" 2>/dev/null; then
+        _LOOPBACK_HITS="${_LOOPBACK_HITS} $(basename "${_cf}")"
+    fi
+done
+caps "loopback or localhost in client config text" \
+    "grep -nE '127\.0\.0\.1|localhost' '${BASE_DIR}/config'/*.repo '${BASE_DIR}/config'/*.conf '${BASE_DIR}/config'/*.list '${BASE_DIR}/config'/*.json '${BASE_DIR}/config'/.npmrc 2>/dev/null | head -n 20"
+if [[ -n "${_LOOPBACK_HITS}" ]]; then
+    finding WARN "Client config templates reference 127.0.0.1 or localhost:${_LOOPBACK_HITS}. Copied to a client, they point that client at itself. MIRRORET_SERVER_IP was probably not detected correctly."
 fi
 
 # =============================================================================

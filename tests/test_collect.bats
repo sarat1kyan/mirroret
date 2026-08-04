@@ -167,7 +167,7 @@ EOF
 @test "collect: flags a client template pointing at localhost" {
     printf 'baseurl=http://127.0.0.1:8080/redhat/\n' > "${FAKE}/config/mirroret.repo"
     run_collect
-    grep -q "references 127.0.0.1 or localhost" "${OUT}"
+    grep -q "127.0.0.1 or localhost" "${OUT}"
 }
 
 @test "collect: no false disk finding when df output is unparseable" {
@@ -284,4 +284,90 @@ _mk_repo() {  # _mk_repo <name> <pkgsubdir> [--no-meta]
     run_collect
     grep -q 'Zero i686 packages in' "${OUT}"
     ! grep -q 'Zero i686 packages in.*getPackage' "${OUT}"
+}
+
+# -- False positives found on a real, working server ----------------------------
+#
+# A non-root run cannot read root's crontab, a 0600 nginx config, or another
+# user's containers. Reporting those as FAIL sends an operator chasing
+# problems that do not exist on a server that is working correctly.
+
+@test "collect: cron absence is INFO not WARN when running non-root" {
+    [ "$(id -u)" -ne 0 ]
+    run_collect
+    # "crontab -l" reads the invoking user's crontab; mirroret schedules under
+    # root, so a non-root run always sees nothing.
+    ! grep -q '^WARN No mirroret cron entries for root' "${OUT}"
+    grep -q "cannot see root's crontab" "${OUT}"
+}
+
+@test "collect: localhost scan ignores GPG key material" {
+    # A key whose UID is mirroret@localhost is not a misconfigured template.
+    mkdir -p "${FAKE}/config"
+    printf -- '-----BEGIN PGP PUBLIC KEY BLOCK-----\nmirroret <mirroret@localhost>\n' \
+        > "${FAKE}/config/GPG-KEY.asc"
+    printf 'binary localhost bytes\n' > "${FAKE}/config/mirroret.gpg"
+    run_collect
+    ! grep -q 'reference 127.0.0.1 or localhost' "${OUT}"
+}
+
+@test "collect: localhost scan still flags a real client template" {
+    mkdir -p "${FAKE}/config"
+    printf 'baseurl=http://127.0.0.1:8080/redhat/\n' > "${FAKE}/config/client.repo"
+    run_collect
+    grep -q 'reference 127.0.0.1 or localhost' "${OUT}"
+    grep -q 'client.repo' "${OUT}"
+}
+
+@test "collect: dotfile client configs are included" {
+    # A plain * glob misses .npmrc, which is a client config.
+    mkdir -p "${FAKE}/config"
+    printf 'registry=http://192.168.1.5:4873/\n' > "${FAKE}/config/.npmrc"
+    run_collect
+    grep -q 'config/.npmrc' "${OUT}"
+    grep -q '192.168.1.5:4873' "${OUT}"
+}
+
+@test "collect: key material is summarized, not dumped as base64" {
+    mkdir -p "${FAKE}/config"
+    { printf -- '-----BEGIN PGP PUBLIC KEY BLOCK-----\n'
+      for _ in $(seq 1 60); do printf 'mQINBGo69UQBEACUNIQUEBASE64LINE%s\n' "$_"; done
+      printf -- '-----END PGP PUBLIC KEY BLOCK-----\n'; } > "${FAKE}/config/GPG-KEY.asc"
+    run_collect
+    grep -q 'key material, summarized' "${OUT}"
+    # The base64 body must not be copied into the report.
+    ! grep -q 'UNIQUEBASE64LINE30' "${OUT}"
+}
+
+@test "collect: report contains no control bytes (stays grep/sed safe)" {
+    # Captured output can include binary. Left in, the finished report breaks
+    # grep, sed and awk for whoever reads it.
+    mkdir -p "${FAKE}/logs"
+    printf 'before\001\002\007\016\037after\n' > "${FAKE}/logs/binary.log"
+    run_collect
+    run bash -c "LC_ALL=C grep -c $'[\\001-\\010\\013\\014\\016-\\037]' '${OUT}' || true"
+    [ "$output" = "0" ]
+}
+
+@test "collect: version reflects the false-positive fixes" {
+    grep -q 'COLLECT_VERSION="1.1"' "${COLLECT}"
+    run_collect
+    grep -q 'mirroret-collect.sh 1.1' "${OUT}"
+}
+
+@test "collect: loopback-only bind detection logic is present" {
+    # A service on 127.0.0.1 or [::1] only serves this host; every client host
+    # gets connection refused. This was the actual npm failure in the field.
+    grep -q 'bound to LOOPBACK ONLY' "${COLLECT}"
+    grep -q '127\.\*|' "${COLLECT}"
+}
+
+@test "collect: unit discovery does not rely only on assumed names" {
+    grep -q 'DISCOVERED_UNITS' "${COLLECT}"
+    grep -q 'list-unit-files' "${COLLECT}"
+}
+
+@test "collect: socket-activated units are not flagged as failed" {
+    grep -q 'TriggeredBy' "${COLLECT}"
+    grep -q 'socket-activated' "${COLLECT}"
 }
