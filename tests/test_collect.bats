@@ -130,7 +130,7 @@ EOF
     d="${FAKE}/redhat/mirror/ol/9/ol9_appstream"
     touch "$d/bash-5.1.x86_64.rpm"
     run_collect
-    grep -q "holds RPMs but has no repodata/repomd.xml" "${OUT}"
+    grep -q "holds RPMs but no repodata/repomd.xml exists" "${OUT}"
 }
 
 @test "collect: does not flag a repo that has repomd.xml" {
@@ -138,7 +138,7 @@ EOF
     touch "$d/bash-5.1.x86_64.rpm"
     mkdir -p "$d/repodata"; touch "$d/repodata/repomd.xml"
     run_collect
-    ! grep -q "holds RPMs but has no repodata" "${OUT}"
+    ! grep -q "holds RPMs but no repodata" "${OUT}"
 }
 
 @test "collect: reports zero i686 packages per repo" {
@@ -205,4 +205,83 @@ EOF
 @test "collect: rejects an unknown option instead of guessing" {
     run bash "${COLLECT}" --banana
     [ "$status" -eq 2 ]
+}
+
+# -- Vendor repo layouts --------------------------------------------------------
+#
+# reposync mirrors the upstream layout. Oracle serves <repo>/getPackage/*.rpm
+# with <repo>/repodata/ one level up; Fedora and EPEL nest as Packages/<letter>/.
+# Assuming repodata sits beside the packages reported every Oracle repo broken.
+
+_mk_repo() {  # _mk_repo <name> <pkgsubdir> [--no-meta]
+    local name="$1" sub="$2" meta="${3:-meta}"
+    local d="${FAKE}/redhat/mirror/ol/9/${name}"
+    mkdir -p "${d}/${sub}"
+    touch "${d}/${sub}/bash-5.1-1.el9.x86_64.rpm" "${d}/${sub}/tzdata-2024a.noarch.rpm"
+    if [[ "${meta}" != "--no-meta" ]]; then
+        mkdir -p "${d}/repodata"
+        printf '<repomd/>\n' > "${d}/repodata/repomd.xml"
+    fi
+    printf '%s' "$d"
+}
+
+@test "collect: Oracle getPackage layout is not reported as missing repodata" {
+    _mk_repo ol9_appstream getPackage
+    _mk_repo ol9_baseos_latest getPackage
+    run_collect
+    ! grep -q 'ol9_appstream.*no repodata' "${OUT}"
+    ! grep -q 'getPackage holds RPMs' "${OUT}"
+}
+
+@test "collect: EPEL-style Packages/<letter> layout resolves to the repo root" {
+    _mk_repo epel 'Packages/b'
+    run_collect
+    ! grep -q 'holds RPMs but no repodata' "${OUT}"
+    # The table row is the repo root, not the nested package dir.
+    grep -qE '^ol/9/epel +[0-9]' "${OUT}"
+}
+
+@test "collect: package counts aggregate at the repo root across subdirs" {
+    d="$(_mk_repo ol9_baseos_latest getPackage)"
+    touch "${d}/getPackage/glibc-2.34-1.el9.i686.rpm"
+    run_collect
+    # 2 from _mk_repo plus the i686 = 3 total, 1 i686.
+    grep -qE '^ol/9/ol9_baseos_latest +3 +1 +1 +1 ' "${OUT}"
+}
+
+@test "collect: reports the package subdirectory it found" {
+    _mk_repo ol9_appstream getPackage
+    run_collect
+    grep -qE '^ol/9/ol9_appstream .*getPackage' "${OUT}"
+}
+
+@test "collect: still flags RPMs with no repodata anywhere above them" {
+    _mk_repo orphan getPackage --no-meta
+    run_collect
+    grep -q 'holds RPMs but no repodata/repomd.xml exists there or in any parent' "${OUT}"
+}
+
+@test "collect: flags repodata older than the newest package" {
+    d="$(_mk_repo stale getPackage)"
+    # Metadata predating the packages means dnf cannot see them: it installs
+    # only what repomd.xml lists.
+    touch -t 202601010000 "${d}/repodata/repomd.xml"
+    touch "${d}/getPackage/brandnew-1.0-1.el9.x86_64.rpm"
+    run_collect
+    grep -q 'OLDER than the newest package' "${OUT}"
+}
+
+@test "collect: does not flag a repo whose metadata is newer than its packages" {
+    d="$(_mk_repo fresh getPackage)"
+    touch -t 202601010000 "${d}/getPackage/"*.rpm
+    touch "${d}/repodata/repomd.xml"
+    run_collect
+    ! grep -q 'fresh.*OLDER than the newest package' "${OUT}"
+}
+
+@test "collect: i686 warning names the repo root, not the getPackage dir" {
+    _mk_repo ol9_appstream getPackage
+    run_collect
+    grep -q 'Zero i686 packages in' "${OUT}"
+    ! grep -q 'Zero i686 packages in.*getPackage' "${OUT}"
 }
