@@ -371,3 +371,17 @@ _mk_repo() {  # _mk_repo <name> <pkgsubdir> [--no-meta]
     grep -q 'TriggeredBy' "${COLLECT}"
     grep -q 'socket-activated' "${COLLECT}"
 }
+
+@test "collect: probes the real unit names verdaccio and pypiserver" {
+    # mirroret installs verdaccio.service and pypiserver.service. Probing only
+    # mirroret-* reported them missing while they were active, and then wrongly
+    # concluded nothing would restart them at boot.
+    grep -qE 'for u in nginx verdaccio pypiserver' "${COLLECT}"
+    sed -n '/_managed=0/,/^        fi/p' "${COLLECT}" | grep -q 'verdaccio'
+    sed -n '/_managed=0/,/^        fi/p' "${COLLECT}" | grep -q 'pypiserver'
+}
+
+@test "collect: unmanaged-port claim is INFO when non-root" {
+    [ "$(id -u)" -ne 0 ]
+    grep -q 'could not confirm a managing systemd unit as a non-root user' "${COLLECT}"
+}

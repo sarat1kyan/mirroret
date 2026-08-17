@@ -506,7 +506,8 @@ DISCOVERED_UNITS="$(systemctl list-unit-files --no-legend --no-pager 2>/dev/null
     | awk '{print $1}' | grep -iE 'mirroret|verdaccio|pypiserver|registry|distribution' \
     | sed 's/\.service$//' | sort -u | tr '\n' ' ')"
 out "discovered: ${DISCOVERED_UNITS:-<none>}"
-for u in nginx mirroret-pypiserver mirroret-verdaccio mirroret-registry docker podman ${DISCOVERED_UNITS}; do
+for u in nginx verdaccio pypiserver mirroret-registry docker-distribution \
+         mirroret-pypiserver mirroret-verdaccio docker podman ${DISCOVERED_UNITS}; do
     # Skip duplicates from the discovery list.
     case " ${_SEEN_UNITS:-} " in *" ${u} "*) continue ;; esac
     _SEEN_UNITS="${_SEEN_UNITS:-} ${u}"
@@ -649,11 +650,17 @@ for pair in "${WEB_PORT}:nginx" "${PIP_PORT}:pypiserver" "${NPM_PORT}:verdaccio"
     # Listening with no systemd unit means it dies at the next reboot.
     if have systemctl; then
         _managed=0
-        for _u in ${DISCOVERED_UNITS:-} nginx mirroret-pypiserver mirroret-verdaccio mirroret-registry; do
+        for _u in ${DISCOVERED_UNITS:-} nginx verdaccio pypiserver \
+                  mirroret-pypiserver mirroret-verdaccio mirroret-registry \
+                  docker-distribution docker-registry; do
             systemctl is-active "${_u}" >/dev/null 2>&1 && _managed=1
         done
         if [[ "${_managed}" -eq 0 ]]; then
-            finding FAIL "Port ${p} (${svc}) is listening but no matching systemd unit is active, so nothing will restart it. It will not survive a reboot. Run install.sh --upgrade to write the unit."
+            if [[ "${IS_ROOT}" -eq 0 ]]; then
+                finding INFO "Port ${p} (${svc}) is listening; could not confirm a managing systemd unit as a non-root user. Re-run with sudo."
+            else
+                finding FAIL "Port ${p} (${svc}) is listening but no matching systemd unit is active, so nothing will restart it. It will not survive a reboot. Run install.sh --upgrade to write the unit."
+            fi
         fi
     fi
 done
