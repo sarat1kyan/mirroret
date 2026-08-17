@@ -215,6 +215,16 @@
 # Default: x86_64
 #MIRRORET_RPM_ARCH="x86_64 i686"
 
+# Keep the upstream-signed repodata instead of rebuilding it locally.
+# Only correct for a FULL mirror. With MIRRORET_RPM_NEWEST_ONLY=1 or any
+# MIRRORET_RPM_ARCH filter the mirror holds a subset of what upstream
+# metadata advertises, so clients resolve packages that were never
+# downloaded and fail with 404 or "no match" (this is what made
+# glibc.i686 appear broken while the i686 rpms were on disk).
+# Set to 1 only if you mirror everything and need repo_gpgcheck=1.
+# Default: 0
+#MIRRORET_RPM_KEEP_UPSTREAM_METADATA=0
+
 # Only mirror the newest build of each package.
 # Default: 1 (ON). Set 0 for full version history - this multiplies disk
 # usage several times over and is rarely what you want.
@@ -293,6 +303,12 @@
 # Optional per-language sync sources.
 #MIRRORET_PIP_PACKAGES_FILE=/etc/mirroret/pip-packages.txt
 #MIRRORET_NPM_PACKAGES_FILE=/etc/mirroret/npm-packages.txt
+
+# Address Verdaccio binds to. Must name a host: a bare port makes Verdaccio
+# bind "localhost", which resolves to [::1] on a dual-stack host, so the
+# registry answers on the server itself and refuses every client.
+# Default: 0.0.0.0
+#MIRRORET_NPM_BIND_ADDR=0.0.0.0
 
 # -- Retention / cleanup ------------------------------------------------------
 

@@ -206,6 +206,10 @@ ARCH="${rpm_arch}"
 # the argument invalid, it returns nothing, and the pre-sync size estimate
 # silently reads 0, which defeats the disk guard.
 ARCH_CSV="\${ARCH// /,}"
+# Any explicit arch list is a filter, so upstream metadata will advertise
+# packages this mirror does not have.
+ARCH_FILTERED=1
+[[ -z "\${ARCH// /}" ]] && ARCH_FILTERED=0
 NEWEST_ONLY="${newest_only}"
 INCLUDE_SOURCE="${include_source}"
 DELETE_REMOVED="${delete_removed}"
@@ -348,21 +352,53 @@ for repo in "\${REPOS[@]}"; do
     fi
 done
 
-# --download-metadata already fetched upstream repodata, INCLUDING its
-# signatures (repomd.xml.asc). Running createrepo over that regenerates
-# repomd.xml and destroys the upstream signature, breaking any client
-# using repo_gpgcheck=1 - and burns hours of CPU rebuilding metadata we
-# already have. Only build metadata when upstream metadata is absent.
+# Metadata must describe exactly what is on disk.
+#
+# --download-metadata fetches the UPSTREAM repodata, including its signature
+# (repomd.xml.asc). Keeping it preserves repo_gpgcheck=1 and saves hours of
+# CPU. That is only correct for a FULL mirror.
+#
+# With --newest-only or an --arch filter, what we downloaded is a SUBSET of
+# what upstream metadata advertises. Clients then resolve against packages
+# that were never mirrored and fail with 404s or "no match", which is how
+# 32-bit multilib (glibc.i686) appeared broken while the i686 rpms were
+# sitting on disk. In that case the metadata has to be rebuilt locally.
+#
+# Rebuilding is safe for gpgcheck=1: that verifies PACKAGE signatures, which
+# survive mirroring untouched. Only repo_gpgcheck=1 needs upstream's signed
+# repomd.xml, and that is incompatible with a filtered mirror by definition.
+if [[ "\${NEWEST_ONLY}" == "1" ]] || [[ "\${ARCH_FILTERED}" == "1" ]]; then
+    REBUILD_METADATA=1
+else
+    REBUILD_METADATA=0
+fi
+if [[ "\${MIRRORET_RPM_KEEP_UPSTREAM_METADATA:-0}" == "1" ]]; then
+    REBUILD_METADATA=0
+    echo "--- MIRRORET_RPM_KEEP_UPSTREAM_METADATA=1: keeping upstream metadata."
+    echo "    WARNING: with --newest-only or an --arch filter this metadata lists"
+    echo "    packages that were not mirrored. Clients will see 404s."
+fi
+
 for repo in "\${REPOS[@]}"; do
     target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
     [[ -d "\$target" ]] || continue
-    if [[ -f "\${target}/repodata/repomd.xml" ]]; then
-        echo "--- \${repo}: upstream repodata present, keeping signed metadata"
-        continue
+
+    if [[ "\${REBUILD_METADATA}" == "0" ]]; then
+        if [[ -f "\${target}/repodata/repomd.xml" ]]; then
+            echo "--- \${repo}: full mirror, keeping upstream signed metadata"
+            continue
+        fi
+        echo "--- createrepo \${repo} (no upstream repodata found)"
+    else
+        echo "--- createrepo \${repo} (filtered mirror: metadata must match disk)"
     fi
-    echo "--- createrepo \${repo} (no upstream repodata found)"
+
+    # --update reuses the existing metadata cache where possible, so repeated
+    # runs are incremental rather than a full rebuild every night.
+    CR_ARGS=()
+    [[ -f "\${target}/repodata/repomd.xml" ]] && CR_ARGS+=(--update)
     # shellcheck disable=SC2086
-    if ! \${NICE} ${createrepo_cmd} "\$target"; then
+    if ! \${NICE} ${createrepo_cmd} "\${CR_ARGS[@]}" "\$target"; then
         echo "FAIL: createrepo \${repo}"
         metadata_failed=\$(( metadata_failed + 1 ))
     fi

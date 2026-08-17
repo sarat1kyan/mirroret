@@ -675,11 +675,19 @@ EOF
     grep -q 'setopt=timeout=60' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
 }
 
-@test "rpm: createrepo does not clobber downloaded upstream metadata" {
+@test "rpm: createrepo does not clobber upstream metadata on a FULL mirror" {
+    # Original intent: rebuilding destroys repomd.xml.asc and breaks any
+    # client using repo_gpgcheck=1. That still holds, but only for an
+    # unfiltered mirror. With --newest-only or an --arch filter the upstream
+    # metadata describes packages this mirror does not have, so it must be
+    # rebuilt or clients get 404 and "no match".
     mock_os_release "ol" "9.4"; detect_distro_from_mock
     MIRRORET_RHEL_VERSION=9; DRY_RUN=0
     configure_createrepo "id"
-    grep -q 'upstream repodata present' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'keeping upstream signed metadata' "$s"
+    # The keep branch must be reachable, i.e. gated rather than removed.
+    grep -q 'REBUILD_METADATA=0' "$s"
 }
 
 @test "rpm: OL client config points gpgkey at the Oracle vendor key" {
@@ -892,4 +900,72 @@ PY
     run bash -c "set -Eeuo pipefail; source '${TMPDIR}/block.sh'; printf '%s' \"\${REPOSYNC_ARGS[*]}\""
     [ "$status" -eq 0 ]
     [[ "$output" == *"--arch x86_64 --arch i686 --arch noarch"* ]]
+}
+
+# -- Metadata must match what is on disk ----------------------------------------
+
+@test "rpm: filtered mirror rebuilds metadata instead of keeping upstream" {
+    # Upstream metadata describes the whole upstream repo. With --newest-only
+    # or an --arch filter the mirror holds a subset, so clients resolve
+    # against packages that were never downloaded and get 404 or "no match".
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_RPM_ARCH="x86_64 i686"
+    MIRRORET_RPM_NEWEST_ONLY=1
+    DRY_RUN=0
+    configure_createrepo "id"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'ARCH_FILTERED=1' "$s"
+    grep -q 'REBUILD_METADATA=1' "$s"
+    grep -q 'filtered mirror: metadata must match disk' "$s"
+    bash -n "$s"
+}
+
+@test "rpm: full mirror keeps upstream signed metadata" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    DRY_RUN=0
+    configure_createrepo "id"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    # The keep-upstream branch must still exist for an unfiltered mirror,
+    # since rebuilding would destroy repomd.xml.asc and break repo_gpgcheck=1.
+    grep -q 'full mirror, keeping upstream signed metadata' "$s"
+    grep -q 'MIRRORET_RPM_KEEP_UPSTREAM_METADATA' "$s"
+}
+
+@test "rpm: metadata rebuild decision evaluates correctly" {
+    run bash -c 'NEWEST_ONLY=1; ARCH_FILTERED=1
+        if [[ "$NEWEST_ONLY" == "1" ]] || [[ "$ARCH_FILTERED" == "1" ]]; then echo REBUILD; else echo KEEP; fi'
+    [ "$output" = "REBUILD" ]
+    run bash -c 'NEWEST_ONLY=0; ARCH_FILTERED=0
+        if [[ "$NEWEST_ONLY" == "1" ]] || [[ "$ARCH_FILTERED" == "1" ]]; then echo REBUILD; else echo KEEP; fi'
+    [ "$output" = "KEEP" ]
+}
+
+@test "rpm: createrepo uses --update when metadata already exists" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    DRY_RUN=0
+    configure_createrepo "id"
+    # A full rebuild every night on a 27k-package repo is hours of CPU.
+    grep -q 'CR_ARGS+=(--update)' "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+}
+
+# -- Verdaccio bind address -----------------------------------------------------
+
+@test "npm: verdaccio listens on a routable address, not a bare port" {
+    # "--listen 4873" binds localhost, which resolves to [::1] on a
+    # dual-stack host: the registry answers on the server and refuses every
+    # client host.
+    grep -q -- '--listen ${npm_bind}:${npm_port}' "${SCRIPT_DIR}/lib/npm.sh"
+    ! grep -q -- '--listen ${npm_port}$' "${SCRIPT_DIR}/lib/npm.sh"
+}
+
+@test "npm: bind address defaults to 0.0.0.0 and is overridable" {
+    grep -q 'MIRRORET_NPM_BIND_ADDR="${MIRRORET_NPM_BIND_ADDR:-0.0.0.0}"' "${SCRIPT_DIR}/lib/npm.sh"
+}
+
+@test "npm: verdaccio config.yaml also carries an explicit listen host" {
+    # A manual verdaccio run must behave the same as the unit.
+    grep -qE '^listen: \$\{MIRRORET_NPM_BIND_ADDR:-0\.0\.0\.0\}:\$\{npm_port\}' "${SCRIPT_DIR}/lib/npm.sh"
 }

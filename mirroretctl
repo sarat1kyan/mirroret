@@ -329,9 +329,127 @@ cmd_service() {
 
 # ---------------------------------------------------------------- client ----
 
+# cmd_client_simulate [pkg...] - behave like a real client against this mirror.
+#
+# Everything else in this tool inspects the server. This asks the only
+# question that matters: can a client resolve and download a package? It
+# queries the mirror over HTTP using the generated client config, so it
+# exercises the same path a client host does: nginx, the URL mapping, and
+# whether the metadata lists packages that actually exist on disk.
+cmd_client_simulate() {
+    local ip="${MIRRORET_SERVER_IP:-$(get_server_ip 2>/dev/null || echo 127.0.0.1)}"
+    local repofile="${CONFIG_DIR}/redhat-client.repo"
+    local rc=0
+
+    if ! check_command dnf; then
+        _wa "dnf not available; cannot simulate an RPM client here."
+        return 0
+    fi
+    if [[ ! -f "$repofile" ]]; then
+        _er "No generated client config at ${repofile}"
+        _in "Run: sudo ${SCRIPT_DIR}/install.sh --upgrade"
+        return 1
+    fi
+
+    # Default probes cover the case that keeps biting: 32-bit multilib.
+    local -a pkgs=("$@")
+    if [[ "${#pkgs[@]}" -eq 0 ]]; then
+        pkgs=(bash glibc glibc.i686 libstdc++.i686 kernel)
+    fi
+
+    _h "Client simulation against ${ip}:${WEB_PORT}"
+
+    # Build a throwaway dnf config from the generated client repo file so the
+    # host's own repos cannot satisfy the query and mask a broken mirror.
+    local tmpd cache
+    tmpd="$(mktemp -d)" || return 1
+    cache="${tmpd}/cache"
+    mkdir -p "$cache"
+    # gpgcheck off for the QUERY only: we are testing reachability and
+    # metadata correctness here, not signatures.
+    sed 's/^gpgcheck=1/gpgcheck=0/; /^gpgkey=/d' "$repofile" > "${tmpd}/mirror.repo"
+
+    local -a repoids=()
+    local id
+    while IFS= read -r id; do repoids+=("$id"); done < <(
+        grep -oE '^\[[^]]+\]' "${tmpd}/mirror.repo" | tr -d '[]')
+    if [[ "${#repoids[@]}" -eq 0 ]]; then
+        _er "No repo stanzas found in ${repofile}"
+        rm -rf "$tmpd"; return 1
+    fi
+    _in "repos: ${repoids[*]}"
+
+    local -a dnfargs=(--quiet --disablerepo='*'
+                      --setopt=reposdir="${tmpd}"
+                      --setopt=cachedir="${cache}"
+                      --setopt=gpgcheck=0)
+    for id in "${repoids[@]}"; do dnfargs+=(--enablerepo="$id"); done
+
+    _h "Metadata reachable over HTTP"
+    if dnf "${dnfargs[@]}" repoquery --qf '%{name}' bash >/dev/null 2>&1; then
+        _ok "all repos parsed their metadata through nginx"
+    else
+        _er "could not load repo metadata from the mirror"
+        _in "Detail:"
+        dnf "${dnfargs[@]}" repoquery --qf '%{name}' bash 2>&1 | tail -n 12 | sed 's/^/      /'
+        rm -rf "$tmpd"
+        return 1
+    fi
+
+    _h "Package resolution"
+    local pkg out loc code
+    for pkg in "${pkgs[@]}"; do
+        out="$(dnf "${dnfargs[@]}" repoquery --qf '%{name}-%{version}-%{release}.%{arch}' \
+               "$pkg" 2>/dev/null | head -1)"
+        if [[ -z "$out" ]]; then
+            _er "${pkg}: NOT FOUND in the mirror metadata"
+            case "$pkg" in
+                *.i686)
+                    _in "  i686 packages are missing from the metadata."
+                    _in "  Set MIRRORET_RPM_ARCH=\"x86_64 i686\" in /etc/mirroret/mirroret.conf,"
+                    _in "  then: sudo ${SCRIPTS_DIR}/sync-redhat-repos.sh" ;;
+            esac
+            rc=1
+            continue
+        fi
+
+        # Metadata listing a package proves nothing if the file is absent.
+        # This is exactly what a filtered mirror with upstream metadata does.
+        loc="$(dnf "${dnfargs[@]}" repoquery --location "$pkg" 2>/dev/null | head -1)"
+        if [[ -z "$loc" ]]; then
+            _wa "${pkg}: ${out} listed, but no download location resolved"
+            rc=1
+            continue
+        fi
+        code="$(curl -sS -o /dev/null -m 20 -w '%{http_code}' "$loc" 2>/dev/null)"
+        if [[ "$code" == "200" ]]; then
+            _ok "${pkg}: ${out} (downloadable)"
+        else
+            _er "${pkg}: ${out} is listed in metadata but returns HTTP ${code}"
+            _in "  ${loc}"
+            _in "  Metadata does not match what is on disk. Rebuild it:"
+            _in "    sudo ${SCRIPTS_DIR}/sync-redhat-repos.sh"
+            rc=1
+        fi
+    done
+
+    rm -rf "$tmpd"
+    _h "Result"
+    if [[ "$rc" -eq 0 ]]; then
+        _ok "a client host can resolve AND download every probed package"
+    else
+        _er "at least one package a client would ask for is not usable"
+    fi
+    return "$rc"
+}
+
 cmd_client() {
     local what="${1:-list}"
     case "$what" in
+        simulate|test)
+            shift || true
+            cmd_client_simulate "$@"
+            ;;
         list)
             _h "Generated client configs"
             if [[ ! -d "${CONFIG_DIR}" ]]; then
@@ -593,6 +711,7 @@ cmd_menu() {
   14) upgrade           re-apply config, regenerate scripts
   15) check             validate installation
   16) report            write one shareable txt report
+  17) client simulate   prove a client can install from this mirror
    q) quit
 MENU
         printf "select> "
@@ -615,6 +734,7 @@ MENU
             14) cmd_upgrade ;;
             15) cmd_check ;;
             16) cmd_collect ;;
+            17) cmd_client simulate ;;
             q|Q|quit|exit) return 0 ;;
             "") ;;
             *)  _er "unknown selection: ${choice}" ;;
@@ -642,6 +762,7 @@ Inspect (no root needed):
   client list               generated client configs and their URLs
   client show <file>        print one client config
   client verify             check client configs for breaking mistakes
+  client simulate [pkg...]  act as a client: resolve AND download from the mirror
   logs list|tail|show|errors
   config show|path|diff
   service list              unit states

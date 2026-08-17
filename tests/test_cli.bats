@@ -484,3 +484,40 @@ EOF
         grep -qE "^ +${n}\) +cmd_" "${CTL}"
     done
 }
+
+# -- client simulate ------------------------------------------------------------
+
+@test "cli: client simulate exits 0 and explains when dnf is absent" {
+    if command -v dnf >/dev/null 2>&1; then skip "dnf present"; fi
+    run bash "${CTL}" client simulate
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"dnf not available"* ]]
+}
+
+@test "cli: client simulate is listed in help and the menu" {
+    run bash "${CTL}" help
+    [[ "$output" == *"client simulate"* ]]
+    grep -qE '^ +17\) +cmd_client simulate' "${CTL}"
+}
+
+@test "cli: client simulate probes i686 by default" {
+    # 32-bit multilib is the case that repeatedly appeared broken, so it must
+    # be part of the default probe set, not something you have to remember.
+    grep -q 'glibc.i686' "${CTL}"
+    grep -q 'libstdc++.i686' "${CTL}"
+}
+
+@test "cli: client simulate verifies the download, not just the metadata" {
+    # Metadata listing a package proves nothing if the file is not on disk:
+    # that is exactly what a filtered mirror with upstream metadata does.
+    grep -q 'repoquery --location' "${CTL}"
+    grep -q 'listed in metadata but returns HTTP' "${CTL}"
+}
+
+@test "cli: client simulate disables the host's own repos" {
+    # Without --disablerepo the host's upstream repos satisfy the query and a
+    # completely broken mirror still looks fine.
+    grep -qE "client_simulate\(\)" "${CTL}"
+    sed -n '/cmd_client_simulate()/,/^}/p' "${CTL}" | grep -q "disablerepo='\*'"
+    sed -n '/cmd_client_simulate()/,/^}/p' "${CTL}" | grep -q 'reposdir='
+}
