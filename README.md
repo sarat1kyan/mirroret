@@ -183,7 +183,7 @@ MIRRORET_RPM_REPOS= # Space-separated repo names to sync
 # Other
 MIRRORET_TLS_SELF_SIGNED=1 # Auto-generate a self-signed TLS cert
 MIRRORET_GPG_AUTO=1 # Auto-generate a GPG signing key
-MIRRORET_APPROVAL_ENABLED=1 # Require admin approval before serving pip/npm
+MIRRORET_APPROVAL_ENABLED=1 # Require admin approval before serving pip/npm/RPM
 MIRRORET_PREFLIGHT_NETWORK=1 # Probe outbound HTTPS during preflight
 ```
 
@@ -221,7 +221,7 @@ sudo ./install.sh --backup-only # snapshot current state
 # Feature flags (can be combined):
 sudo ./install.sh --tls-self-signed # enable HTTPS with auto-generated cert
 sudo ./install.sh --gpg-auto # auto-generate GPG signing key
-sudo ./install.sh --approval-mode # enable staging/approval workflow for pip/npm
+sudo ./install.sh --approval-mode # enable staging/approval workflow for pip/npm/RPM
 sudo ./install.sh --insecure # disable all security checks (LAB ONLY)
 
 # Skip components:
@@ -237,6 +237,13 @@ sudo ./install.sh --list-staging # show packages awaiting approval
 sudo ./install.sh --approve-all-pip # approve all staged pip packages
 sudo ./install.sh --approve-all-npm # approve all staged npm packages
 sudo ./install.sh --approve-package flask # approve a specific package by name fragment
+sudo ./install.sh --approve-all-rpm # approve all staged RPMs (rebuilds repodata)
+sudo ./install.sh --approve-rpm glibc # approve staged RPMs matching a name
+
+# Or use the CLI, which covers all three package types:
+mirroretctl approve list
+sudo mirroretctl approve all rpm
+sudo mirroretctl approve deny npm oldlib
 sudo ./install.sh --exclude-pip badpkg # decline (remove) a staged pip package
 sudo ./install.sh --exclude-npm oldlib # decline a staged npm package
 

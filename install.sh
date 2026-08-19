@@ -152,6 +152,9 @@ MODE_APPROVE_ALL_NPM=0
 MODE_APPROVE_PACKAGE=""
 MODE_EXCLUDE_PIP=""
 MODE_EXCLUDE_NPM=""
+MODE_APPROVE_ALL_RPM=0
+MODE_APPROVE_RPM=""
+MODE_EXCLUDE_RPM=""
 MODE_CLEANUP=0
 MODE_CLEANUP_REPORT=0
 MODE_UPGRADE=0
@@ -264,6 +267,17 @@ parse_args() {
             --approve-all-npm)
                 MODE_APPROVE_ALL_NPM=1
                 ;;
+            --approve-all-rpm)
+                MODE_APPROVE_ALL_RPM=1
+                ;;
+            --approve-rpm)
+                shift
+                MODE_APPROVE_RPM="$1"
+                ;;
+            --exclude-rpm)
+                shift
+                MODE_EXCLUDE_RPM="$1"
+                ;;
             --approve-package)
                 shift
                 MODE_APPROVE_PACKAGE="$1"
@@ -351,6 +365,9 @@ Options:
   --list-staging List packages awaiting approval and exit
   --approve-all-pip Promote all staged pip packages to approved
   --approve-all-npm Promote all staged npm packages to approved
+  --approve-all-rpm Promote all staged RPMs into the live mirror
+  --approve-rpm <n> Promote staged RPMs matching a name fragment
+  --exclude-rpm <n> Delete staged RPMs matching a name fragment
   --approve-package <n> Promote a specific staged pip package by name fragment
   --exclude-pip <n> Remove a staged pip package (decline it)
   --exclude-npm <n> Remove a staged npm package (decline it)
@@ -949,6 +966,21 @@ main() {
     if [[ "${MODE_APPROVE_ALL_NPM}" == "1" ]]; then
         require_root
         approve_all_npm
+        exit 0
+    fi
+    if [[ "${MODE_APPROVE_ALL_RPM}" == "1" ]]; then
+        require_root
+        approve_all_rpm
+        exit 0
+    fi
+    if [[ -n "${MODE_APPROVE_RPM}" ]]; then
+        require_root
+        approve_rpm_package "${MODE_APPROVE_RPM}"
+        exit 0
+    fi
+    if [[ -n "${MODE_EXCLUDE_RPM}" ]]; then
+        require_root
+        exclude_rpm_package "${MODE_EXCLUDE_RPM}"
         exit 0
     fi
     if [[ -n "${MODE_APPROVE_PACKAGE}" ]]; then

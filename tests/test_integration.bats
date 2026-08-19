@@ -188,8 +188,30 @@ teardown() {
     DRY_RUN=0
     mkdir -p "${MIRRORET_BASE_DIR}/staging/npm" "${MIRRORET_BASE_DIR}/approved/npm"
     touch "${MIRRORET_BASE_DIR}/staging/npm/express-4.18.2.tgz"
-    approve_all_npm
+    # Promotion also publishes into Verdaccio, which is not running here, so
+    # the call reports failure. The move itself must still have happened.
+    run approve_all_npm
     [[ -f "${MIRRORET_BASE_DIR}/approved/npm/express-4.18.2.tgz" ]]
+    [[ ! -f "${MIRRORET_BASE_DIR}/staging/npm/express-4.18.2.tgz" ]]
+}
+
+@test "approval: approve_all_npm reports failure when publish does not land" {
+    # Moving a tarball into a directory does not make it installable. If the
+    # publish fails the operator must be told, not shown a green success.
+    DRY_RUN=0
+    mkdir -p "${MIRRORET_BASE_DIR}/staging/npm" "${MIRRORET_BASE_DIR}/approved/npm"
+    touch "${MIRRORET_BASE_DIR}/staging/npm/express-4.18.2.tgz"
+    MIRRORET_NPM_PORT=59999   # nothing listening
+    run approve_all_npm
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"NOT yet installable"* ]]
+}
+
+@test "approval: npm publish dry-run does not contact a registry" {
+    DRY_RUN=1
+    run _npm_publish_tarball "/nonexistent/foo.tgz"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[DRY-RUN]"* ]]
 }
 
 @test "approval: exclude_npm_package removes staged tarball" {
@@ -419,4 +441,85 @@ teardown() {
     run _apt_resolve_tool "apt-mirror"
     [[ "${status}" -eq 0 ]]
     [[ "${output}" == *"apt-mirror"* || "${output}" == *"debmirror"* ]]
+}
+
+# ============ RPM approval + npm strict registry ============
+
+@test "approval: ensure_approval_dirs creates redhat/staging when enabled" {
+    DRY_RUN=0
+    MIRRORET_APPROVAL_ENABLED=1
+    ensure_approval_dirs
+    [ -d "${MIRRORET_BASE_DIR}/redhat/staging" ]
+}
+
+@test "approval: approve_all_rpm promotes staged rpm into the mirror tree" {
+    DRY_RUN=0
+    export MIRRORET_BASE_DIR
+    mkdir -p "${MIRRORET_BASE_DIR}/redhat/staging/ol/9/ol9_baseos_latest/Packages"
+    : > "${MIRRORET_BASE_DIR}/redhat/staging/ol/9/ol9_baseos_latest/Packages/bash-5.1-1.el9.x86_64.rpm"
+    approve_all_rpm
+    [ -f "${MIRRORET_BASE_DIR}/redhat/mirror/ol/9/ol9_baseos_latest/Packages/bash-5.1-1.el9.x86_64.rpm" ]
+    # Staged copy is gone: promotion is a move, not a duplicate.
+    [ ! -f "${MIRRORET_BASE_DIR}/redhat/staging/ol/9/ol9_baseos_latest/Packages/bash-5.1-1.el9.x86_64.rpm" ]
+}
+
+@test "approval: rpm promotion preserves the repo path layout" {
+    DRY_RUN=0
+    export MIRRORET_BASE_DIR
+    mkdir -p "${MIRRORET_BASE_DIR}/redhat/staging/almalinux/9/appstream/Packages/g"
+    : > "${MIRRORET_BASE_DIR}/redhat/staging/almalinux/9/appstream/Packages/g/glibc-2.34.i686.rpm"
+    approve_all_rpm
+    [ -f "${MIRRORET_BASE_DIR}/redhat/mirror/almalinux/9/appstream/Packages/g/glibc-2.34.i686.rpm" ]
+}
+
+@test "approval: _rpm_repo_root_of resolves to the repo, not the Packages subdir" {
+    run _rpm_repo_root_of "/srv/m/redhat/mirror/ol/9/appstream/Packages/g" "/srv/m/redhat/mirror"
+    [ "$output" = "/srv/m/redhat/mirror/ol/9/appstream" ]
+}
+
+@test "approval: approve_rpm_package promotes every matching rpm, not just one" {
+    DRY_RUN=0
+    export MIRRORET_BASE_DIR
+    local d="${MIRRORET_BASE_DIR}/redhat/staging/ol/9/baseos/Packages"
+    mkdir -p "$d"
+    : > "$d/glibc-2.34.x86_64.rpm"
+    : > "$d/glibc-devel-2.34.x86_64.rpm"
+    : > "$d/glibc-common-2.34.x86_64.rpm"
+    : > "$d/bash-5.1.x86_64.rpm"
+    approve_rpm_package "glibc"
+    # All three glibc rpms move: promoting only one leaves an unresolvable dep.
+    run bash -c "ls '${MIRRORET_BASE_DIR}/redhat/mirror/ol/9/baseos/Packages' | wc -l | tr -d ' '"
+    [ "$output" = "3" ]
+    # bash was not matched and stays staged.
+    [ -f "$d/bash-5.1.x86_64.rpm" ]
+}
+
+@test "approval: exclude_rpm_package deletes staged rpms without promoting" {
+    DRY_RUN=0
+    export MIRRORET_BASE_DIR
+    local d="${MIRRORET_BASE_DIR}/redhat/staging/ol/9/baseos/Packages"
+    mkdir -p "$d"
+    : > "$d/telnet-1.0.x86_64.rpm"
+    exclude_rpm_package "telnet"
+    [ ! -f "$d/telnet-1.0.x86_64.rpm" ]
+    [ ! -f "${MIRRORET_BASE_DIR}/redhat/mirror/ol/9/baseos/Packages/telnet-1.0.x86_64.rpm" ]
+}
+
+@test "approval: approve_rpm_package dies when nothing matches" {
+    DRY_RUN=0
+    export MIRRORET_BASE_DIR
+    mkdir -p "${MIRRORET_BASE_DIR}/redhat/staging"
+    run approve_rpm_package "nosuchpackage"
+    [ "$status" -ne 0 ]
+}
+
+@test "approval: list_staging reports staged rpm counts per repo" {
+    DRY_RUN=0
+    export MIRRORET_BASE_DIR
+    mkdir -p "${MIRRORET_BASE_DIR}/redhat/staging/ol/9/appstream/Packages"
+    : > "${MIRRORET_BASE_DIR}/redhat/staging/ol/9/appstream/Packages/a.rpm"
+    : > "${MIRRORET_BASE_DIR}/redhat/staging/ol/9/appstream/Packages/b.rpm"
+    run list_staging
+    [[ "$output" == *"ol/9/appstream"* ]]
+    [[ "$output" == *"2"* ]]
 }

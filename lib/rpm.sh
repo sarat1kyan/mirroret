@@ -115,6 +115,13 @@ configure_createrepo() {
     local include_source="${MIRRORET_RPM_SOURCE:-0}"
     local delete_removed="${MIRRORET_RPM_DELETE:-1}"
     local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
+    local approval="${MIRRORET_APPROVAL_ENABLED:-0}"
+    # Approval mode stages downloads outside the served tree. Clients keep
+    # reading redhat/mirror, so a sync can run without exposing anything new.
+    local rpm_repo_base="${base_dir}/redhat/mirror"
+    if [[ "${approval}" == "1" ]]; then
+        rpm_repo_base="${base_dir}/redhat/staging"
+    fi
     local sync_timeout="${MIRRORET_SYNC_TIMEOUT:-6h}"
 
     # Catch the config mistake that silently mirrors into the wrong tree:
@@ -195,7 +202,10 @@ ${MIRRORET_MANAGED_MARKER}
 # Version: ${rhel_ver}
 # Repos: ${repos}
 
-REPO_BASE="${base_dir}/redhat/mirror"
+REPO_BASE="${rpm_repo_base}"
+# 1 when MIRRORET_APPROVAL_ENABLED=1: packages land in redhat/staging and are
+# invisible to clients until promoted into redhat/mirror by the approval step.
+APPROVAL_MODE="${approval}"
 LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-redhat-\$(date +%Y%m%d-%H%M%S).log"
 FLAVOR="${flavor}"
@@ -371,6 +381,27 @@ if [[ "\${NEWEST_ONLY}" == "1" ]] || [[ "\${ARCH_FILTERED}" == "1" ]]; then
     REBUILD_METADATA=1
 else
     REBUILD_METADATA=0
+fi
+
+# In approval mode nothing here is served. Building metadata over a staging
+# tree of tens of thousands of rpms would burn an hour of CPU for a repo no
+# client can reach; the metadata that matters is rebuilt in redhat/mirror
+# when packages are actually promoted.
+if [[ "\${APPROVAL_MODE}" == "1" ]]; then
+    echo ""
+    echo "--- Approval mode: packages staged, NOT published."
+    echo "    Staged under: \${REPO_BASE}"
+    echo "    Review:  mirroretctl approve list"
+    echo "    Publish: sudo mirroretctl approve all rpm"
+    echo "    Nothing reaches clients until you do."
+    echo "RPM sync completed: \$(date) (sync_failed=\${sync_failed} aborted=\${aborted} staged=1)"
+    echo "Free space now: \$(_free_gb) GB"
+    # Still report download failures. Exiting 0 here would tell cron the run
+    # was clean even when half the repos failed to sync.
+    if [[ \$(( sync_failed + aborted )) -ne 0 ]]; then
+        exit 1
+    fi
+    exit 0
 fi
 if [[ "\${MIRRORET_RPM_KEEP_UPSTREAM_METADATA:-0}" == "1" ]]; then
     REBUILD_METADATA=0

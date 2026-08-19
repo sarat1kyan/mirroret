@@ -5,13 +5,99 @@
 #
 # When MIRRORET_APPROVAL_ENABLED=1:
 # - pip/npm sync scripts download to BASE_DIR/staging/{pip,npm}/
-# - Admin approves packages to BASE_DIR/approved/{pip,npm}/
-# - nginx serves packages from BASE_DIR/approved/{pip,npm}/
+# - reposync writes to BASE_DIR/redhat/staging/ instead of redhat/mirror/
+# - Admin approves packages to BASE_DIR/approved/{pip,npm}/ and, for RPMs,
+#   into the live BASE_DIR/redhat/mirror/ tree
+# - nginx serves packages from BASE_DIR/approved/{pip,npm}/ and, unchanged,
+#   from BASE_DIR/redhat/mirror/
 #
 # This file provides the admin-facing operations.
-# The sync-side staging behaviour is implemented in pip.sh and npm.sh.
+# The sync-side staging behaviour is implemented in pip.sh, npm.sh and rpm.sh.
+#
+# Two things make approval real rather than cosmetic:
+# - npm: Verdaccio must NOT proxy npmjs, or clients fetch upstream directly
+#   and never touch the approved set. npm.sh drops the proxy when approval is
+#   on; promotion here publishes the tarball into Verdaccio.
+# - rpm: an approved .rpm is invisible until repodata lists it, so every
+#   promotion rebuilds the metadata of the repos it touched.
 
 MIRRORET_APPROVAL_ENABLED="${MIRRORET_APPROVAL_ENABLED:-0}"
+
+# -- Shared helpers ------------------------------------------------------------
+
+# _approval_rpm_roots - echo "<staging_root> <mirror_root>".
+_approval_rpm_roots() {
+    local base_dir="${MIRRORET_BASE_DIR}"
+    printf '%s %s' "${base_dir}/redhat/staging" "${base_dir}/redhat/mirror"
+}
+
+# _find_staged_rpms <staging_root> - print every staged .rpm, newline separated.
+_find_staged_rpms() {
+    local root="$1"
+    [[ -d "${root}" ]] || return 0
+    find "${root}" -type f -name '*.rpm' 2>/dev/null | sort
+}
+
+# _createrepo_bin - echo the available createrepo binary, or empty.
+_createrepo_bin() {
+    if command -v createrepo_c >/dev/null 2>&1; then
+        printf 'createrepo_c'
+    elif command -v createrepo >/dev/null 2>&1; then
+        printf 'createrepo'
+    fi
+}
+
+# _rpm_rebuild_metadata <repo_dir>...
+# An approved rpm that is not in repodata does not exist as far as dnf is
+# concerned, so this is not optional cleanup - it is what makes the promotion
+# visible to clients.
+_rpm_rebuild_metadata() {
+    local cr
+    cr="$(_createrepo_bin)"
+    local d rc=0
+    for d in "$@"; do
+        [[ -d "${d}" ]] || continue
+        if [[ "${DRY_RUN}" == "1" ]]; then
+            info "[DRY-RUN] would rebuild metadata: ${d}"
+            continue
+        fi
+        if [[ -z "${cr}" ]]; then
+            warn "createrepo_c not found - metadata NOT rebuilt for ${d}."
+            warn "Clients will not see the approved packages until you install"
+            warn "createrepo_c and re-run the approval."
+            rc=1
+            continue
+        fi
+        local args=()
+        [[ -f "${d}/repodata/repomd.xml" ]] && args+=(--update)
+        info "Rebuilding metadata: ${d}"
+        if ! "${cr}" "${args[@]}" "${d}"; then
+            warn "createrepo failed for ${d} - clients may not see new packages."
+            rc=1
+        fi
+    done
+    return "${rc}"
+}
+
+# _promote_file <src> <staging_root> <mirror_root>
+# Move one staged file into the mirror tree, preserving its path relative to
+# the staging root. Echoes the destination directory.
+_promote_file() {
+    local src="$1" staging_root="$2" mirror_root="$3"
+    local rel="${src#"${staging_root}"/}"
+    local dst="${mirror_root}/${rel}"
+    local dst_dir
+    dst_dir="$(dirname "${dst}")"
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would promote: ${rel}"
+    else
+        mkdir -p "${dst_dir}"
+        # Same filesystem in a normal install, so this is atomic. Fall back to
+        # copy+remove for the case where staging sits on another mount.
+        mv "${src}" "${dst}" 2>/dev/null || { cp -f "${src}" "${dst}" && rm -f "${src}"; }
+    fi
+    printf '%s' "${dst_dir}"
+}
 
 # -- Staging listing -----------------------------------------------------------
 
@@ -48,10 +134,45 @@ list_staging() {
         fi
     fi
 
+    local rpm_staging
+    rpm_staging="$(_approval_rpm_roots)"
+    rpm_staging="${rpm_staging%% *}"
+    if [[ -d "${rpm_staging}" ]]; then
+        local rpm_files rpm_count
+        rpm_files="$(_find_staged_rpms "${rpm_staging}")"
+        if [[ -n "${rpm_files}" ]]; then
+            rpm_count="$(printf '%s\n' "${rpm_files}" | wc -l | tr -d ' ')"
+            echo "--- rpm (${rpm_staging}) - ${rpm_count} package(s) ---"
+            # An RPM sync stages thousands of files; printing them all buries
+            # the operator. Show a per-repo count and the first few names.
+            printf '%s\n' "${rpm_files}" \
+                | sed "s|^${rpm_staging}/||" \
+                | awk -F/ '{c[$1"/"$2"/"$3]++} END {for (r in c) printf "  %-40s %d\n", r, c[r]}' \
+                | sort
+            echo "  (use 'mirroretctl approve list rpm' for the full file list)"
+            echo ""
+            found=1
+        fi
+    fi
+
     if [[ "${found}" -eq 0 ]]; then
         echo " (no packages in staging)"
     fi
     echo ""
+}
+
+# list_staging_rpm - full staged RPM file list (can be very long).
+list_staging_rpm() {
+    local rpm_staging
+    rpm_staging="$(_approval_rpm_roots)"
+    rpm_staging="${rpm_staging%% *}"
+    local files
+    files="$(_find_staged_rpms "${rpm_staging}")"
+    if [[ -z "${files}" ]]; then
+        echo " (no RPMs in staging)"
+        return 0
+    fi
+    printf '%s\n' "${files}" | sed "s|^${rpm_staging}/||"
 }
 
 # -- pip approval -------------------------------------------------------------
@@ -133,7 +254,49 @@ exclude_pip_package() {
 
 # -- npm approval -------------------------------------------------------------
 
-# approve_all_npm - promote all staged npm tarballs to approved.
+# _npm_publish_tarball <file> - push an approved tarball into Verdaccio.
+#
+# Moving a .tgz into a directory does NOT make it installable: npm clients
+# talk to a registry, not a file tree. Without this step an "approved" npm
+# package is unreachable, which is what made approval mode look like it
+# worked while clients silently kept pulling from npmjs.
+_npm_publish_tarball() {
+    local tarball="$1"
+    local url="http://localhost:${MIRRORET_NPM_PORT:-4873}/"
+    local name
+    name="$(basename "${tarball}")"
+
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would publish to Verdaccio: ${name}"
+        return 0
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        warn "npm not found - cannot publish ${name} into Verdaccio."
+        return 1
+    fi
+
+    local out rc=0
+    out="$(npm publish --loglevel=error "${tarball}" --registry "${url}" 2>&1)" || rc=$?
+    if [[ ${rc} -eq 0 ]]; then
+        info "Published to Verdaccio: ${name}"
+        return 0
+    fi
+    if printf '%s' "${out}" | grep -qiE "EPUBLISHCONFLICT|cannot publish over|already present|previously published"; then
+        info "Already in Verdaccio: ${name}"
+        return 0
+    fi
+    if printf '%s' "${out}" | grep -qiE "ENEEDAUTH|unauthorized|forbidden"; then
+        warn "Verdaccio rejected publish of ${name}: authentication required."
+        warn "Either run: npm login --registry=${url}"
+        warn "or set MIRRORET_NPM_ALLOW_ANON_PUBLISH=1 and re-run install.sh --upgrade."
+        return 1
+    fi
+    warn "Publish failed for ${name}:"
+    printf '%s\n' "${out}"
+    return 1
+}
+
+# approve_all_npm - promote all staged npm tarballs and publish them.
 approve_all_npm() {
     local base_dir="${MIRRORET_BASE_DIR}"
     local src="${base_dir}/staging/npm"
@@ -142,7 +305,7 @@ approve_all_npm() {
     [[ -d "${src}" ]] || { warn "No npm staging dir: ${src}"; return 0; }
 
     mkdir -p "${dst}"
-    local count=0
+    local count=0 pub_failed=0
     while IFS= read -r -d '' pkg; do
         local name
         name="$(basename "${pkg}")"
@@ -151,11 +314,43 @@ approve_all_npm() {
         else
             mv "${pkg}" "${dst}/${name}"
             info "Approved npm: ${name}"
+            _npm_publish_tarball "${dst}/${name}" || pub_failed=$(( pub_failed + 1 ))
         fi
         (( count++ )) || true
     done < <(find "${src}" -type f -name "*.tgz" -print0 2>/dev/null)
 
+    if [[ "${pub_failed}" -gt 0 ]]; then
+        warn "npm: ${count} approved but ${pub_failed} could not be published."
+        warn "Those packages are NOT yet installable by clients."
+        return 1
+    fi
     success "npm: ${count} package(s) approved."
+}
+
+# approve_npm_package <name_fragment> - promote and publish one tarball.
+approve_npm_package() {
+    local fragment="$1"
+    local base_dir="${MIRRORET_BASE_DIR}"
+    local src="${base_dir}/staging/npm"
+    local dst="${base_dir}/approved/npm"
+
+    [[ -n "${fragment}" ]] || die "approve_npm_package: package name fragment required."
+    [[ -d "${src}" ]] || die "No npm staging dir: ${src}"
+
+    local match
+    match=$(find "${src}" -type f -name "*${fragment}*.tgz" | head -1)
+    [[ -n "${match}" ]] || die "No staged npm package matching: ${fragment}"
+
+    local name
+    name="$(basename "${match}")"
+    mkdir -p "${dst}"
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would approve npm: ${name}"
+        return 0
+    fi
+    mv "${match}" "${dst}/${name}"
+    _npm_publish_tarball "${dst}/${name}" || return 1
+    success "Approved npm: ${name}"
 }
 
 # exclude_npm_package <name_fragment>
@@ -196,10 +391,139 @@ ensure_approval_dirs() {
         "${base_dir}/staging/pip" \
         "${base_dir}/staging/npm" \
         "${base_dir}/approved/pip" \
-        "${base_dir}/approved/npm"
+        "${base_dir}/approved/npm" \
+        "${base_dir}/redhat/staging"
     do
         mkdir -p "${d}"
         chmod 755 "${d}"
     done
     info "Approval directories ready under ${base_dir}/{staging,approved}."
+}
+
+# -- RPM approval --------------------------------------------------------------
+
+# approve_all_rpm - promote every staged RPM into the live mirror tree,
+# then rebuild the metadata of each repo that changed.
+approve_all_rpm() {
+    local roots staging_root mirror_root
+    roots="$(_approval_rpm_roots)"
+    staging_root="${roots%% *}"
+    mirror_root="${roots##* }"
+
+    [[ -d "${staging_root}" ]] || { warn "No RPM staging dir: ${staging_root}"; return 0; }
+
+    local files
+    files="$(_find_staged_rpms "${staging_root}")"
+    if [[ -z "${files}" ]]; then
+        info "No staged RPMs to approve."
+        return 0
+    fi
+
+    local count=0
+    local touched=()
+    local f d
+    while IFS= read -r f; do
+        [[ -n "${f}" ]] || continue
+        d="$(_promote_file "${f}" "${staging_root}" "${mirror_root}")"
+        # Metadata lives at the repo root, not in the Packages/ subdir.
+        d="$(_rpm_repo_root_of "${d}" "${mirror_root}")"
+        touched+=("${d}")
+        count=$(( count + 1 ))
+    done <<< "${files}"
+
+    # Deduplicate the repo list so createrepo runs once per repo.
+    local uniq=()
+    if [[ ${#touched[@]} -gt 0 ]]; then
+        while IFS= read -r d; do
+            [[ -n "${d}" ]] && uniq+=("${d}")
+        done < <(printf '%s\n' "${touched[@]}" | sort -u)
+    fi
+
+    info "rpm: ${count} package(s) promoted."
+    if [[ ${#uniq[@]} -gt 0 ]]; then
+        _rpm_rebuild_metadata "${uniq[@]}" || true
+    fi
+    success "rpm: ${count} package(s) approved."
+}
+
+# _rpm_repo_root_of <dir> <mirror_root>
+# reposync stores packages under <mirror>/<flavor>/<ver>/<repo>[/Packages/...].
+# Metadata belongs at <mirror>/<flavor>/<ver>/<repo>, so walk up to depth 3.
+_rpm_repo_root_of() {
+    local dir="$1" mirror_root="$2"
+    local rel="${dir#"${mirror_root}"/}"
+    local flavor ver repo
+    IFS=/ read -r flavor ver repo _ <<< "${rel}"
+    if [[ -n "${flavor}" && -n "${ver}" && -n "${repo}" ]]; then
+        printf '%s/%s/%s/%s' "${mirror_root}" "${flavor}" "${ver}" "${repo}"
+    else
+        printf '%s' "${dir}"
+    fi
+}
+
+# approve_rpm_package <name_fragment>
+# Promote every staged RPM whose filename matches the fragment. Unlike the pip
+# helper this does NOT stop at the first match: a package normally ships as
+# several rpms (base, -libs, -devel) and promoting one of them alone leaves an
+# unresolvable dependency on the client.
+approve_rpm_package() {
+    local fragment="$1"
+    local roots staging_root mirror_root
+    roots="$(_approval_rpm_roots)"
+    staging_root="${roots%% *}"
+    mirror_root="${roots##* }"
+
+    [[ -n "${fragment}" ]] || die "approve_rpm_package: package name fragment required."
+    [[ -d "${staging_root}" ]] || die "No RPM staging dir: ${staging_root}"
+
+    local matches
+    matches="$(_find_staged_rpms "${staging_root}" | grep -F -- "${fragment}" || true)"
+    [[ -n "${matches}" ]] || die "No staged RPM matching: ${fragment}"
+
+    local count=0 touched=() f d
+    while IFS= read -r f; do
+        [[ -n "${f}" ]] || continue
+        info "Approving rpm: $(basename "${f}")"
+        d="$(_promote_file "${f}" "${staging_root}" "${mirror_root}")"
+        d="$(_rpm_repo_root_of "${d}" "${mirror_root}")"
+        touched+=("${d}")
+        count=$(( count + 1 ))
+    done <<< "${matches}"
+
+    local uniq=()
+    if [[ ${#touched[@]} -gt 0 ]]; then
+        while IFS= read -r d; do
+            [[ -n "${d}" ]] && uniq+=("${d}")
+        done < <(printf '%s\n' "${touched[@]}" | sort -u)
+        _rpm_rebuild_metadata "${uniq[@]}" || true
+    fi
+    success "rpm: ${count} package(s) matching '${fragment}' approved."
+}
+
+# exclude_rpm_package <name_fragment> - delete staged RPMs (decline them).
+exclude_rpm_package() {
+    local fragment="$1"
+    local roots staging_root
+    roots="$(_approval_rpm_roots)"
+    staging_root="${roots%% *}"
+
+    [[ -n "${fragment}" ]] || die "exclude_rpm_package: package name fragment required."
+    [[ -d "${staging_root}" ]] || die "No RPM staging dir: ${staging_root}"
+
+    local matches
+    matches="$(_find_staged_rpms "${staging_root}" | grep -F -- "${fragment}" || true)"
+    [[ -n "${matches}" ]] || die "No staged RPM matching: ${fragment}"
+
+    local count=0 f
+    while IFS= read -r f; do
+        [[ -n "${f}" ]] || continue
+        if [[ "${DRY_RUN}" == "1" ]]; then
+            info "[DRY-RUN] would exclude (delete) staged rpm: $(basename "${f}")"
+        else
+            rm -f "${f}"
+            info "Excluded rpm: $(basename "${f}")"
+        fi
+        count=$(( count + 1 ))
+    done <<< "${matches}"
+    success "rpm: ${count} package(s) matching '${fragment}' excluded."
 }
