@@ -136,11 +136,32 @@
 
 # -- Package approval workflow -------------------------------------------------
 
-# Set to 1 to enable the staging -> approved workflow for pip and npm.
-# Sync scripts download to staging/; an admin promotes packages to approved/.
-# nginx serves only packages in approved/.
-# Use --list-staging / --approve-all-pip / --approve-all-npm to manage.
-# Default: 0 (off)
+# Set to 1 to enable the staging -> approved workflow for pip, npm and RPM.
+# Nothing downloaded reaches a client until an operator promotes it.
+#
+#   pip  sync -> staging/pip   -> approved/pip        (nginx serves approved/)
+#   npm  sync -> staging/npm   -> approved/npm        (also published into
+#                                                      Verdaccio on approval)
+#   rpm  sync -> redhat/staging -> redhat/mirror      (repodata rebuilt on
+#                                                      approval, else invisible)
+#
+# Manage with:
+#   mirroretctl approve list
+#   sudo mirroretctl approve all rpm
+#   sudo mirroretctl approve pip <name>
+#   sudo mirroretctl approve deny rpm <name>
+#
+# Two consequences to know before enabling:
+#
+# 1. Verdaccio stops proxying npmjs. It has to: with an uplink configured,
+#    clients fetch any package on demand and never touch the approved set.
+#    After enabling, an unapproved npm package returns 404 rather than being
+#    fetched live. That is the intended behaviour, not a fault.
+#
+# 2. RPM approval rebuilds repodata for every repo it touches. On a full
+#    OL9 baseos+appstream promotion that is a few minutes of CPU.
+#
+# Default: 0 (off - everything synced is served immediately)
 #MIRRORET_APPROVAL_ENABLED=0
 
 # -- Docker registry backend / mode --------------------------------------------

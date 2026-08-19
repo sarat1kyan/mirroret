@@ -20,6 +20,8 @@ source "${SCRIPT_DIR}/lib/logging.sh"
 source "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/distro.sh
 source "${SCRIPT_DIR}/lib/distro.sh"
+# shellcheck source=lib/approval.sh
+source "${SCRIPT_DIR}/lib/approval.sh"
 
 # Load operator config so paths/ports match the running install.
 if [[ -f /etc/mirroret/mirroret.conf ]]; then
@@ -744,6 +746,84 @@ MENU
 
 # -------------------------------------------------------------------- help ----
 
+# -------------------------------------------------------------- approve ----
+
+cmd_approve() {
+    local action="${1:-list}"; shift || true
+
+    # approval.sh reads MIRRORET_BASE_DIR and DRY_RUN.
+    export MIRRORET_BASE_DIR="${BASE_DIR}"
+    DRY_RUN="${DRY_RUN:-0}"
+
+    # Validate the verb before the enabled check, so a typo reports the typo
+    # rather than a misleading "approval mode is off".
+    case "${action}" in
+        list|status|all|pip|npm|rpm|deny|exclude|reject) ;;
+        *)
+            _er "Unknown approve action: ${action}"
+            _in "Valid: list [rpm] | all [pip|npm|rpm] | pip|npm|rpm <name> | deny <kind> <name>"
+            return 1
+            ;;
+    esac
+
+    if [[ "${MIRRORET_APPROVAL_ENABLED:-0}" != "1" ]]; then
+        _wa "Approval mode is OFF - everything synced is served immediately."
+        _in "Enable it:"
+        _in "  echo 'MIRRORET_APPROVAL_ENABLED=1' | sudo tee -a /etc/mirroret/mirroret.conf"
+        _in "  sudo mirroretctl upgrade"
+        _in ""
+        case "${action}" in
+            list|status) ;;   # listing an empty staging area is still useful
+            *) return 1 ;;
+        esac
+    fi
+
+    case "${action}" in
+        list|status)
+            case "${1:-}" in
+                rpm) _h "Staged RPMs"; list_staging_rpm ;;
+                *)   list_staging ;;
+            esac
+            ;;
+        all)
+            _need_root approve all "$@"
+            case "${1:-}" in
+                pip) approve_all_pip ;;
+                npm) approve_all_npm ;;
+                rpm) approve_all_rpm ;;
+                ""|everything)
+                    approve_all_pip
+                    approve_all_npm
+                    approve_all_rpm
+                    ;;
+                *) _er "Unknown target: $1"; _in "Valid: pip npm rpm (or omit for all)"; return 1 ;;
+            esac
+            ;;
+        pip) _need_root approve pip "$@"; [[ -n "${1:-}" ]] || { _er "Usage: approve pip <name>"; return 1; }
+             approve_pip_package "$1" ;;
+        npm) _need_root approve npm "$@"; [[ -n "${1:-}" ]] || { _er "Usage: approve npm <name>"; return 1; }
+             approve_npm_package "$1" ;;
+        rpm) _need_root approve rpm "$@"; [[ -n "${1:-}" ]] || { _er "Usage: approve rpm <name>"; return 1; }
+             approve_rpm_package "$1" ;;
+        deny|exclude|reject)
+            _need_root approve deny "$@"
+            local what="${1:-}"; local frag="${2:-}"
+            [[ -n "${what}" && -n "${frag}" ]] || { _er "Usage: approve deny pip|npm|rpm <name>"; return 1; }
+            case "${what}" in
+                pip) exclude_pip_package "${frag}" ;;
+                npm) exclude_npm_package "${frag}" ;;
+                rpm) exclude_rpm_package "${frag}" ;;
+                *) _er "Unknown target: ${what}"; return 1 ;;
+            esac
+            ;;
+        *)
+            _er "Unknown approve action: ${action}"
+            _in "Valid: list [rpm] | all [pip|npm|rpm] | pip|npm|rpm <name> | deny <kind> <name>"
+            return 1
+            ;;
+    esac
+}
+
 cmd_help() {
     cat <<'USAGE'
 mirroretctl - control surface for a mirroret mirror server
@@ -759,6 +839,8 @@ Inspect (no root needed):
   sync status               which syncs are running, lock state
   sync last                 final line of the newest sync logs
   serve                     probe every HTTP endpoint locally
+  approve list              packages staged and waiting for approval
+  approve list rpm          full staged RPM file list
   client list               generated client configs and their URLs
   client show <file>        print one client config
   client verify             check client configs for breaking mistakes
@@ -774,6 +856,9 @@ Change state (root):
   uninstall [args]          run the uninstaller (see uninstall.sh --help)
   sync all|rpm|pip|npm|docker|apt
   sync stop                 stop running syncs
+  approve all [pip|npm|rpm] promote staged packages (omit kind for all)
+  approve pip|npm|rpm <n>   promote packages matching a name
+  approve deny <kind> <n>   delete staged packages (decline them)
   clean report              retention dry run (default)
   clean prune               retention delete
   config edit               edit /etc/mirroret/mirroret.conf
@@ -786,6 +871,11 @@ Examples:
   sudo mirroretctl clean report
   mirroretctl client verify
   mirroretctl serve
+  mirroretctl approve list
+  sudo mirroretctl approve all rpm
+
+Approval mode (MIRRORET_APPROVAL_ENABLED=1) stages downloads instead of
+serving them. Nothing reaches a client until you approve it.
 USAGE
 }
 
@@ -815,6 +905,7 @@ main() {
             esac
             ;;
         clean|cleanup)       cmd_clean "${1:-report}" ;;
+        approve|approval)    cmd_approve "$@" ;;
         install)             cmd_install "$@" ;;
         upgrade)             cmd_upgrade ;;
         check|validate)      cmd_check ;;

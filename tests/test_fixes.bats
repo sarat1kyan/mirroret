@@ -969,3 +969,36 @@ PY
     # A manual verdaccio run must behave the same as the unit.
     grep -qE '^listen: \$\{MIRRORET_NPM_BIND_ADDR:-0\.0\.0\.0\}:\$\{npm_port\}' "${SCRIPT_DIR}/lib/npm.sh"
 }
+@test "rpm: approval mode stages outside the served mirror tree" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_APPROVAL_ENABLED=1
+    DRY_RUN=0
+    configure_createrepo "id"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'REPO_BASE=.*/redhat/staging' "$s"
+    grep -q 'APPROVAL_MODE="1"' "$s"
+    bash -n "$s"
+}
+
+@test "rpm: non-approval mode still syncs straight into the mirror tree" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_APPROVAL_ENABLED=0
+    DRY_RUN=0
+    configure_createrepo "id"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    grep -q 'REPO_BASE=.*/redhat/mirror' "$s"
+    grep -q 'APPROVAL_MODE="0"' "$s"
+}
+
+@test "rpm: approval-mode sync still reports reposync failure (no masked exit 0)" {
+    mock_os_release "ol" "9.8"; detect_distro_from_mock
+    MIRRORET_RHEL_VERSION=9
+    MIRRORET_APPROVAL_ENABLED=1
+    DRY_RUN=0
+    configure_createrepo "id"
+    s="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    # The early-exit branch must consult sync_failed/aborted before exiting.
+    grep -q 'sync_failed + aborted' "$s"
+}

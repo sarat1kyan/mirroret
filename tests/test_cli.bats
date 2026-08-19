@@ -521,3 +521,42 @@ EOF
     sed -n '/cmd_client_simulate()/,/^}/p' "${CTL}" | grep -q "disablerepo='\*'"
     sed -n '/cmd_client_simulate()/,/^}/p' "${CTL}" | grep -q 'reposdir='
 }
+
+# ---------------------------------------------------------------- approve ----
+
+@test "cli: approve list works without root" {
+    [ "$(id -u)" -ne 0 ]
+    run bash "${CTL}" approve list
+    [ "$status" -eq 0 ]
+}
+
+@test "cli: approve warns when approval mode is off" {
+    run bash "${CTL}" approve list
+    [[ "$output" == *"Approval mode is OFF"* ]]
+}
+
+@test "cli: approve all refuses without root" {
+    [ "$(id -u)" -ne 0 ]
+    run bash "${CTL}" approve all rpm
+    [ "$status" -ne 0 ]
+}
+
+@test "cli: approve rejects an unknown action" {
+    run bash "${CTL}" approve banana
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unknown approve action"* ]]
+}
+
+@test "cli: approve is listed in help" {
+    run bash "${CTL}" help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"approve list"* ]]
+    [[ "$output" == *"approve all"* ]]
+}
+
+@test "cli: approve list rpm shows the empty-staging message" {
+    export MIRRORET_APPROVAL_ENABLED=1
+    run bash "${CTL}" approve list rpm
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no RPMs in staging"* ]]
+}

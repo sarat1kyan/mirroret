@@ -331,44 +331,90 @@ sudo make validate
 
 ## Package approval workflow
 
-When `MIRRORET_APPROVAL_ENABLED=1` is set during install, sync scripts download
-packages to `BASE_DIR/staging/{pip,npm}/` and nothing is served until an admin
-promotes packages to `BASE_DIR/approved/{pip,nm}/`.
+When `MIRRORET_APPROVAL_ENABLED=1`, sync downloads to a staging area and
+nothing reaches a client until an operator promotes it. Covers pip, npm and RPM.
 
 ```bash
 # See everything waiting for approval:
-sudo ./install.sh --list-staging
+mirroretctl approve list
 
-# Approve all staged pip packages:
-sudo ./install.sh --approve-all-pip
+# Full staged RPM file list (can be thousands of lines):
+mirroretctl approve list rpm
 
-# Approve all staged npm packages:
-sudo ./install.sh --approve-all-npm
+# Promote everything of one kind:
+sudo mirroretctl approve all rpm
+sudo mirroretctl approve all pip
+sudo mirroretctl approve all npm
 
-# Approve a specific package by name fragment:
-sudo ./install.sh --approve-package requests
+# Promote by name fragment:
+sudo mirroretctl approve rpm glibc
+sudo mirroretctl approve pip requests
 
-# Decline (permanently remove) a staged pip package:
-sudo ./install.sh --exclude-pip badpkg
-
-# Decline a staged npm package:
-sudo ./install.sh --exclude-npm oldlib
+# Decline (delete from staging):
+sudo mirroretctl approve deny rpm telnet
+sudo mirroretctl approve deny npm oldlib
 ```
+
+The same operations exist as `install.sh` flags (`--list-staging`,
+`--approve-all-pip`, `--approve-all-npm`, `--approve-all-rpm`,
+`--approve-package`, `--approve-rpm`, `--exclude-pip`, `--exclude-npm`,
+`--exclude-rpm`) for scripted use.
 
 Directory layout:
 
 ```
 /srv/mirroret/
 +-- staging/
-| +-- pip/ <- sync writes here; admin reviews
-| +-- npm/ <- sync writes here; admin reviews
+| +-- pip/            <- sync writes here; admin reviews
+| +-- npm/            <- sync writes here; admin reviews
 +-- approved/
-    +-- pip/ <- pypiserver serves from here
-    +-- npm/ <- nginx serves as static files
+| +-- pip/            <- pypiserver serves from here
+| +-- npm/            <- promoted AND published into Verdaccio
++-- redhat/
+    +-- staging/      <- reposync writes here in approval mode
+    +-- mirror/       <- promoted RPMs land here; clients read this
 ```
 
-When approval mode is off, sync scripts write directly to the served directories
-and packages are available immediately.
+### What promotion actually does
+
+Moving a file is not enough to make it installable. Each kind needs a
+different final step, and approval performs it:
+
+| Kind | Move | Additional step |
+|------|------|-----------------|
+| pip  | `staging/pip` -> `approved/pip` | none; pypiserver reads the directory |
+| npm  | `staging/npm` -> `approved/npm` | `npm publish` into Verdaccio |
+| rpm  | `redhat/staging` -> `redhat/mirror` | `createrepo_c` rebuild of each touched repo |
+
+For RPM this matters: a `.rpm` sitting in the tree that repodata does not list
+does not exist as far as `dnf` is concerned. If `createrepo_c` is missing, the
+approval warns loudly and the packages stay invisible until you install it and
+re-run.
+
+### npm approval turns off the npmjs proxy
+
+Verdaccio normally proxies `registry.npmjs.org`, so a client can pull any
+package on demand. That silently defeats approval: the approved set is never
+consulted. With `MIRRORET_APPROVAL_ENABLED=1` the generated Verdaccio config
+omits the uplink entirely.
+
+Consequence: a package nobody approved returns 404 instead of being fetched
+live. That is the intended trade and the reason to think before enabling this
+on a busy developer network.
+
+Publishing needs credentials. Either run
+`npm login --registry=http://localhost:4873/` once, or set
+`MIRRORET_NPM_ALLOW_ANON_PUBLISH=1`. Without one of those, promotion reports
+`authentication required` and the package is moved but not installable.
+
+### RPM syncs still report download failures
+
+In approval mode the RPM sync exits before metadata generation, but it still
+returns non-zero if any `reposync` failed or the disk floor aborted the run,
+so a cron failure is not masked by the early exit.
+
+When approval mode is off, sync scripts write directly to the served
+directories and packages are available immediately.
 
 ---
 
