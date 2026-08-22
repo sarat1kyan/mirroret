@@ -740,24 +740,39 @@ PYEOF
     # purpose is to catch a proxy-blocked upstream.
     ! grep -q 'echo 000' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
     ! grep -q 'echo 000' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
-    # And the comparisons must treat an empty value as unreachable too.
-    grep -q '\-z "\$code" || "\$code" == "000"' \
-        "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    # The client compares the code and must treat empty as unreachable.
     grep -q '\-z "\$code" || "\$code" == "000"' \
         "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    # The server probe keys off curl's own exit status instead, because that
+    # is what distinguishes a proxy refusal from a TLS failure from a
+    # timeout - and the reason decides the fix.
+    grep -q 'rc=\$?' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    grep -q '_curl_reason' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
 }
 
-@test "setup server: a blocked upstream stops the run" {
+@test "setup server: a blocked upstream is reported with its reason" {
     # Pointing the proxy at a dead port makes every probe fail, which is
-    # exactly what a restrictive corporate proxy looks like.
+    # what a restrictive corporate proxy looks like from here.
+    run env bash "${SCRIPT_DIR}/scripts/setup-mirror-server.sh" \
+        --apt-targets "debian:bookworm" --proxy http://127.0.0.1:1 \
+        --dry-run --yes
+    [[ "$output" == *"FAIL"* ]]
+    # The reason must be named, not just the fact.
+    [[ "$output" == *"proxy refused CONNECT"* || "$output" == *"TLS handshake"* \
+       || "$output" == *"unreachable"* || "$output" == *"timed out"* ]]
+    [[ "$output" == *"cannot sync yet"* ]]
+    # And it must name the trap that quietly costs people security updates.
+    [[ "$output" == *"security.ubuntu.com is a DIFFERENT host"* ]]
+}
+
+@test "setup server: an entirely unreachable target set is fatal" {
+    # Dropping the only target would leave nothing to mirror, so this must
+    # stop rather than "succeed" with an empty configuration.
     run env bash "${SCRIPT_DIR}/scripts/setup-mirror-server.sh" \
         --apt-targets "debian:bookworm" --proxy http://127.0.0.1:1 \
         --dry-run --yes
     [ "$status" -ne 0 ]
-    [[ "$output" == *"BLOCKED"* ]]
-    [[ "$output" == *"proxy is blocking upstream"* ]]
-    # And it must name the trap that costs people their security updates.
-    [[ "$output" == *"security.ubuntu.com is separate"* ]]
+    [[ "$output" == *"Every configured target is unreachable"* ]]
 }
 
 @test "setup server: only probes upstreams the chosen targets need" {
@@ -769,9 +784,222 @@ PYEOF
     # archive.ubuntu.com when explaining the security-host trap.
     local probes
     probes="$(printf '%s\n' "$output" \
-              | sed -n '/Probing the upstreams/,/STOP/p' \
-              | grep -E 'BLOCKED|[0-9]{3}$' || true)"
+              | sed -n '/Probing the exact URLs/,/cannot sync yet/p' \
+              | grep -E '^\s+(FAIL|[0-9]{3})\s' || true)"
     [[ "$probes" == *"deb.debian.org"* ]]
     ! [[ "$probes" == *"yum.oracle.com"* ]]
     ! [[ "$probes" == *"archive.ubuntu.com"* ]]
+}
+
+# -- reported from a live OL9 server, 2026-08-23 --------------------------------
+
+@test "cli: a failing menu action returns to the menu, it does not exit" {
+    # Observed on a live server: picking "sync apt" (or any sync while the
+    # nightly cron run held the lock) made the whole menu vanish with no
+    # message. The menu is a loop inside a function in a `set -e` script, so
+    # a bare `cmd_sync all` returning non-zero exits mirroretctl entirely.
+    grep -q '_menu_run()' "${SCRIPT_DIR}/mirroretctl"
+    # EVERY numbered action must go through the wrapper.
+    local bare
+    bare="$(sed -n '/case "\$choice" in/,/esac/p' "${SCRIPT_DIR}/mirroretctl" \
+            | grep -E '^\s+[0-9]+\)' | grep -vc '_menu_run' || true)"
+    [ "$bare" -eq 0 ]
+}
+
+@test "cli: _menu_run reports a failure and still returns success" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        _wa() { printf 'warn  %s\n' \"\$*\"; }
+        _in() { printf '      %s\n' \"\$*\"; }
+        $(sed -n '/^_menu_run()/,/^}/p' "${SCRIPT_DIR}/mirroretctl")
+        set -e
+        _menu_run false
+        echo STILL_ALIVE"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"exited with status 1"* ]]
+    [[ "$output" == *"STILL_ALIVE"* ]]
+}
+
+@test "sync scripts: the lock is taken BEFORE stdout is redirected" {
+    # Observed on a live server: starting a sync while cron held the lock
+    # exited silently. Every generated script did
+    #   exec > >(tee -a LOG) 2>&1
+    # BEFORE flock, so "another sync is already running" went only to a log
+    # file the operator had no reason to look at.
+    MIRRORET_APT_TARGETS="ubuntu:jammy"
+    MIRRORET_RPM_TARGETS="ol:9"
+    generate_target_specs
+    configure_apt_mirror "bk"
+    configure_rpm_mirroring "bk"
+
+    local s
+    for s in sync-apt-repos.sh sync-rpm-repos.sh; do
+        local f="${MIRRORET_BASE_DIR}/scripts/${s}"
+        [ -f "$f" ]
+        local lock_line redirect_line
+        lock_line="$(grep -n 'flock -n 9' "$f" | head -1 | cut -d: -f1)"
+        redirect_line="$(grep -n 'exec > >(tee' "$f" | head -1 | cut -d: -f1)"
+        [ -n "$lock_line" ]
+        [ -n "$redirect_line" ]
+        # The lock must come first.
+        [ "$lock_line" -lt "$redirect_line" ]
+    done
+}
+
+@test "sync scripts: lock contention prints to the terminal and creates no log" {
+    MIRRORET_RPM_TARGETS="ol:9"
+    generate_target_specs
+    configure_rpm_mirroring "bk"
+    local script="${MIRRORET_BASE_DIR}/scripts/sync-rpm-repos.sh"
+    [ -x "$script" ]
+
+    local lock="${BATS_TEST_TMPDIR}/contended.lock"
+    # Rewrite the lock path so this test cannot collide with a real sync.
+    sed -i "s|^LOCK_FILE=.*|LOCK_FILE=\"${lock}\"|" "$script"
+
+    # Hold the lock, then try to run.
+    flock -n "$lock" -c 'sleep 12' &
+    local holder=$!
+    sleep 1
+    run "$script"
+    kill "$holder" 2>/dev/null || true
+    wait "$holder" 2>/dev/null || true
+
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"already running"* ]]
+    [[ "$output" == *"logs tail"* ]]
+    # And it must not have littered a log file for a run that never started.
+    [ "$(find "${MIRRORET_BASE_DIR}/logs" -name 'sync-rpm-*.log' 2>/dev/null | wc -l)" -eq 0 ]
+}
+
+@test "targets: legacy dnf repo ids are translated, not silently dropped" {
+    # This project's own earlier runbook told operators to write
+    # MIRRORET_RPM_REPOS="ol9_baseos_latest ol9_appstream ol9_UEKR8
+    # ol9_developer_EPEL". Dropping those produced a target with zero repos:
+    # a mirror that downloads nothing and reports nothing.
+    MIRRORET_RPM_TARGETS="ol:9"
+    MIRRORET_RPM_REPOS="ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL"
+    generate_target_specs
+    run mirroret_json_field "${MIRRORET_TARGETS_DIR}/rpm-ol-9.json" repos
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"baseos"* ]]
+    [[ "$output" == *"appstream"* ]]
+    [[ "$output" == *"uekr8"* ]]
+    [[ "$output" == *"epel"* ]]
+}
+
+@test "targets: legacy RHEL subscription repo ids are translated too" {
+    MIRRORET_RPM_TARGETS="rhel:9"
+    MIRRORET_RPM_REPOS="rhel-9-for-x86_64-baseos-rpms rhel-9-for-x86_64-appstream-rpms"
+    generate_target_specs
+    run mirroret_json_field "${MIRRORET_TARGETS_DIR}/rpm-rhel-9.json" repos
+    [[ "$output" == *"baseos"* ]]
+    [[ "$output" == *"appstream"* ]]
+}
+
+@test "targets: an alias resolves to a real catalog URL, never a literal id" {
+    run rpm_repo_alias ol 9 ol9_developer_EPEL
+    [ "$output" = "epel" ]
+    run rpm_repo_url ol 9 "$(rpm_repo_alias ol 9 ol9_UEKR8)" x86_64
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"/UEKR8/"* ]]
+}
+
+@test "targets: a target resolving to zero repos is a FAILURE, not '0/0 ok'" {
+    # The silent-nothing failure mode, in the reporting layer this time:
+    # "ok 0/0 repos published" for a target that mirrors nothing at all.
+    mkdir -p "${MIRRORET_TARGETS_DIR}"
+    python3 - "${MIRRORET_TARGETS_DIR}/rpm-ol-9.json" "${MIRRORET_BASE_DIR}" <<'PYEOF'
+import json
+import sys
+json.dump({"id": "ol9", "kind": "rpm", "flavor": "ol", "version": "9",
+           "dest": sys.argv[2] + "/redhat/mirror/ol/9",
+           "arches": ["x86_64", "noarch"], "repos": []},
+          open(sys.argv[1], "w"))
+PYEOF
+    run env MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR}" \
+        MIRRORET_TARGETS_DIR="${MIRRORET_TARGETS_DIR}" \
+        bash "${SCRIPT_DIR}/mirroretctl" targets
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"would mirror NOTHING"* ]]
+    [[ "$output" == *"baseos appstream"* ]]
+    ! [[ "$output" == *"0/0 repos published"* ]]
+}
+
+@test "targets: a spec with no suites is a FAILURE, not silently ok" {
+    mkdir -p "${MIRRORET_TARGETS_DIR}"
+    python3 - "${MIRRORET_TARGETS_DIR}/apt-ubuntu-jammy.json" "${MIRRORET_BASE_DIR}" <<'PYEOF'
+import json
+import sys
+json.dump({"id": "ubuntu-jammy", "kind": "apt", "flavor": "ubuntu",
+           "dir": "ubuntu", "codename": "jammy",
+           "dest": sys.argv[2] + "/apt/ubuntu", "arches": ["amd64"],
+           "components": ["main"], "suites": []},
+          open(sys.argv[1], "w"))
+PYEOF
+    run env MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR}" \
+        MIRRORET_TARGETS_DIR="${MIRRORET_TARGETS_DIR}" \
+        bash "${SCRIPT_DIR}/mirroretctl" targets
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"would mirror NOTHING"* ]]
+}
+
+@test "verify: a .repo file with no baseurl is flagged" {
+    mkdir -p "${MIRRORET_BASE_DIR}/config"
+    printf '# empty\n[mirroret-nothing]\nname=nothing\nenabled=1\ngpgcheck=1\ngpgkey=file:///x\n' \
+        > "${MIRRORET_BASE_DIR}/config/broken9.repo"
+    run env MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR}" \
+        bash "${SCRIPT_DIR}/mirroretctl" client verify
+    [[ "$output" == *"contains no baseurl"* ]]
+}
+
+@test "setup server: probes the real URLs, not bare host roots" {
+    # A bare host root proves less than it looks: an allow-list can permit
+    # the host while the path we fetch is blocked, and Debian's security
+    # archive is a different PATH on the same host - which a root probe
+    # cannot distinguish at all.
+    run bash -c "
+        APT_TARGETS='ubuntu:jammy debian:bookworm'
+        RPM_TARGETS='ol:9'
+        APT_SCHEME=''
+        $(sed -n '/^upstream_probes()/,/^}/p' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh")
+        upstream_probes"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"archive.ubuntu.com/ubuntu/dists/jammy/Release"* ]]
+    # The security host is separate and must be probed separately.
+    [[ "$output" == *"security.ubuntu.com/ubuntu/dists/jammy-security/Release"* ]]
+    # Debian security is a different PATH, not a different host.
+    [[ "$output" == *"deb.debian.org/debian/dists/bookworm/Release"* ]]
+    [[ "$output" == *"deb.debian.org/debian-security/dists/bookworm-security/Release"* ]]
+    [[ "$output" == *"yum.oracle.com/repo/OracleLinux/OL9/"*"repomd.xml"* ]]
+    # Each line must be tagged with the target it belongs to.
+    [[ "$output" == *"debian:bookworm|"* ]]
+}
+
+@test "setup server: curl failure reasons are named, not just 'BLOCKED'" {
+    # These exit codes each have a different fix, and this project's own
+    # FIXME doc records hitting several of them. "BLOCKED" sends people to
+    # the wrong place.
+    local fn
+    fn="$(sed -n '/^_curl_reason()/,/^}/p' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh")"
+    run bash -c "${fn}; _curl_reason 56"
+    [[ "$output" == *"proxy refused CONNECT"* ]]
+    run bash -c "${fn}; _curl_reason 35"
+    [[ "$output" == *"TLS handshake"* ]]
+    run bash -c "${fn}; _curl_reason 60"
+    [[ "$output" == *"corporate CA"* ]]
+    run bash -c "${fn}; _curl_reason 6"
+    [[ "$output" == *"DNS"* ]]
+}
+
+@test "setup server: a target whose upstream is blocked can be dropped" {
+    # Waiting on a proxy ticket before mirroring ANYTHING is the wrong
+    # default: the RPM tree is usually the bulk of the data.
+    local src="${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    grep -q 'Continue with only the reachable targets' "$src"
+    grep -q 'keep_apt' "$src"
+    grep -q 'keep_rpm' "$src"
+    # And when nothing at all is reachable it must stop, not proceed empty.
+    grep -q 'Every configured target is unreachable' "$src"
 }

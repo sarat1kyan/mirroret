@@ -245,14 +245,18 @@ APPROVAL_MODE="${approval}"
 MIN_FREE_GB="${min_free_gb}"
 LOCK_FILE="/var/lock/mirroret-sync-pip.lock"
 mkdir -p "\$LOG_DIR" "\$DEST_DIR"
-exec > >(tee -a "\$LOG_FILE") 2>&1
-
 # Single-instance lock - stop cron colliding with a manual run.
+# Lock BEFORE redirecting stdout: redirecting first sends the
+# "already running" message to the log only, so a manual run started during
+# the nightly cron sync exits with no output at all.
 exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
 if ! flock -n 9; then
-    echo "ERROR: another pip sync is already running. Exiting."
+    echo "ERROR: another pip sync is already running (lock: \$LOCK_FILE)."
+    echo "       Nothing was started. Watch the running one with:"
+    echo "         mirroretctl logs tail"
     exit 3
 fi
+exec > >(tee -a "\$LOG_FILE") 2>&1
 
 $(mirroret_script_preamble)
 

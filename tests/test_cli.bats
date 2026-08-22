@@ -513,7 +513,10 @@ EOF
 @test "cli: every menu number has a case branch" {
     nums="$(sed -n '/1) status/,/q) quit/p' "${CTL}" | grep -oE '^ *[0-9]+\)' | tr -d ' )')"
     for n in $nums; do
-        grep -qE "^ +${n}\) +cmd_" "${CTL}"
+        # Actions are dispatched through _menu_run, which keeps a failing
+        # subcommand from taking the whole CLI down via `set -e`. Accept
+        # either form so this test checks the mapping, not the wrapper.
+        grep -qE "^ +${n}\) +(_menu_run )?cmd_" "${CTL}"
     done
 }
 
@@ -532,7 +535,7 @@ EOF
     # Match the dispatch, not a hardcoded menu number: pinning the number
     # means every menu addition breaks this test for no reason. The
     # menu-to-branch mapping has its own dedicated test.
-    grep -qE '^ +[0-9]+\) +cmd_client simulate' "${CTL}"
+    grep -qE '^ +[0-9]+\) +(_menu_run )?cmd_client simulate' "${CTL}"
     grep -qE '^ +[0-9]+\) client simulate' "${CTL}"
 }
 

@@ -22,6 +22,10 @@ source "${SCRIPT_DIR}/lib/common.sh"
 source "${SCRIPT_DIR}/lib/distro.sh"
 # shellcheck source=lib/approval.sh
 source "${SCRIPT_DIR}/lib/approval.sh"
+# targets.sh supplies the upstream catalog, so `targets` can name the valid
+# repo ids when a config asks for ones that do not exist.
+# shellcheck source=lib/targets.sh
+source "${SCRIPT_DIR}/lib/targets.sh"
 
 # Load operator config so paths/ports match the running install.
 # MIRRORET_CONF lets you point at a different file - useful for inspecting a
@@ -318,17 +322,18 @@ cmd_targets() {
                 _in "/etc/mirroret/mirroret.conf, then: sudo mirroretctl upgrade"
                 return 0
             fi
-            local found=0 spec
+            local found=0 spec rc=0
             for spec in "${TARGETS_DIR}"/apt-*.json; do
                 [[ -f "$spec" ]] || continue
                 found=1
-                _targets_report_apt "$spec"
+                _targets_report_apt "$spec" || rc=1
             done
             for spec in "${TARGETS_DIR}"/rpm-*.json; do
                 [[ -f "$spec" ]] || continue
                 found=1
-                _targets_report_rpm "$spec"
+                _targets_report_rpm "$spec" || rc=1
             done
+            [[ "$rc" -ne 0 ]] && return 1
             if [[ "$found" -eq 0 ]]; then
                 _wa "No target specs in ${TARGETS_DIR}."
                 _in "APT example: MIRRORET_APT_TARGETS=\"ubuntu:jammy debian:bookworm\""
@@ -361,6 +366,12 @@ _targets_report_apt() {
     _in "suites     ${suites}"
     _in "components ${comps}"
     _in "arches     ${arches}"
+
+    if [[ -z "${suites// /}" ]]; then
+        _er "no suites resolved - this target would mirror NOTHING"
+        _in "Check MIRRORET_APT_TARGETS, then: sudo mirroretctl upgrade"
+        return 1
+    fi
 
     local suite ok=0 missing=""
     for suite in ${suites}; do
@@ -395,6 +406,19 @@ _targets_report_rpm() {
     _in "url        http://$(_ctl_ip):${WEB_PORT}/redhat/${flavor}/${major}/<repo>"
     _in "repos      ${repos}"
     _in "arches     ${arches}"
+
+    # A target that resolved to zero repos mirrors nothing at all. Reporting
+    # "0/0 repos published" as ok is the silent-nothing failure this whole
+    # tool exists to eliminate, so say it plainly.
+    if [[ -z "${repos// /}" ]]; then
+        _er "no repos resolved - this target would mirror NOTHING"
+        _in "MIRRORET_RPM_REPOS names ids that are not in the catalog."
+        _in "Valid ids for ${flavor} ${major}:"
+        _in "  $(rpm_flavor_default_repos "${flavor}" "${major}" 2>/dev/null || echo '(run mirroretctl upgrade)')"
+        _in "Unset MIRRORET_RPM_REPOS to take the defaults, then:"
+        _in "  sudo mirroretctl upgrade"
+        return 1
+    fi
 
     local repo published=0 total=0 rpms=0 missing=""
     for repo in ${repos}; do
@@ -755,6 +779,11 @@ _cli_verify_rpm_repos() {
         rc=1
     elif [[ "${present}" -gt 0 ]]; then
         _ok "${base}: all ${present} repo(s) have published metadata"
+    else
+        # No baseurl lines at all: the file exists but points nowhere.
+        _er "${base}: contains no baseurl - clients would get nothing from it"
+        _in "  Regenerate it: sudo mirroretctl upgrade"
+        rc=1
     fi
     return "$rc"
 }
@@ -1032,6 +1061,24 @@ _conf_val() {
 
 # -------------------------------------------------------------------- menu ----
 
+# _menu_run <cmd...> - run a menu action without letting a non-zero exit
+# take the whole CLI down with it.
+#
+# The menu is a loop inside a function in a `set -e` script, so a bare
+# `cmd_sync all` that returns 1 exits mirroretctl entirely. From the
+# operator's side the menu simply disappears with no message - which is
+# exactly what "pick sync while cron is syncing" looked like.
+_menu_run() {
+    local rc=0
+    "$@" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        printf '\n'
+        _wa "'$*' exited with status ${rc}."
+        _in "Nothing else was changed. Returning to the menu."
+    fi
+    return 0
+}
+
 cmd_menu() {
     while true; do
         printf "\n${C_HEAD}mirroretctl${C_OFF}  base=%s\n" "${BASE_DIR}"
@@ -1062,28 +1109,32 @@ MENU
         printf "select> "
         local choice
         read -r choice || return 0
+        # Every action runs through _menu_run. Without it, a subcommand that
+        # returns non-zero kills the whole CLI via `set -e`, so the menu just
+        # vanishes - which is what happened when a sync was picked while the
+        # nightly cron run held the lock.
         case "$choice" in
-            1)  cmd_status ;;
-            2)  cmd_doctor ;;
-            3)  cmd_sync all ;;
-            4)  cmd_sync apt ;;
-            5)  cmd_sync rpm ;;
-            6)  cmd_sync_status ;;
-            7)  cmd_sync_stop ;;
-            8)  cmd_clean report ;;
-            9)  cmd_clean prune ;;
-            10) cmd_serve ;;
-            11) cmd_client verify ;;
-            12) cmd_client simulate ;;
-            13) cmd_logs errors ;;
-            14) cmd_logs tail ;;
-            15) cmd_config show ;;
-            16) cmd_config diff ;;
-            17) cmd_config edit ;;
-            18) cmd_upgrade ;;
-            19) cmd_check ;;
-            20) cmd_collect ;;
-            21) cmd_targets list ;;
+            1) _menu_run cmd_status ;;
+            2) _menu_run cmd_doctor ;;
+            3) _menu_run cmd_sync all ;;
+            4) _menu_run cmd_sync apt ;;
+            5) _menu_run cmd_sync rpm ;;
+            6) _menu_run cmd_sync_status ;;
+            7) _menu_run cmd_sync_stop ;;
+            8) _menu_run cmd_clean report ;;
+            9) _menu_run cmd_clean prune ;;
+            10) _menu_run cmd_serve ;;
+            11) _menu_run cmd_client verify ;;
+            12) _menu_run cmd_client simulate ;;
+            13) _menu_run cmd_logs errors ;;
+            14) _menu_run cmd_logs tail ;;
+            15) _menu_run cmd_config show ;;
+            16) _menu_run cmd_config diff ;;
+            17) _menu_run cmd_config edit ;;
+            18) _menu_run cmd_upgrade ;;
+            19) _menu_run cmd_check ;;
+            20) _menu_run cmd_collect ;;
+            21) _menu_run cmd_targets list ;;
             q|Q|quit|exit) return 0 ;;
             "") ;;
             *)  _er "unknown selection: ${choice}" ;;

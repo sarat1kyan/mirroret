@@ -700,14 +700,20 @@ TIMESTAMP="\$(date +%Y%m%d-%H%M%S)"
 mkdir -p "\$LOG_DIR"
 
 LOG_FILE="\${LOG_DIR}/sync-all-\${TIMESTAMP}.log"
-exec > >(tee -a "\$LOG_FILE") 2>&1
 
 LOCK_FILE="/var/lock/mirroret-sync-all.lock"
+# The lock is taken BEFORE stdout is redirected into the log. Redirecting
+# first sends "another sync is already running" to the log file only, so an
+# operator who starts a sync while the nightly cron run is in progress sees
+# the command exit with no output at all.
 exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
 if ! flock -n 9; then
-    echo "ERROR: another sync-all is already running. Exiting."
+    echo "ERROR: another sync-all is already running (lock: \$LOCK_FILE)."
+    echo "       Nothing was started. Watch the running one with:"
+    echo "         mirroretctl logs tail"
     exit 3
 fi
+exec > >(tee -a "\$LOG_FILE") 2>&1
 trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
 
 # Abort early rather than letting each child hit the floor separately.

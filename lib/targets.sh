@@ -183,6 +183,54 @@ rpm_flavor_default_repos() {
     esac
 }
 
+# rpm_repo_alias <flavor> <major> <repo> - normalise a legacy dnf repo id.
+#
+# Existing configs (including the ones this project's own earlier runbook
+# told operators to write) name repos the way the HOST's dnf does:
+#   ol9_baseos_latest  ol9_appstream  ol9_UEKR8  ol9_developer_EPEL
+#   rhel-9-for-x86_64-baseos-rpms
+# The catalog uses short names. Silently dropping the long forms produced a
+# target with zero repos - a mirror that downloads nothing and reports
+# nothing - so translate them instead.
+rpm_repo_alias() {
+    local flavor="$1" major="$2" repo="$3"
+    local stripped="${repo}"
+
+    case "${flavor}" in
+        ol)
+            # ol9_baseos_latest -> baseos, ol9_UEKR8 -> uekr8, ...
+            stripped="${repo#ol${major}_}"
+            stripped="${stripped#ol_}"
+            case "${stripped}" in
+                baseos_latest|baseos*)   printf 'baseos'    ; return 0 ;;
+                appstream*)              printf 'appstream' ; return 0 ;;
+                UEKR6|uekr6)             printf 'uekr6'     ; return 0 ;;
+                UEKR7|uekr7)             printf 'uekr7'     ; return 0 ;;
+                UEKR8|uekr8)             printf 'uekr8'     ; return 0 ;;
+                developer_EPEL|developer_epel|epel*) printf 'epel'; return 0 ;;
+                codeready_builder|codeready*) printf 'codeready'; return 0 ;;
+                addons*)                 printf 'addons'    ; return 0 ;;
+                kvm*)                    printf 'kvm'       ; return 0 ;;
+            esac
+            ;;
+        rhel)
+            # rhel-9-for-x86_64-appstream-rpms -> appstream
+            case "${repo}" in
+                *-baseos-rpms|*baseos*)        printf 'baseos'       ; return 0 ;;
+                *-appstream-rpms|*appstream*)  printf 'appstream'    ; return 0 ;;
+                *codeready*|*crb*)             printf 'codeready'    ; return 0 ;;
+                *supplementary*)               printf 'supplementary'; return 0 ;;
+            esac
+            ;;
+        rocky|almalinux|centos)
+            # Directory-cased forms: BaseOS -> baseos.
+            printf '%s' "$(printf '%s' "${repo}" | tr '[:upper:]' '[:lower:]')"
+            return 0
+            ;;
+    esac
+    printf '%s' "${repo}"
+}
+
 # rpm_repo_url <flavor> <major> <repo> <arch> - print the upstream baseurl.
 #
 # Returns 1 for an unknown repo so callers can report it instead of
@@ -460,14 +508,27 @@ write_rpm_target_spec() {
 
     local repos_json="" repo url
     for repo in ${repos}; do
-        if ! url="$(rpm_repo_url "${flavor}" "${major}" "${repo}" "${primary_arch}")"; then
+        local canon
+        canon="$(rpm_repo_alias "${flavor}" "${major}" "${repo}")"
+        if ! url="$(rpm_repo_url "${flavor}" "${major}" "${canon}" "${primary_arch}")"; then
             warn "Unknown ${flavor} repo '${repo}' - skipping it."
             warn "  Known: $(rpm_flavor_default_repos "${flavor}" "${major}")"
             continue
         fi
+        if [[ "${canon}" != "${repo}" ]]; then
+            info "  repo '${repo}' recognised as '${canon}'"
+            repo="${canon}"
+        fi
         [[ -n "${repos_json}" ]] && repos_json+=", "
         repos_json+="{\"id\": \"${repo}\", \"url\": \"${url}\"}"
     done
+
+    if [[ -z "${repos_json}" ]]; then
+        warn "Target ${flavor}:${major} resolved ZERO repos - it would mirror nothing."
+        warn "  Requested: ${repos}"
+        warn "  Valid ids: $(rpm_flavor_default_repos "${flavor}" "${major}")"
+        warn "  Set MIRRORET_RPM_REPOS to those, or unset it to take the defaults."
+    fi
 
     cat <<JSON
 {

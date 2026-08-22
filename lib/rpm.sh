@@ -227,16 +227,23 @@ MIN_FREE_GB="${min_free_gb}"
 LOCK_FILE="/var/lock/mirroret-sync-redhat.lock"
 SYNC_TIMEOUT="${sync_timeout}"
 mkdir -p "\$LOG_DIR"
-exec > >(tee -a "\$LOG_FILE") 2>&1
 
 # -- Single-instance lock -------------------------------------------------
 # Prevents a cron run from colliding with a manual run. Concurrent
 # reposync + createrepo on the same tree corrupts repodata.
+#
+# Taken BEFORE the log redirect: redirecting first is taken BEFORE stdout is redirected into the log. Redirecting
+# first sends "another sync is already running" to the log file only, so an
+# operator who starts a sync while the nightly cron run is in progress sees
+# the command exit with no output at all.
 exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
 if ! flock -n 9; then
-    echo "ERROR: another RPM sync is already running (lock: \$LOCK_FILE). Exiting."
+    echo "ERROR: another RPM sync is already running (lock: \$LOCK_FILE)."
+    echo "       Nothing was started. Watch the running one with:"
+    echo "         mirroretctl logs tail"
     exit 3
 fi
+exec > >(tee -a "\$LOG_FILE") 2>&1
 echo \$\$ >&9
 
 # Kill the whole process group on exit so a cancelled run does not leave
@@ -719,13 +726,19 @@ LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-rpm-\$(date +%Y%m%d-%H%M%S).log"
 LOCK_FILE="/var/lock/mirroret-sync-redhat.lock"
 mkdir -p "\$LOG_DIR"
-exec > >(tee -a "\$LOG_FILE") 2>&1
 
+# The lock is taken BEFORE stdout is redirected into the log. Redirecting
+# first sends "another sync is already running" to the log file only, so an
+# operator who starts a sync while the nightly cron run is in progress sees
+# the command exit with no output at all.
 exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
 if ! flock -n 9; then
-    echo "ERROR: another RPM sync is already running (lock: \$LOCK_FILE). Exiting."
+    echo "ERROR: another RPM sync is already running (lock: \$LOCK_FILE)."
+    echo "       Nothing was started. Watch the running one with:"
+    echo "         mirroretctl logs tail"
     exit 3
 fi
+exec > >(tee -a "\$LOG_FILE") 2>&1
 trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
 
 $(mirroret_script_preamble)

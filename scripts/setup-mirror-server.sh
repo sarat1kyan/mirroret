@@ -178,28 +178,65 @@ ask() {
 
 # Upstream hosts each configured flavor actually needs. Probing only the ones
 # in use keeps a Debian-only mirror from being told Oracle is unreachable.
-upstream_hosts_for() {
-    local t flavor host_list=""
+# upstream_probes - print "target|url" for the exact URLs each target needs.
+#
+# Probing a bare host root proves less than it looks: an allow-list can
+# permit the host while the path we actually fetch is blocked, and for Debian
+# the security archive is a different PATH on the same host
+# (deb.debian.org/debian-security), which a root probe cannot distinguish.
+# So probe what the sync will really ask for.
+upstream_probes() {
+    # Always probe over https, regardless of --apt-scheme: a proxy that
+    # permits CONNECT on 443 but blocks plain HTTP would otherwise look
+    # broken here when it is not, and https tells us whether the host is
+    # allowed at all.
+    local t flavor release proto="https"
+
     for t in ${APT_TARGETS}; do
-        flavor="${t%%:*}"
+        flavor="${t%%:*}"; release="${t#*:}"; release="${release%%:*}"
         case "$flavor" in
-            ubuntu)       host_list+=" archive.ubuntu.com security.ubuntu.com" ;;
-            ubuntu-ports) host_list+=" ports.ubuntu.com" ;;
-            debian)       host_list+=" deb.debian.org" ;;
+            ubuntu)
+                printf '%s|%s://archive.ubuntu.com/ubuntu/dists/%s/Release\n' "$t" "$proto" "$release"
+                printf '%s|%s://security.ubuntu.com/ubuntu/dists/%s-security/Release\n' "$t" "$proto" "$release"
+                ;;
+            ubuntu-ports)
+                printf '%s|%s://ports.ubuntu.com/ubuntu-ports/dists/%s/Release\n' "$t" "$proto" "$release"
+                ;;
+            debian)
+                printf '%s|%s://deb.debian.org/debian/dists/%s/Release\n' "$t" "$proto" "$release"
+                printf '%s|%s://deb.debian.org/debian-security/dists/%s-security/Release\n' "$t" "$proto" "$release"
+                ;;
         esac
     done
     for t in ${RPM_TARGETS}; do
-        flavor="${t%%:*}"
+        flavor="${t%%:*}"; release="${t#*:}"; release="${release%%:*}"
         case "$flavor" in
-            ol)               host_list+=" yum.oracle.com" ;;
-            rocky)            host_list+=" dl.rockylinux.org" ;;
-            almalinux)        host_list+=" repo.almalinux.org" ;;
-            centos)           host_list+=" mirror.stream.centos.org" ;;
-            fedora|epel)      host_list+=" dl.fedoraproject.org" ;;
-            rhel)             host_list+=" cdn.redhat.com" ;;
+            ol)        printf '%s|https://yum.oracle.com/repo/OracleLinux/OL%s/baseos/latest/x86_64/repodata/repomd.xml\n' "$t" "$release" ;;
+            rocky)     printf '%s|https://dl.rockylinux.org/pub/rocky/%s/BaseOS/x86_64/os/repodata/repomd.xml\n' "$t" "$release" ;;
+            almalinux) printf '%s|https://repo.almalinux.org/almalinux/%s/BaseOS/x86_64/os/repodata/repomd.xml\n' "$t" "$release" ;;
+            centos)    printf '%s|https://mirror.stream.centos.org/%s-stream/BaseOS/x86_64/os/repodata/repomd.xml\n' "$t" "$release" ;;
+            epel)      printf '%s|https://dl.fedoraproject.org/pub/epel/%s/Everything/x86_64/repodata/repomd.xml\n' "$t" "$release" ;;
+            fedora)    printf '%s|https://dl.fedoraproject.org/pub/fedora/linux/releases/%s/Everything/x86_64/os/repodata/repomd.xml\n' "$t" "$release" ;;
+            rhel)      printf '%s|https://cdn.redhat.com/\n' "$t" ;;
         esac
     done
-    printf '%s\n' ${host_list} | sort -u
+}
+
+# _curl_reason <exit-code> - what a curl failure actually means here.
+#
+# The bare word "BLOCKED" sends people to the wrong place. These exit codes
+# each have a different fix, and this environment hits several of them.
+_curl_reason() {
+    case "$1" in
+        6)  printf 'DNS: host does not resolve' ;;
+        7)  printf 'connection refused/unreachable' ;;
+        28) printf 'timed out' ;;
+        35) printf 'TLS handshake failed - a proxy answering CONNECT with an HTML block page looks exactly like this' ;;
+        56) printf 'proxy refused CONNECT (often HTTP 403 from the proxy)' ;;
+        60) printf 'TLS certificate not trusted - needs the corporate CA via --ca-bundle' ;;
+        77) printf 'CA bundle could not be read' ;;
+        *)  printf 'curl exit %s' "$1" ;;
+    esac
 }
 
 phase_preflight() {
@@ -287,42 +324,96 @@ phase_preflight() {
     fi
 
     # Upstream reachability. This is the gate that actually predicts success.
-    local hosts
-    hosts="$(upstream_hosts_for)"
-    if [[ -n "$hosts" ]] && command -v curl >/dev/null 2>&1; then
+    local probes
+    probes="$(upstream_probes)"
+    if [[ -n "$probes" ]] && command -v curl >/dev/null 2>&1; then
         say ""
-        info "Probing the upstreams your targets need:"
-        local h code blocked=""
-        for h in $hosts; do
-            # `|| true`, never `|| echo 000`: the latter APPENDS to the value
-            # curl already printed via -w, giving "000\n000" - which is not
-            # equal to "000", so a blocked host would pass this gate. That is
-            # the one gate whose whole purpose is to catch a blocked host.
-            code="$(env ${PROXY:+https_proxy=$PROXY} curl -sS -o /dev/null \
-                    -w '%{http_code}' --max-time 12 "https://${h}/" 2>/dev/null || true)"
-            if [[ -z "$code" || "$code" == "000" ]]; then
-                printf '        %-30s %sBLOCKED%s\n' "$h" "$C_ERR" "$C_OFF"
-                blocked+=" ${h}"
+        info "Probing the exact URLs your targets need:"
+        local line target url code rc err bad_targets=""
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            target="${line%%|*}"
+            url="${line#*|}"
+            # One request. `code` and curl's exit status both matter: the
+            # status is what distinguishes a proxy refusal from a TLS failure
+            # from a timeout, and that distinction decides the fix.
+            err="$(mktemp)"
+            rc=0
+            code="$(env ${PROXY:+https_proxy=$PROXY} ${PROXY:+http_proxy=$PROXY} \
+                    curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+                    "$url" 2>"$err")" || rc=$?
+            if [[ "$rc" -eq 0 ]] && [[ -n "$code" ]] && [[ "$code" != "000" ]]; then
+                printf '        %s%-4s%s %s\n' "$C_OK" "${code}" "$C_OFF" "${url#https://}"
+                _log "probe OK ${code} ${url}"
             else
-                printf '        %-30s %s%s%s\n' "$h" "$C_OK" "$code" "$C_OFF"
+                printf '        %sFAIL%s %s\n' "$C_ERR" "$C_OFF" "${url#https://}"
+                printf '             %s\n' "$(_curl_reason "$rc")"
+                local detail
+                detail="$(head -1 "$err" 2>/dev/null | sed 's/^curl: //')"
+                [[ -n "$detail" ]] && printf '             %s\n' "$detail"
+                _log "probe FAIL rc=${rc} ${url}: ${detail}"
+                case " ${bad_targets} " in
+                    *" ${target} "*) ;;
+                    *) bad_targets+=" ${target}" ;;
+                esac
             fi
-            _log "upstream ${h} = ${code}"
-        done
-        if [[ -n "$blocked" ]]; then
-            gate_fail "The proxy is blocking upstream host(s):${blocked}" \
-                "No sync of those ecosystems can succeed until this is opened." \
-                "Ask the proxy team to permit CONNECT on 443 to them." \
-                "" \
-                "Note: security.ubuntu.com is separate from archive.ubuntu.com." \
-                "Allowing only the archive gives a mirror with NO security updates." \
-                "" \
-                "If the proxy allows CONNECT on 443 only, plain-HTTP APT is blocked:" \
-                "  re-run with --apt-scheme https" \
-                "" \
-                "To proceed with only the reachable ecosystems, drop the blocked" \
-                "targets from --apt-targets / --rpm-targets and re-run."
+            rm -f "$err"
+        done <<< "$probes"
+
+        if [[ -n "$bad_targets" ]]; then
+            say ""
+            warn "These targets cannot sync yet:${bad_targets}"
+            info ""
+            info "Nothing on this server can fix that - the upstream is not"
+            info "reachable from here. Ask the proxy team to permit CONNECT on"
+            info "443 to the hosts shown above."
+            info ""
+            info "Two things that are easy to get half-right:"
+            info "  * security.ubuntu.com is a DIFFERENT host from"
+            info "    archive.ubuntu.com. Allowing only the archive gives a"
+            info "    mirror with no security updates."
+            info "  * Debian security lives at deb.debian.org/debian-security,"
+            info "    a different path on the same host."
+            info ""
+
+            # Being able to proceed with what IS reachable matters: the RPM
+            # tree is usually the bulk of the data and there is no reason to
+            # wait on a proxy ticket to start it.
+            local keep_apt="" keep_rpm="" t
+            for t in ${APT_TARGETS}; do
+                case " ${bad_targets} " in *" ${t} "*) ;; *) keep_apt+=" ${t}" ;; esac
+            done
+            for t in ${RPM_TARGETS}; do
+                case " ${bad_targets} " in *" ${t} "*) ;; *) keep_rpm+=" ${t}" ;; esac
+            done
+            keep_apt="${keep_apt# }"; keep_rpm="${keep_rpm# }"
+
+            if [[ -z "${keep_apt}${keep_rpm}" ]]; then
+                gate_fail "Every configured target is unreachable." \
+                    "There is nothing to mirror until the proxy is opened." \
+                    "Re-run this script once it is."
+            fi
+
+            info "Reachable now:"
+            [[ -n "$keep_apt" ]] && info "  APT: ${keep_apt}"
+            [[ -n "$keep_rpm" ]] && info "  RPM: ${keep_rpm}"
+            info ""
+            if confirm "Continue with only the reachable targets?"; then
+                APT_TARGETS="$keep_apt"
+                RPM_TARGETS="$keep_rpm"
+                ok "proceeding with:${APT_TARGETS:+ APT=${APT_TARGETS}}${RPM_TARGETS:+ RPM=${RPM_TARGETS}}"
+                info "Add the rest later with:"
+                info "  sudo mirroretctl config edit    # extend the TARGETS lines"
+                info "  sudo mirroretctl upgrade && sudo mirroretctl sync apt"
+            else
+                gate_fail "Stopped at your request." \
+                    "Open the proxy for the hosts above, then re-run." \
+                    "Or re-run now naming only the reachable targets:" \
+                    "  --apt-targets \"${keep_apt}\" --rpm-targets \"${keep_rpm}\""
+            fi
+        else
+            ok "every URL your targets need is reachable"
         fi
-        ok "every required upstream is reachable"
     fi
 }
 

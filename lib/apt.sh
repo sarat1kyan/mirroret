@@ -724,13 +724,19 @@ LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-apt-\$(date +%Y%m%d-%H%M%S).log"
 LOCK_FILE="/var/lock/mirroret-sync-apt.lock"
 mkdir -p "\$LOG_DIR"
-exec > >(tee -a "\$LOG_FILE") 2>&1
 
+# The lock is taken BEFORE stdout is redirected into the log. Redirecting
+# first sends "another sync is already running" to the log file only, so an
+# operator who starts a sync while the nightly cron run is in progress sees
+# the command exit with no output at all.
 exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
 if ! flock -n 9; then
-    echo "ERROR: another APT sync is already running (lock: \$LOCK_FILE). Exiting."
+    echo "ERROR: another APT sync is already running (lock: \$LOCK_FILE)."
+    echo "       Nothing was started. Watch the running one with:"
+    echo "         mirroretctl logs tail"
     exit 3
 fi
+exec > >(tee -a "\$LOG_FILE") 2>&1
 # Kill the whole process group on cancellation so no download thread keeps
 # writing into the tree after the lock is released.
 trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
