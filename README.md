@@ -17,7 +17,9 @@ MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
 MIRRORET_RPM_TARGETS="ol:9 rocky:9 epel:9"
 ```
 
-See [docs/MULTI-DISTRO.md](docs/MULTI-DISTRO.md) for the full model.
+New here? [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) walks the whole
+thing end to end. [docs/MULTI-DISTRO.md](docs/MULTI-DISTRO.md) is the full
+model behind the two lines above.
 
 APT and RPM mirroring are done by two self-contained Python 3 engines
 (`engines/`) that need only the standard library — no `apt-mirror`,
@@ -328,6 +330,7 @@ make dry-run # run install.sh --dry-run
 
 | Document | Contents |
 |----------|---------|
+| [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | **Start here** - install, configure targets, first sync, point clients at it, day-to-day commands. Every step has a check. |
 | [docs/MULTI-DISTRO.md](docs/MULTI-DISTRO.md) | **Mirroring several distributions from one server** - target syntax, upstream catalog, client URLs, disk sizing, what the engines guarantee |
 | [docs/NETWORK_ACCESS.md](docs/NETWORK_ACCESS.md) | **Firewall rules** - inbound ports for clients, outbound ports for sync, firewall commands for ufw/firewalld/iptables |
 | [docs/PROXY_AND_CA.md](docs/PROXY_AND_CA.md) | HTTP/HTTPS proxy setup and corporate TLS-inspection CA trust (sudo, apt/dnf, pip, npm, docker, podman, systemd, cron) |

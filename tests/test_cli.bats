@@ -221,18 +221,40 @@ EOF
 
 # ------------------------------------------------------------- config diff ----
 
-@test "cli: config diff reports generated script values" {
-    cat > "${FAKE_BASE}/scripts/sync-redhat-repos.sh" <<'EOF'
-#!/usr/bin/env bash
-FLAVOR="ol"
-ARCH="x86_64"
-NEWEST_ONLY="1"
-INCLUDE_SOURCE="0"
-REPOS=(ol9_baseos_latest)
-EOF
+@test "cli: config diff lists the sync scripts that are present" {
+    # config diff used to grep FLAVOR=/ARCH= out of the legacy
+    # sync-redhat-repos.sh. That told you nothing on a native install (which
+    # has no such file) and nothing about APT ever. It now reports the live
+    # generated state instead.
+    printf '#!/usr/bin/env bash\nFLAVOR="ol"\n' \
+        > "${FAKE_BASE}/scripts/sync-redhat-repos.sh"
+    chmod +x "${FAKE_BASE}/scripts/sync-redhat-repos.sh"
     run bash "${CTL}" config diff
     [ "$status" -eq 0 ]
-    [[ "$output" == *'FLAVOR="ol"'* ]]
+    [[ "$output" == *"sync-redhat-repos.sh"* ]]
+    [[ "$output" == *"Targets: requested vs generated"* ]]
+}
+
+@test "cli: config diff flags a sync script that is not executable" {
+    # A zip transfer does not preserve the execute bit, so every script is
+    # present and cron silently runs none of them. This project's own
+    # runbook documents that failure; the diagnostic has to catch it.
+    printf '#!/usr/bin/env bash\ntrue\n' \
+        > "${FAKE_BASE}/scripts/sync-rpm-repos.sh"
+    chmod -x "${FAKE_BASE}/scripts/sync-rpm-repos.sh"
+    run bash "${CTL}" config diff
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"NOT EXECUTABLE"* ]]
+    [[ "$output" == *"chmod +x"* ]]
+    # And it must not claim the file is absent.
+    ! [[ "$output" == *"no generated sync scripts at all"* ]]
+}
+
+@test "cli: config diff says so when there are no sync scripts at all" {
+    run bash "${CTL}" config diff
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no generated sync scripts at all"* ]]
+    [[ "$output" == *"mirroretctl upgrade"* ]]
 }
 
 # ================= service binary resolution (203/EXEC bug) =================
@@ -507,7 +529,11 @@ EOF
 @test "cli: client simulate is listed in help and the menu" {
     run bash "${CTL}" help
     [[ "$output" == *"client simulate"* ]]
-    grep -qE '^ +17\) +cmd_client simulate' "${CTL}"
+    # Match the dispatch, not a hardcoded menu number: pinning the number
+    # means every menu addition breaks this test for no reason. The
+    # menu-to-branch mapping has its own dedicated test.
+    grep -qE '^ +[0-9]+\) +cmd_client simulate' "${CTL}"
+    grep -qE '^ +[0-9]+\) client simulate' "${CTL}"
 }
 
 @test "cli: client simulate probes i686 by default" {

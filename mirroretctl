@@ -24,9 +24,13 @@ source "${SCRIPT_DIR}/lib/distro.sh"
 source "${SCRIPT_DIR}/lib/approval.sh"
 
 # Load operator config so paths/ports match the running install.
-if [[ -f /etc/mirroret/mirroret.conf ]]; then
-    # shellcheck disable=SC1091
-    . /etc/mirroret/mirroret.conf
+# MIRRORET_CONF lets you point at a different file - useful for inspecting a
+# staged config before applying it, and it is what makes `config diff`
+# testable.
+MIRRORET_CONF="${MIRRORET_CONF:-/etc/mirroret/mirroret.conf}"
+if [[ -f "${MIRRORET_CONF}" ]]; then
+    # shellcheck disable=SC1090,SC1091
+    . "${MIRRORET_CONF}"
 fi
 
 BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
@@ -865,7 +869,7 @@ cmd_collect() {
 
 cmd_config() {
     local what="${1:-show}"
-    local conf="/etc/mirroret/mirroret.conf"
+    local conf="${MIRRORET_CONF}"
     case "$what" in
         show)
             if [[ ! -f "$conf" ]]; then
@@ -886,23 +890,144 @@ cmd_config() {
             printf '%s\n' "$conf"
             ;;
         diff)
-            # Show where the running generated scripts disagree with the conf.
-            _h "Config vs generated scripts"
-            local s="${SCRIPTS_DIR}/sync-redhat-repos.sh"
-            if [[ -f "$s" ]]; then
-                _in "sync-redhat-repos.sh:"
-                grep -E '^(FLAVOR|ARCH|NEWEST_ONLY|INCLUDE_SOURCE|DELETE_REMOVED|MIN_FREE_GB|REPOS)=' "$s" \
-                    | sed 's/^/        /'
-                _in "conf:"
-                grep -E '^MIRRORET_RPM_(FLAVOR|ARCH|NEWEST_ONLY|SOURCE|DELETE|REPOS)|^MIRRORET_SYNC_MIN_FREE_GB' \
-                    "$conf" 2>/dev/null | sed 's/^/        /' || _in "        (none set)"
-                _in "If these disagree, run: sudo mirroretctl upgrade"
-            else
-                _wa "no generated RPM sync script"
-            fi
+            # Show where what is RUNNING disagrees with what the conf asks
+            # for. The generated target specs are the source of truth for
+            # what actually syncs, so compare against those rather than
+            # grepping one legacy script.
+            _cli_config_diff "$conf"
             ;;
         *) _er "Usage: mirroretctl config {show|edit|path|diff}"; return 1 ;;
     esac
+}
+
+# _cli_config_diff <conf> - conf settings vs the live generated state.
+_cli_config_diff() {
+    local conf="$1"
+    local rc=0
+
+    _h "Targets: requested vs generated"
+    local want_apt want_rpm
+    want_apt="$(_conf_val "$conf" MIRRORET_APT_TARGETS)"
+    want_rpm="$(_conf_val "$conf" MIRRORET_RPM_TARGETS)"
+    _in "conf MIRRORET_APT_TARGETS = ${want_apt:-(unset - derived from this host)}"
+    _in "conf MIRRORET_RPM_TARGETS = ${want_rpm:-(unset - derived from this host)}"
+
+    local have_apt="" have_rpm="" spec
+    for spec in "${TARGETS_DIR}"/apt-*.json; do
+        [[ -f "$spec" ]] && have_apt+=" $(mirroret_json_field "$spec" id)"
+    done
+    for spec in "${TARGETS_DIR}"/rpm-*.json; do
+        [[ -f "$spec" ]] && have_rpm+=" $(mirroret_json_field "$spec" id)"
+    done
+    _in "generated APT specs =${have_apt:- (none)}"
+    _in "generated RPM specs =${have_rpm:- (none)}"
+
+    # A target named in the conf with no spec means upgrade was never run.
+    local t flavor release want_id missing=""
+    for t in ${want_apt}; do
+        flavor="${t%%:*}"; release="${t#*:}"; release="${release%%:*}"
+        [[ "$flavor" == "$t" ]] && continue
+        if [[ " ${have_apt} " != *"${flavor%%-*}"* ]] && \
+           [[ " ${have_apt} " != *"${flavor}"* ]]; then
+            missing+=" ${t}"
+        fi
+    done
+    for t in ${want_rpm}; do
+        flavor="${t%%:*}"; release="${t#*:}"; release="${release%%:*}"
+        [[ "$flavor" == "$t" ]] && continue
+        want_id="${flavor}${release}"
+        [[ " ${have_rpm} " == *" ${want_id} "* ]] || missing+=" ${t}"
+    done
+    if [[ -n "${missing}" ]]; then
+        _er "requested but NOT generated:${missing}"
+        _in "  Run: sudo mirroretctl upgrade"
+        rc=1
+    else
+        _ok "every requested target has a generated spec"
+    fi
+
+    _h "Sync scripts present"
+    local sc found=0 notexec=""
+    for sc in sync-apt-repos.sh sync-rpm-repos.sh sync-apt-debmirror.sh \
+              sync-redhat-repos.sh sync-pip-packages.sh sync-npm-packages.sh \
+              sync-docker-images.sh sync-all.sh; do
+        [[ -f "${SCRIPTS_DIR}/${sc}" ]] || continue
+        found=1
+        # Present but not executable is its own failure, and a common one:
+        # a zip transfer does not preserve the execute bit, so the scripts
+        # are all there and cron silently runs none of them.
+        if [[ -x "${SCRIPTS_DIR}/${sc}" ]]; then
+            _in "${sc}"
+        else
+            _in "${sc}  (NOT EXECUTABLE)"
+            notexec+=" ${sc}"
+        fi
+    done
+    if [[ "$found" -eq 0 ]]; then
+        _er "no generated sync scripts at all"
+        _in "  Run: sudo mirroretctl upgrade"
+        rc=1
+    fi
+    if [[ -n "${notexec}" ]]; then
+        _er "present but not executable:${notexec}"
+        _in "  cron runs none of these. A zip transfer drops the execute bit."
+        _in "  Fix: sudo chmod +x ${SCRIPTS_DIR}/*.sh"
+        rc=1
+    fi
+
+    # An APT/RPM target with no matching sync script cannot ever run.
+    if [[ -n "${have_apt}" ]] && [[ ! -f "${SCRIPTS_DIR}/sync-apt-repos.sh" ]] \
+       && [[ ! -f "${SCRIPTS_DIR}/sync-apt-debmirror.sh" ]]; then
+        _er "APT targets exist but there is no APT sync script"
+        _in "  Run: sudo mirroretctl upgrade"
+        rc=1
+    fi
+    if [[ -n "${have_rpm}" ]] && [[ ! -f "${SCRIPTS_DIR}/sync-rpm-repos.sh" ]] \
+       && [[ ! -f "${SCRIPTS_DIR}/sync-redhat-repos.sh" ]]; then
+        _er "RPM targets exist but there is no RPM sync script"
+        _in "  Run: sudo mirroretctl upgrade"
+        rc=1
+    fi
+
+    _h "Sync knobs: conf vs generated specs"
+    local key spec_val
+    for spec in "${TARGETS_DIR}"/rpm-*.json; do
+        [[ -f "$spec" ]] || continue
+        _in "$(basename "$spec"):"
+        for key in arches newest_only sources delete min_free_gb; do
+            spec_val="$(mirroret_json_field "$spec" "$key")"
+            printf '        %-14s %s\n' "${key}" "${spec_val}"
+        done
+    done
+    for spec in "${TARGETS_DIR}"/apt-*.json; do
+        [[ -f "$spec" ]] || continue
+        _in "$(basename "$spec"):"
+        for key in arches components sources delete min_free_gb; do
+            spec_val="$(mirroret_json_field "$spec" "$key")"
+            printf '        %-14s %s\n' "${key}" "${spec_val}"
+        done
+    done
+
+    _h "Conf values that feed those specs"
+    if [[ -f "$conf" ]]; then
+        grep -E '^MIRRORET_(APT|RPM)_(TARGETS|REPOS|ARCH|COMPONENTS|NEWEST_ONLY|SOURCE|DELETE|ENGINE|MIRROR_TOOL|SCHEME)|^MIRRORET_SYNC_' \
+            "$conf" | sed 's/^/        /' || _in "        (none set - all defaults)"
+    else
+        _wa "${conf} does not exist; every setting is a built-in default"
+    fi
+    _in ""
+    _in "If a spec disagrees with the conf, the conf was edited after the last"
+    _in "upgrade. Apply it with: sudo mirroretctl upgrade"
+    return "$rc"
+}
+
+# _conf_val <conf> <key> - value of a shell assignment in the conf file.
+_conf_val() {
+    local conf="$1" key="$2"
+    [[ -f "$conf" ]] || { printf '%s' "${!key:-}"; return 0; }
+    local v
+    v="$(bash -c "set +u; source '${conf}' >/dev/null 2>&1; printf '%s' \"\${${key}:-}\"" 2>/dev/null)"
+    printf '%s' "${v:-${!key:-}}"
 }
 
 # -------------------------------------------------------------------- menu ----
@@ -914,21 +1039,24 @@ cmd_menu() {
    1) status            show services, ports, disk, last sync
    2) doctor            full read-only diagnostic
    3) sync all          run every sync now
-   4) sync status       what is running / locks
-   5) sync stop         stop running syncs
-   6) clean report      retention dry run
-   7) clean prune       retention delete
-   8) serve             probe HTTP endpoints
-   9) client verify     check generated client configs
-  10) logs errors       failures in recent logs
-  11) logs tail         follow newest sync log
-  12) config show       active settings
-  13) config edit       edit and then upgrade
-  14) upgrade           re-apply config, regenerate scripts
-  15) check             validate installation
-  16) report            write one shareable txt report
-  17) client simulate   prove a client can install from this mirror
-  18) targets           what this server mirrors, and whether it synced
+   4) sync apt          Ubuntu / Debian only
+   5) sync rpm          Oracle / Rocky / Alma / CentOS / EPEL only
+   6) sync status       what is running / locks
+   7) sync stop         stop running syncs
+   8) clean report      retention dry run
+   9) clean prune       retention delete
+  10) serve             probe HTTP endpoints
+  11) client verify     check generated client configs
+  12) client simulate   prove a client can install from this mirror
+  13) logs errors       failures in recent logs
+  14) logs tail         follow newest sync log
+  15) config show       active settings
+  16) config diff       config vs what is actually generated
+  17) config edit       edit and then upgrade
+  18) upgrade           re-apply config, regenerate scripts
+  19) check             validate installation
+  20) report            write one shareable txt report
+  21) targets           what this server mirrors, and whether it synced
    q) quit
 MENU
         printf "select> "
@@ -938,21 +1066,24 @@ MENU
             1)  cmd_status ;;
             2)  cmd_doctor ;;
             3)  cmd_sync all ;;
-            4)  cmd_sync_status ;;
-            5)  cmd_sync_stop ;;
-            6)  cmd_clean report ;;
-            7)  cmd_clean prune ;;
-            8)  cmd_serve ;;
-            9)  cmd_client verify ;;
-            10) cmd_logs errors ;;
-            11) cmd_logs tail ;;
-            12) cmd_config show ;;
-            13) cmd_config edit ;;
-            14) cmd_upgrade ;;
-            15) cmd_check ;;
-            16) cmd_collect ;;
-            17) cmd_client simulate ;;
-            18) cmd_targets list ;;
+            4)  cmd_sync apt ;;
+            5)  cmd_sync rpm ;;
+            6)  cmd_sync_status ;;
+            7)  cmd_sync_stop ;;
+            8)  cmd_clean report ;;
+            9)  cmd_clean prune ;;
+            10) cmd_serve ;;
+            11) cmd_client verify ;;
+            12) cmd_client simulate ;;
+            13) cmd_logs errors ;;
+            14) cmd_logs tail ;;
+            15) cmd_config show ;;
+            16) cmd_config diff ;;
+            17) cmd_config edit ;;
+            18) cmd_upgrade ;;
+            19) cmd_check ;;
+            20) cmd_collect ;;
+            21) cmd_targets list ;;
             q|Q|quit|exit) return 0 ;;
             "") ;;
             *)  _er "unknown selection: ${choice}" ;;
@@ -1096,6 +1227,11 @@ Examples:
 
 Approval mode (MIRRORET_APPROVAL_ENABLED=1) stages downloads instead of
 serving them. Nothing reaches a client until you approve it.
+
+Environment:
+  MIRRORET_CONF   config file to read (default /etc/mirroret/mirroret.conf).
+                  Handy for checking a staged config before applying it:
+                    MIRRORET_CONF=/tmp/new.conf mirroretctl config diff
 USAGE
 }
 

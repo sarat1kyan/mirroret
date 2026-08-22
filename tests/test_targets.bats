@@ -538,3 +538,104 @@ PY
     [[ "$output" == *"legacy mirroring tool"* ]]
     [[ "$output" == *"legacy reposync path"* ]]
 }
+
+@test "cli: config diff sees the native sync scripts and specs" {
+    # Regression: config diff only ever grepped the legacy
+    # sync-redhat-repos.sh, so on a native install it reported
+    # "no generated RPM sync script" while the mirror was working fine -
+    # and it said nothing at all about APT.
+    MIRRORET_APT_TARGETS="ubuntu:jammy"
+    MIRRORET_RPM_TARGETS="rocky:9"
+    generate_target_specs
+    configure_apt_mirror "bk"
+    configure_rpm_mirroring "bk"
+
+    run env MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR}" \
+        MIRRORET_TARGETS_DIR="${MIRRORET_TARGETS_DIR}" \
+        bash "${SCRIPT_DIR}/mirroretctl" config diff
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"sync-apt-repos.sh"* ]]
+    [[ "$output" == *"sync-rpm-repos.sh"* ]]
+    [[ "$output" == *"generated APT specs"*"ubuntu-jammy"* ]]
+    [[ "$output" == *"generated RPM specs"*"rocky9"* ]]
+    ! [[ "$output" == *"no generated RPM sync script"* ]]
+}
+
+@test "cli: config diff flags a target that was never applied" {
+    # The conf asks for a target but upgrade was never run, so nothing syncs
+    # it. That must be a visible error, not silence.
+    MIRRORET_APT_TARGETS="ubuntu:jammy"
+    MIRRORET_RPM_TARGETS="rocky:9"
+    generate_target_specs
+    configure_apt_mirror "bk"
+    configure_rpm_mirroring "bk"
+
+    local conf="${TMPDIR_TEST}/mirroret.conf"
+    cat > "$conf" <<CONF
+MIRRORET_APT_TARGETS="ubuntu:jammy debian:bookworm"
+MIRRORET_RPM_TARGETS="rocky:9 ol:9"
+CONF
+
+    run env MIRRORET_CONF="$conf" \
+        MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR}" \
+        MIRRORET_TARGETS_DIR="${MIRRORET_TARGETS_DIR}" \
+        bash "${SCRIPT_DIR}/mirroretctl" config diff
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"requested but NOT generated"* ]]
+    [[ "$output" == *"ol:9"* ]]
+    [[ "$output" == *"mirroretctl upgrade"* ]]
+}
+
+@test "cli: config diff is clean when the conf matches what is generated" {
+    MIRRORET_APT_TARGETS="ubuntu:jammy"
+    MIRRORET_RPM_TARGETS="rocky:9"
+    generate_target_specs
+    configure_apt_mirror "bk"
+    configure_rpm_mirroring "bk"
+
+    local conf="${TMPDIR_TEST}/mirroret.conf"
+    cat > "$conf" <<CONF
+MIRRORET_APT_TARGETS="ubuntu:jammy"
+MIRRORET_RPM_TARGETS="rocky:9"
+CONF
+
+    run env MIRRORET_CONF="$conf" \
+        MIRRORET_BASE_DIR="${MIRRORET_BASE_DIR}" \
+        MIRRORET_TARGETS_DIR="${MIRRORET_TARGETS_DIR}" \
+        bash "${SCRIPT_DIR}/mirroretctl" config diff
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"every requested target has a generated spec"* ]]
+    ! [[ "$output" == *"requested but NOT generated"* ]]
+}
+
+@test "cli: every interactive menu entry maps to a dispatcher branch" {
+    # Renumbering the menu without renumbering the case block silently
+    # rewires options - e.g. picking "sync stop" running a retention prune.
+    run python3 - "${SCRIPT_DIR}/mirroretctl" <<'PYEOF'
+import re
+import sys
+
+src = open(sys.argv[1]).read()
+start = src.index("cat <<'MENU'")
+menu_text = src[start:src.index("MENU\n", start)]
+menu = set(re.findall(r"^\s*(\d+)\)", menu_text, re.M))
+
+cstart = src.index('case "$choice" in')
+case_text = src[cstart:src.index("esac", cstart)]
+cases = set(re.findall(r"^\s*(\d+)\)", case_text, re.M))
+
+assert menu, "no menu entries found"
+assert menu == cases, "menu %s vs cases %s" % (
+    sorted(menu - cases, key=int), sorted(cases - menu, key=int))
+print("%d menu entries, all mapped" % len(menu))
+PYEOF
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all mapped"* ]]
+}
+
+@test "cli: the menu offers per-ecosystem syncs, not just sync all" {
+    grep -q 'sync apt' "${SCRIPT_DIR}/mirroretctl"
+    grep -q 'sync rpm' "${SCRIPT_DIR}/mirroretctl"
+    run bash "${SCRIPT_DIR}/mirroretctl" help
+    [[ "$output" == *"sync all|apt|rpm|pip|npm|docker"* ]]
+}
