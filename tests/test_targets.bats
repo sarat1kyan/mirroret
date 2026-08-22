@@ -1003,3 +1003,19 @@ PYEOF
     # And when nothing at all is reachable it must stop, not proceed empty.
     grep -q 'Every configured target is unreachable' "$src"
 }
+
+@test "setup server: warns before a long sync on a bare SSH session" {
+    # The sync scripts trap INT and TERM but not HUP, so a dropped SSH
+    # connection takes a multi-hour download with it. Losing that to a
+    # flaky VPN is avoidable if we say so first.
+    grep -q 'SSH_CONNECTION' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    grep -q 'not inside screen or tmux' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    # And it must not warn when already inside a multiplexer.
+    grep -q 'STY:-}${TMUX:-}' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    # The suggestion must include the skip-sync escape hatch.
+    local section
+    section="$(sed -n '/not inside screen or tmux/,/Start the first sync/p' \
+               "${SCRIPT_DIR}/scripts/setup-mirror-server.sh")"
+    [[ "$section" == *"--skip-sync"* ]]
+    [[ "$section" == *"tmux new"* ]]
+}

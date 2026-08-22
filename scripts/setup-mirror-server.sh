@@ -668,6 +668,26 @@ phase_sync() {
     say ""
     info "This downloads real package data and can take hours."
     info "Progress: tail -f ${LOG}   or   mirroretctl logs tail"
+
+    # A multi-hour sync in the foreground of an SSH session dies the moment
+    # that connection drops: the sync scripts trap INT and TERM but not HUP,
+    # so SIGHUP takes the whole process group with it. Losing three hours of
+    # downloading to a dropped VPN is avoidable, so say so before starting.
+    if [[ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ]] \
+       && [[ -z "${STY:-}${TMUX:-}" ]]; then
+        say ""
+        warn "You are on an SSH session and not inside screen or tmux."
+        info "If this connection drops, the sync dies partway through."
+        info "Safer:"
+        info "  tmux new -s mirroret     # or: screen -S mirroret"
+        info "  <re-run this command inside it>"
+        info "Or run the sync detached, later:"
+        info "  sudo nohup ${SCRIPT_DIR}/../mirroretctl sync all >/dev/null 2>&1 &"
+        info "Or skip it here and let tonight's cron run do it:"
+        info "  re-run this script with --skip-sync"
+        say ""
+    fi
+
     confirm "Start the first sync now?" || {
         say ""
         info "Skipped. When ready: sudo mirroretctl sync rpm && sudo mirroretctl sync apt"
