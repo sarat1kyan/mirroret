@@ -8,6 +8,52 @@ Assumes the mirror server is `192.168.30.110`. Substitute yours.
 
 ---
 
+## The short way: two scripts
+
+If you would rather not run the steps by hand, the repository ships the whole
+sequence as two scripts. They do exactly what sections 1-7 below describe,
+with a gate after every phase: a failed gate stops and prints the specific
+fix rather than carrying on.
+
+**On the mirror server**, after getting the code (section 1):
+
+```bash
+sudo ./scripts/setup-mirror-server.sh \
+    --apt-targets "ubuntu:jammy ubuntu:noble debian:bookworm" \
+    --rpm-targets "ol:9" \
+    --components "main restricted" \
+    --proxy http://192.168.30.243:3128 \
+    --yes
+```
+
+Add `--dry-run` first to see the whole plan without changing anything. It
+predicts the real run, including which upstreams your targets need and
+whether the proxy is blocking them. `--help` lists every option.
+
+**On each client**, fetched from the mirror itself:
+
+```bash
+curl -fsSL -o /tmp/setup-mirror-client.sh \
+    http://192.168.30.110:8080/config/setup-mirror-client.sh
+sudo bash /tmp/setup-mirror-client.sh --server 192.168.30.110
+```
+
+That detects the distro, installs the matching config, disables the upstream
+repos and then proves the result by downloading a package the mirror
+actually carries. Everything it disables is backed up first:
+
+```bash
+sudo bash /tmp/setup-mirror-client.sh --rollback
+```
+
+puts the machine back exactly as it was.
+
+The rest of this document is the same sequence done by hand, which is worth
+reading once so you know what the scripts are doing and what each check
+means.
+
+---
+
 ## 0. What you are about to configure
 
 Two lines decide everything:

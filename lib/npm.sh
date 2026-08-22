@@ -260,9 +260,18 @@ _write_verdaccio_unit() {
     # (on RHEL with the nodejs module it lands in /usr/local/bin), so the
     # old `|| echo /usr/bin/verdaccio` fallback wrote a path that does not
     # exist and the unit failed with status=203/EXEC on every restart.
+    # `|| true` is required: _resolve_verdaccio_bin returns 1 when it finds
+    # nothing, and under `set -e` with an ERR trap that aborts the script
+    # from inside the assignment, before the empty-check can report anything
+    # useful. See the same note in lib/pip.sh.
     local verdaccio_bin=""
-    verdaccio_bin="$(_resolve_verdaccio_bin)"
+    verdaccio_bin="$(_resolve_verdaccio_bin || true)"
     if [[ -z "${verdaccio_bin}" ]]; then
+        if [[ "${DRY_RUN}" == "1" ]]; then
+            info "[DRY-RUN] verdaccio is not installed yet; a real run would"
+            info "          install it and use its path in the systemd unit."
+            return 0
+        fi
         die "Cannot locate the verdaccio binary. Install it with: npm install -g verdaccio"
     fi
     info "Verdaccio binary: ${verdaccio_bin}"

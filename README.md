@@ -48,7 +48,15 @@ verified, so an interrupted sync never leaves clients resolving packages that
 git clone https://github.com/sarat1kyan/mirroret.git
 cd mirroret
 
-# Decide what your CLIENTS run - not what this server runs:
+# The whole bring-up - preflight, config, install, firewall, sync, verify -
+# with a gate after every phase. Add --dry-run to see the plan first.
+sudo ./scripts/setup-mirror-server.sh \
+    --apt-targets "ubuntu:jammy ubuntu:noble debian:bookworm" \
+    --rpm-targets "ol:9 rocky:9 epel:9" \
+    --yes
+
+# ...or drive install.sh yourself. Either way, what you name here is what
+# your CLIENTS run, not what this server runs:
 sudo ./install.sh \
     --apt-targets "ubuntu:jammy ubuntu:noble debian:bookworm" \
     --rpm-targets "ol:9 rocky:9 epel:9"
@@ -118,7 +126,13 @@ sudo ./install.sh --check
 mirroretctl targets            # every target should now report "published"
 mirroretctl client simulate    # resolve AND download as a client would
 
-# 5. Distribute client configs (one per target):
+# 5. Point the clients at it. On each client:
+curl -fsSL -o /tmp/setup-mirror-client.sh \
+    http://SERVER:8080/config/setup-mirror-client.sh
+sudo bash /tmp/setup-mirror-client.sh --server SERVER
+#    (--rollback puts the machine back exactly as it was)
+
+#    ...or hand out the configs yourself, one per target:
 ls /srv/mirroret/config/
 ```
 
@@ -360,6 +374,11 @@ make dry-run # run install.sh --dry-run
 mirroret/
 +-- install.sh Main installer entry point
 +-- Makefile lint / test / format / check-deps targets
++-- scripts/
+| +-- setup-mirror-server.sh  Gated one-shot server bring-up
+| +-- setup-mirror-client.sh  Point a client at the mirror (with --rollback)
+| +-- mirroret-debug.sh       Read-only diagnostic
+| +-- mirroret-collect.sh     One shareable report file
 +-- config/
 | +-- mirroret.conf.example Documented config file template
 +-- engines/

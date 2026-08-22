@@ -639,3 +639,139 @@ PYEOF
     run bash "${SCRIPT_DIR}/mirroretctl" help
     [[ "$output" == *"sync all|apt|rpm|pip|npm|docker"* ]]
 }
+
+# -- setup scripts ------------------------------------------------------------
+
+@test "setup scripts: both parse and lint clean" {
+    bash -n "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    bash -n "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    [ -x "${SCRIPT_DIR}/scripts/setup-mirror-server.sh" ]
+    [ -x "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" ]
+}
+
+@test "setup scripts: --help works and does not leak code into the text" {
+    # A hardcoded sed line-range used to print 'set -Eeuo pipefail' as if it
+    # were documentation the moment the header grew by a line.
+    local s
+    for s in setup-mirror-server.sh setup-mirror-client.sh; do
+        run bash "${SCRIPT_DIR}/scripts/${s}" --help
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Options:"* ]]
+        ! [[ "$output" == *"set -Eeuo pipefail"* ]]
+        ! [[ "$output" == *'"${BASH_SOURCE'* ]]
+    done
+}
+
+@test "setup server: refuses to run with no targets given" {
+    # Guessing what to mirror from the server's own OS is the bug this whole
+    # rewrite removed. The setup script must not reintroduce it.
+    run env bash "${SCRIPT_DIR}/scripts/setup-mirror-server.sh" --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No mirror targets given"* ]]
+}
+
+@test "setup server: rejects an unknown flavor before doing any work" {
+    run env bash "${SCRIPT_DIR}/scripts/setup-mirror-server.sh" \
+        --apt-targets "windows:11" --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Unrecognised target"* ]]
+    [[ "$output" == *"ubuntu ubuntu-ports debian"* ]]
+}
+
+@test "setup server: rejects a target with no release" {
+    run env bash "${SCRIPT_DIR}/scripts/setup-mirror-server.sh" \
+        --rpm-targets "rocky" --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no release"* ]]
+}
+
+@test "setup client: requires --server" {
+    run env bash "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--server is required"* ]]
+}
+
+@test "setup client: an unreachable server is diagnosed, not retried forever" {
+    # Port 1 is reserved and nothing listens there.
+    run env bash "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" \
+        --server 127.0.0.1:1 --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Cannot reach"* ]]
+    # The message must name the actual checks to run.
+    [[ "$output" == *"mirroretctl serve"* ]]
+    [[ "$output" == *"no_proxy"* ]]
+}
+
+@test "setup client: rollback with no backup says so instead of failing oddly" {
+    run env MIRRORET_CLIENT_BACKUP_ROOT="${BATS_TEST_TMPDIR}/nope" \
+        bash -c "sed 's|^BACKUP_ROOT=.*|BACKUP_ROOT=\"${BATS_TEST_TMPDIR}/nope\"|' \
+                 '${SCRIPT_DIR}/scripts/setup-mirror-client.sh' > '${BATS_TEST_TMPDIR}/c.sh'
+                 bash '${BATS_TEST_TMPDIR}/c.sh' --rollback --yes"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"No backup found"* ]]
+}
+
+@test "setup client: the download test pins the mirror's own version" {
+    # Testing with a bare package name lets apt satisfy the request from the
+    # installed copy, so the test passes while nothing came from the mirror.
+    grep -q 'print p "=" \$2' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    grep -q "pinned to the mirror's own version" \
+        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+}
+
+@test "setup client: verifies the config points at the given host AND port" {
+    # Matching only the host lets a stale MIRRORET_SERVER_IP through, and the
+    # client then fails with a bare 'connection refused' that looks like a
+    # network fault rather than a server misconfiguration.
+    grep -q 'https\?://\${SERVER}:\${WEB_PORT}' \
+        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+}
+
+@test "install: publishes the client bootstrap script for clients to fetch" {
+    grep -q 'setup-mirror-client.sh' "${SCRIPT_DIR}/install.sh"
+    section="$(awk '/^generate_all_client_configs/,/^}/' "${SCRIPT_DIR}/install.sh")"
+    [[ "$section" == *'setup-mirror-client.sh'* ]]
+}
+
+@test "setup scripts: a failed curl probe is never '|| echo 000'" {
+    # `|| echo 000` APPENDS to the value curl already printed via -w, so a
+    # failed request yields "000\n000" - which is not equal to "000". Every
+    # reachability gate then silently passed, including the one whose entire
+    # purpose is to catch a proxy-blocked upstream.
+    ! grep -q 'echo 000' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    ! grep -q 'echo 000' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    # And the comparisons must treat an empty value as unreachable too.
+    grep -q '\-z "\$code" || "\$code" == "000"' \
+        "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    grep -q '\-z "\$code" || "\$code" == "000"' \
+        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+}
+
+@test "setup server: a blocked upstream stops the run" {
+    # Pointing the proxy at a dead port makes every probe fail, which is
+    # exactly what a restrictive corporate proxy looks like.
+    run env bash "${SCRIPT_DIR}/scripts/setup-mirror-server.sh" \
+        --apt-targets "debian:bookworm" --proxy http://127.0.0.1:1 \
+        --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BLOCKED"* ]]
+    [[ "$output" == *"proxy is blocking upstream"* ]]
+    # And it must name the trap that costs people their security updates.
+    [[ "$output" == *"security.ubuntu.com is separate"* ]]
+}
+
+@test "setup server: only probes upstreams the chosen targets need" {
+    # A Debian-only mirror must not be told Oracle is unreachable.
+    run env bash "${SCRIPT_DIR}/scripts/setup-mirror-server.sh" \
+        --apt-targets "debian:bookworm" --proxy http://127.0.0.1:1 \
+        --dry-run --yes
+    # Scope to the probe list: the STOP advice text legitimately mentions
+    # archive.ubuntu.com when explaining the security-host trap.
+    local probes
+    probes="$(printf '%s\n' "$output" \
+              | sed -n '/Probing the upstreams/,/STOP/p' \
+              | grep -E 'BLOCKED|[0-9]{3}$' || true)"
+    [[ "$probes" == *"deb.debian.org"* ]]
+    ! [[ "$probes" == *"yum.oracle.com"* ]]
+    ! [[ "$probes" == *"archive.ubuntu.com"* ]]
+}

@@ -975,6 +975,20 @@ generate_all_client_configs() {
     [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && \
         generate_npm_client_config "${config_dir}/.npmrc"
 
+    # Publish the client bootstrap script alongside the configs, so an admin
+    # on a client machine can fetch it from the mirror itself rather than
+    # having to copy the repository around:
+    #   curl -fsSL -o /tmp/s.sh http://SERVER:8080/config/setup-mirror-client.sh
+    if [[ -f "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" ]]; then
+        if [[ "${DRY_RUN}" == "1" ]]; then
+            info "[DRY-RUN] would publish setup-mirror-client.sh to ${config_dir}/"
+        else
+            install -m 0755 "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" \
+                "${config_dir}/setup-mirror-client.sh"
+            info "  ${config_dir}/setup-mirror-client.sh (client bootstrap)"
+        fi
+    fi
+
     success "Client configs written to ${config_dir}/"
 }
 

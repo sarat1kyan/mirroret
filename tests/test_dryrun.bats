@@ -88,3 +88,37 @@ teardown() {
     [[ "$output" == *"RPM targets: ol9"* ]]
     [[ "$output" == *"target: ubuntu-jammy -> ${base}/apt/ubuntu"* ]]
 }
+
+@test "dry-run: survives on a host with no pypiserver or verdaccio installed" {
+    # Regression: _resolve_pypiserver_bin / _resolve_verdaccio_bin return 1
+    # when they find nothing, and under `set -e` with an ERR trap that
+    # aborted install.sh from inside the assignment - before the empty-check
+    # could report anything. So `--dry-run` died on any host that did not
+    # already have those binaries, i.e. every fresh server, which is exactly
+    # where a dry run matters most.
+    #
+    # Assert the `|| true` guard is present in both resolvers' call sites.
+    grep -q 'pypi_bin="$(_resolve_pypiserver_bin || true)"' "${SCRIPT_DIR}/lib/pip.sh"
+    grep -q 'verdaccio_bin="$(_resolve_verdaccio_bin || true)"' "${SCRIPT_DIR}/lib/npm.sh"
+}
+
+@test "dry-run: a missing service binary is reported, not fatal, under DRY_RUN" {
+    # DRY_RUN skips the install step, so the binary is legitimately absent.
+    # That must produce a plan line, not abort the whole preview.
+    if command -v pypi-server >/dev/null 2>&1; then
+        skip "pypi-server is installed here; cannot exercise the absent case"
+    fi
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/backup.sh'
+        source '${SCRIPT_DIR}/lib/systemd.sh'
+        source '${SCRIPT_DIR}/lib/pip.sh'
+        DRY_RUN=1
+        MIRRORET_BASE_DIR='${BATS_TEST_TMPDIR}/srv'
+        MIRRORET_PYPI_VENV='${BATS_TEST_TMPDIR}/no-such-venv'
+        mkdir -p \"\$MIRRORET_BASE_DIR\"
+        _write_pypiserver_unit id \"\$MIRRORET_BASE_DIR\" 8081"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"pypiserver is not installed yet"* ]]
+}

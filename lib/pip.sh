@@ -109,9 +109,23 @@ _write_pypiserver_unit() {
     # Same failure mode as verdaccio: a bare `command -v` plus a hardcoded
     # fallback can write a nonexistent path into the unit, which then fails
     # with status=203/EXEC on every restart. Resolve and verify.
+    # `|| true` is required, not cosmetic: _resolve_pypiserver_bin returns 1
+    # when it finds nothing, and under `set -e` with an ERR trap a failing
+    # command substitution in an assignment aborts the whole script before
+    # the empty-check below can produce its clear message. That made
+    # `install.sh --dry-run` die on any host without pypiserver already
+    # installed - i.e. every fresh server, which is exactly where a dry run
+    # is most useful.
     local pypi_bin=""
-    pypi_bin="$(_resolve_pypiserver_bin)"
+    pypi_bin="$(_resolve_pypiserver_bin || true)"
     if [[ -z "${pypi_bin}" ]]; then
+        if [[ "${DRY_RUN}" == "1" ]]; then
+            # The install step was skipped by DRY_RUN, so of course the
+            # binary is absent. Report the plan instead of failing.
+            info "[DRY-RUN] pypiserver is not installed yet; a real run would"
+            info "          install it and use its path in the systemd unit."
+            return 0
+        fi
         die "Cannot locate the pypi-server binary. Expected it in ${MIRRORET_PYPI_VENV:-/opt/mirroret-pypiserver}/bin/."
     fi
     info "pypiserver binary: ${pypi_bin}"

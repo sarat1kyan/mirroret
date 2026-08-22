@@ -591,6 +591,8 @@ uninstall_master_sync() {
     fi
     # The mirroring engines installed under the base dir.
     uninst_remove_dir "${MIRRORET_BASE_DIR}/engines"
+    # The published client bootstrap script.
+    uninst_remove_file "${MIRRORET_BASE_DIR}/config/setup-mirror-client.sh"
     # Target specs directory, once its contents are gone.
     local tdir="${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"
     if [[ -d "${tdir}" ]] && [[ -z "$(ls -A "${tdir}" 2>/dev/null)" ]]; then
