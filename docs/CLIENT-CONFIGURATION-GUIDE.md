@@ -60,23 +60,61 @@ echo "[ok] APT configured successfully!"
 echo "Test with: sudo apt install htop"
 ```
 
+### Which config file do I want?
+
+The server generates **one config per mirrored release**, named after it.
+List what is available:
+
+```bash
+curl -s http://REPO_SERVER:8080/config/ | grep -o '[a-z0-9-]*\.\(list\|sources\)'
+# e.g. ubuntu-jammy.list  ubuntu-noble.list  debian-bookworm.list
+```
+
+Pick the one matching the client's own release. `debian-client.list` is a
+copy of the first configured target, kept for older runbooks.
+
+Both formats are generated: `.list` (classic one-line) and `.sources`
+(deb822, the default on Ubuntu 24.04 and Debian 12). Use whichever your
+client already uses.
+
 ### Manual Steps
 ```bash
 # 1. Backup current configuration
 sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
 
-# 2. Download repository configuration
-wget http://REPO_SERVER:8080/config/debian-client.list
-sudo mv debian-client.list /etc/apt/sources.list.d/mirroret.list
+# 2. Download the config for THIS client's release
+. /etc/os-release
+wget -O /tmp/mirroret.list \
+    "http://REPO_SERVER:8080/config/${ID}-${VERSION_CODENAME}.list"
+sudo mv /tmp/mirroret.list /etc/apt/sources.list.d/mirroret.list
 
-# 3. Disable official repos (optional but recommended)
+# 3. Disable the official repos, or apt keeps reaching the internet
 sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
+#    On deb822 hosts (Ubuntu 24.04+, Debian 12+) also:
+sudo rm -f /etc/apt/sources.list.d/ubuntu.sources \
+           /etc/apt/sources.list.d/debian.sources
 
 # 4. Update
 sudo apt update
 
-# 5. Verify
-apt-cache policy
+# 5. Verify the mirror is what apt uses
+apt-cache policy bash | head -5      # must name REPO_SERVER
+```
+
+**No GPG key to import.** The mirrored `Release` files carry the upstream
+Ubuntu/Debian signature, so the client verifies them with the
+`ubuntu-archive-keyring` / `debian-archive-keyring` it already ships. If you
+see a config with `signed-by=...mirroret.gpg`, that install has
+`MIRRORET_APT_RESIGN=1` set and needs the mirror's key - see docs/SECURITY.md.
+
+### apt update says "Failed to fetch ... Packages 404"
+
+The config advertises a suite the server has not published yet. Run on the
+**server**:
+
+```bash
+mirroretctl client verify   # names the unpublished suites
+sudo mirroretctl sync apt
 ```
 
 ### Restore Original Configuration
@@ -155,18 +193,41 @@ echo "Test with: sudo dnf install htop"
 sudo mkdir -p /etc/yum.repos.d/backup
 sudo cp /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/
 
-# 2. Download repository configuration
-wget http://REPO_SERVER:8080/config/redhat-client.repo
-sudo mv redhat-client.repo /etc/yum.repos.d/mirroret.repo
+# 2. Download the config for THIS client's distro + major version.
+#    One file per mirrored target, named <flavor><major>.repo:
+#      ol9.repo  rocky9.repo  almalinux9.repo  epel9.repo  rhel9.repo
+curl -s http://REPO_SERVER:8080/config/ | grep -o '[a-z0-9]*\.repo'
+wget -O /tmp/mirroret.repo http://REPO_SERVER:8080/config/ol9.repo
+sudo mv /tmp/mirroret.repo /etc/yum.repos.d/mirroret.repo
 
-# 3. Disable official repos
-sudo mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/backup/disabled/
+# 3. Disable the official repos, or dnf keeps reaching the internet
+sudo dnf config-manager --set-disabled "*"
+sudo dnf config-manager --set-enabled "mirroret-*"
 
 # 4. Update
 sudo dnf clean all && sudo dnf makecache
 
-# 5. Verify
+# 5. Verify - only mirroret-* should be enabled
 sudo dnf repolist
+sudo dnf --disablerepo='*' --enablerepo='mirroret-*' install -y bash
+```
+
+**No GPG key to import.** Mirrored RPMs keep their upstream signature, and
+the generated `.repo` points `gpgkey` at the vendor key already present in
+`/etc/pki/rpm-gpg/`.
+
+**Do not add `repo_gpgcheck=1`.** A filtered mirror (an arch subset, or the
+default newest-only) has locally rebuilt `repomd.xml`, so upstream's
+signature on it no longer applies. `gpgcheck=1` still verifies every
+package's vendor signature, which is the check that matters.
+
+### dnf says "Cannot download repomd.xml"
+
+That repo has not been published yet. Run on the **server**:
+
+```bash
+mirroretctl client verify   # names the repos with no metadata
+sudo mirroretctl sync rpm
 ```
 
 ### Restore Original Configuration

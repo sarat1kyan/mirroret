@@ -6,6 +6,9 @@ SHELL := /bin/bash
 # mirroret.sh and mirroret-unified.sh are legacy reference files - kept for
 # comparison, not actively maintained, so excluded from strict lint.
 SCRIPTS := install.sh uninstall.sh mirroretctl $(wildcard lib/*.sh) $(wildcard scripts/*.sh)
+# The mirroring engines. Plain Python 3, standard library only - so the only
+# lint they need is a syntax check under whatever python3 the host has.
+ENGINES := $(wildcard engines/*.py) $(wildcard tests/fixtures/*.py)
 TEST_DIR := tests
 
 .PHONY: all lint format test test-integration test-all validate check-deps help dry-run clean uninstall
@@ -17,7 +20,7 @@ all: lint test
 check-deps:
 	@echo "Checking for required tools..."
 	@missing=""; \
-	for cmd in shellcheck shfmt bash; do \
+	for cmd in python3 shellcheck shfmt bash; do \
 		if ! command -v $$cmd >/dev/null 2>&1; then \
 			echo " MISSING: $$cmd"; \
 			missing="$$missing $$cmd"; \
@@ -41,7 +44,7 @@ check-deps:
 
 # -- Linting -------------------------------------------------------------------
 
-lint: lint-shellcheck
+lint: lint-shellcheck lint-python
 
 lint-shellcheck:
 	@if ! command -v shellcheck >/dev/null 2>&1; then \
@@ -62,6 +65,31 @@ lint-shellcheck:
 	else \
 		echo "shellcheck: all OK"; \
 	fi
+
+lint-python:
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		echo "python3 not found - the mirroring engines require it."; \
+		exit 1; \
+	fi
+	@echo "Checking engine syntax with $$(python3 -V 2>&1)..."
+	@failed=0; \
+	for f in $(ENGINES); do \
+		if python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])" "$$f"; then \
+			echo " $$f"; \
+		else \
+			failed=1; \
+		fi; \
+	done; \
+	if [ "$$failed" -eq 1 ]; then \
+		echo "python syntax errors found."; \
+		exit 1; \
+	else \
+		echo "python: all OK"; \
+	fi
+	@# The engines must run on the oldest interpreter our supported distros
+	@# ship (RHEL 8 has python3.6), so reject 3.10+ only syntax.
+	@echo "Checking engines import cleanly..."
+	@PYTHONPATH=engines python3 -c "import mirroret_fetch, mirroret_apt, mirroret_rpm; print(' imports OK')"
 
 lint-tests:
 	@if ! command -v shellcheck >/dev/null 2>&1; then \
@@ -117,6 +145,14 @@ test-integration:
 
 test-all: test
 
+# Just the engine + multi-distro target tests. These are the slow ones (they
+# start real HTTP servers), so it helps to be able to run them alone.
+test-engines:
+	@if ! command -v bats >/dev/null 2>&1; then \
+		echo "bats not found."; exit 1; \
+	fi
+	@bats --tap $(TEST_DIR)/test_engines.bats $(TEST_DIR)/test_targets.bats
+
 test-verbose:
 	@if ! command -v bats >/dev/null 2>&1; then \
 		echo "bats not found."; exit 1; \
@@ -155,11 +191,13 @@ help:
 	@echo ""
 	@echo "mirroret Makefile targets:"
 	@echo ""
-	@echo " make lint Run shellcheck on all scripts"
+	@echo " make lint Run shellcheck on scripts + syntax-check the engines"
+	@echo " make lint-python Syntax-check engines/*.py only"
 	@echo " make format Auto-format scripts with shfmt (in-place)"
 	@echo " make format-check Check formatting without modifying files"
 	@echo " make test Run every BATS test (no root needed)"
 	@echo " make test-integration Run integration tests subset"
+	@echo " make test-engines Run the APT/RPM engine + target tests only"
 	@echo " make test-all Alias for 'make test'"
 	@echo " make test-verbose Run all tests with verbose output"
 	@echo " make validate Validate existing installation (requires root)"
@@ -169,7 +207,7 @@ help:
 	@echo " make clean Remove temp files"
 	@echo " make help Show this help"
 	@echo ""
-	@echo "Required tools: shellcheck, shfmt, bats"
+	@echo "Required tools: python3 (engines), shellcheck, shfmt, bats"
 	@echo " Ubuntu: apt-get install shellcheck bats"
 	@echo " shfmt: go install mvdan.cc/sh/v3/cmd/shfmt@latest"
 	@echo ""

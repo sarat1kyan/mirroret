@@ -291,10 +291,16 @@ for _a in \${ARCH} noarch; do
     REPOSYNC_ARGS+=(--arch "\${_a}")
 done
 
+REPOS=(${repos})
+
 # Estimate the download before committing to it. reposync gives no size
 # preview, so a 4-repo OL9 sync could silently need more than the volume
 # has. repoquery is cheap (metadata only) and turns a multi-hour surprise
 # into a one-line decision.
+#
+# REPOS must be declared ABOVE this block. It used to be declared below it,
+# so the estimate loop iterated an unset array, the estimate came out as
+# 0 GB for every repo, and this guard never once fired.
 _estimate_gb() {
     local repo="\$1" bytes
     command -v dnf >/dev/null 2>&1 || { printf '0'; return 0; }
@@ -336,8 +342,6 @@ fi
 [[ "\${NEWEST_ONLY}" == "1" ]] && REPOSYNC_ARGS+=(--newest-only)
 [[ "\${DELETE_REMOVED}" == "1" ]] && REPOSYNC_ARGS+=(--delete)
 [[ "\${INCLUDE_SOURCE}" == "1" ]] && REPOSYNC_ARGS+=(--source)
-
-REPOS=(${repos})
 
 sync_failed=0
 metadata_failed=0
@@ -544,4 +548,321 @@ generate_rpm_client_config() {
     } > "$output_file"
 
     success "RPM client config written: ${output_file}"
+}
+
+# -- Native engine ------------------------------------------------------------
+#
+# MIRRORET_RPM_ENGINE=auto|native|reposync
+#   auto     - native, unless MIRRORET_RPM_REPOS names repos the catalog does
+#              not know (e.g. subscription repo ids like
+#              rhel-9-for-x86_64-baseos-rpms), in which case reposync is used
+#              because only the host's own dnf knows their URLs.
+#   native   - engines/mirroret_rpm.py. Needs only python3, mirrors any
+#              distro from any host, and always publishes metadata that
+#              matches what is on disk.
+#   reposync - the legacy path: requires dnf, requires the repos to be
+#              configured on the mirror server itself, and can only mirror
+#              what that server is entitled to.
+
+MIRRORET_RPM_ENGINE="${MIRRORET_RPM_ENGINE:-auto}"
+
+# _rpm_engine_path - absolute path to the installed RPM engine.
+_rpm_engine_path() {
+    echo "${MIRRORET_BASE_DIR}/engines/mirroret_rpm.py"
+}
+
+# _rpm_specs_have_repos - true when every generated RPM spec resolved at
+# least one upstream URL. A spec with an empty repo list means the operator
+# named repo ids the catalog does not know.
+_rpm_specs_have_repos() {
+    local sp
+    for sp in "${MIRRORET_RPM_SPECS[@]:-}"; do
+        [[ -z "${sp}" ]] && continue
+        [[ -f "${sp}" ]] || return 1
+        [[ -n "$(mirroret_json_field "${sp}" repos)" ]] || return 1
+    done
+    return 0
+}
+
+# _rpm_resolve_engine - print the engine that will actually be used.
+_rpm_resolve_engine() {
+    case "${MIRRORET_RPM_ENGINE}" in
+        native|reposync)
+            echo "${MIRRORET_RPM_ENGINE}"
+            return 0
+            ;;
+        auto) ;;
+        *)
+            die "Unknown MIRRORET_RPM_ENGINE: '${MIRRORET_RPM_ENGINE}'. Use auto, native, or reposync."
+            ;;
+    esac
+
+    if ! check_command python3; then
+        warn "python3 not found - falling back to reposync for RPM mirroring."
+        echo "reposync"
+        return 0
+    fi
+    if _rpm_specs_have_repos; then
+        echo "native"
+        return 0
+    fi
+    if check_command reposync; then
+        warn "Some RPM repo names are not in mirroret's upstream catalog"
+        warn "  (subscription repo ids look like rhel-9-for-x86_64-baseos-rpms)."
+        warn "  Using reposync, which reads them from this host's own dnf config."
+        warn "  For catalog-driven mirroring use MIRRORET_RPM_TARGETS=\"rhel:9\"."
+        echo "reposync"
+        return 0
+    fi
+    warn "Unknown RPM repo names and no reposync available - using the native engine."
+    warn "  It will report which repo names it could not resolve."
+    echo "native"
+}
+
+# configure_rpm_mirroring <backup_id> - top-level RPM setup entry point.
+configure_rpm_mirroring() {
+    local backup_id="$1"
+    local engine
+    engine="$(_rpm_resolve_engine)"
+    MIRRORET_RPM_RESOLVED_ENGINE="${engine}"
+    export MIRRORET_RPM_RESOLVED_ENGINE
+    case "${engine}" in
+        native)   _configure_rpm_native "${backup_id}" "${MIRRORET_BASE_DIR}" ;;
+        reposync) configure_createrepo "${backup_id}" ;;
+    esac
+}
+
+# _configure_rpm_native <backup_id> <base_dir>
+_configure_rpm_native() {
+    local backup_id="$1" base_dir="$2"
+
+    section "Configuring RPM mirroring (native engine)"
+
+    if [[ -z "${MIRRORET_RPM_SPECS+set}" ]] && \
+       declare -f generate_target_specs >/dev/null 2>&1; then
+        generate_target_specs
+    fi
+
+    local -a real_specs=()
+    local sp
+    for sp in "${MIRRORET_RPM_SPECS[@]:-}"; do
+        [[ -n "${sp}" ]] && real_specs+=("${sp}")
+    done
+
+    if [[ ${#real_specs[@]} -eq 0 ]]; then
+        warn "No RPM targets configured - skipping RPM mirror setup."
+        warn "  Set MIRRORET_RPM_TARGETS in /etc/mirroret/mirroret.conf, e.g.:"
+        warn "    MIRRORET_RPM_TARGETS=\"ol:9 rocky:9 epel:9\""
+        return 0
+    fi
+
+    for sp in "${real_specs[@]}"; do
+        info "  target: $(_rpm_spec_field "${sp}" id) -> $(_rpm_spec_field "${sp}" dest)"
+    done
+    if [[ "${MIRRORET_RPM_ARCH:-x86_64}" != *i686* ]]; then
+        info "Note: i686 is not mirrored. Clients installing 32-bit multilib"
+        info "      packages (glibc.i686) need MIRRORET_RPM_ARCH=\"x86_64 i686\"."
+    fi
+
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would write ${base_dir}/scripts/sync-rpm-repos.sh"
+        return 0
+    fi
+
+    mkdir -p "${base_dir}/redhat/mirror" "${base_dir}/scripts"
+    _write_rpm_native_sync_script "${base_dir}" "${real_specs[@]}"
+    success "RPM mirroring configured for ${#real_specs[@]} target(s)."
+}
+
+_rpm_spec_field() {
+    mirroret_json_field "$1" "$2"
+}
+
+
+_write_rpm_native_sync_script() {
+    local base_dir="$1"; shift
+    local -a specs=("$@")
+    local sync_script="${base_dir}/scripts/sync-rpm-repos.sh"
+
+    if ! preserve_user_customization "${sync_script}"; then
+        return 0
+    fi
+
+    local spec_args="" sp
+    for sp in "${specs[@]}"; do
+        spec_args+=" --spec '${sp}'"
+    done
+
+    cat > "${sync_script}" <<RPM_SYNC
+#!/usr/bin/env bash
+set -Euo pipefail
+
+${MIRRORET_MANAGED_MARKER}
+# RPM sync - generated by mirroret. Do NOT edit; change
+# MIRRORET_RPM_TARGETS in /etc/mirroret/mirroret.conf and re-run
+# 'sudo mirroretctl upgrade'.
+#
+# Mirrors every configured RPM target with engines/mirroret_rpm.py. Needs no
+# dnf, no reposync, no createrepo, and no .repo file on this host - the
+# upstream URL comes from the target spec, which is why this works for
+# Oracle Linux, Rocky, Alma, CentOS Stream, Fedora and EPEL from the same
+# server whatever that server runs.
+#
+# Metadata always matches what is on disk: a full mirror republishes
+# upstream's signed repodata verbatim, a filtered one (arch subset or
+# newest-only) gets metadata rewritten to list exactly the packages that
+# were downloaded. That is what stops clients resolving a package and then
+# getting a 404.
+
+ENGINE="${base_dir}/engines/mirroret_rpm.py"
+LOG_DIR="${base_dir}/logs"
+LOG_FILE="\${LOG_DIR}/sync-rpm-\$(date +%Y%m%d-%H%M%S).log"
+LOCK_FILE="/var/lock/mirroret-sync-redhat.lock"
+mkdir -p "\$LOG_DIR"
+exec > >(tee -a "\$LOG_FILE") 2>&1
+
+exec 9>"\$LOCK_FILE" || { echo "ERROR: cannot open lock \$LOCK_FILE"; exit 2; }
+if ! flock -n 9; then
+    echo "ERROR: another RPM sync is already running (lock: \$LOCK_FILE). Exiting."
+    exit 3
+fi
+trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
+
+$(mirroret_script_preamble)
+
+echo "Starting RPM sync: \$(date)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 not found. The native RPM engine needs python3."
+    echo "       Install it, or set MIRRORET_RPM_ENGINE=reposync on a RHEL host."
+    exit 2
+fi
+if [[ ! -f "\$ENGINE" ]]; then
+    echo "ERROR: engine not found at \$ENGINE."
+    echo "       Re-run: sudo ./install.sh --upgrade"
+    exit 2
+fi
+
+ARGS=()
+[[ "\${MIRRORET_RPM_DELETE:-1}" == "0" ]] && ARGS+=(--no-delete)
+[[ "\${MIRRORET_SYNC_ESTIMATE:-1}" == "0" ]] && ARGS+=(--no-estimate)
+[[ -n "\${MIRRORET_RPM_JOBS:-}" ]] && ARGS+=(--jobs "\${MIRRORET_RPM_JOBS}")
+[[ -n "\${MIRRORET_CA_BUNDLE:-}" ]] && ARGS+=(--ca-bundle "\${MIRRORET_CA_BUNDLE}")
+[[ -n "\${MIRRORET_RPM_CLIENT_CERT:-}" ]] && ARGS+=(--client-cert "\${MIRRORET_RPM_CLIENT_CERT}")
+[[ -n "\${MIRRORET_RPM_CLIENT_KEY:-}" ]] && ARGS+=(--client-key "\${MIRRORET_RPM_CLIENT_KEY}")
+
+NICE=""
+if command -v nice >/dev/null 2>&1; then
+    NICE="nice -n \${MIRRORET_SYNC_NICE:-10}"
+    command -v ionice >/dev/null 2>&1 && NICE="ionice -c 2 -n 7 \${NICE}"
+fi
+
+rc=0
+# shellcheck disable=SC2086 # NICE must word-split
+timeout -k 60 "\${MIRRORET_SYNC_TIMEOUT:-12h}" \\
+    \${NICE} python3 "\$ENGINE"${spec_args} \\
+    --min-free-gb "\${MIRRORET_SYNC_MIN_FREE_GB:-10}" \\
+    "\${ARGS[@]}" || rc=\$?
+
+echo "RPM sync finished: \$(date) (exit \${rc})"
+exit "\${rc}"
+RPM_SYNC
+
+    chmod +x "${sync_script}"
+    success "RPM sync script written: ${sync_script}"
+}
+
+# -- Per-target client configs -----------------------------------------------
+
+# generate_rpm_client_configs <config_dir> - one .repo file per RPM target.
+generate_rpm_client_configs() {
+    local config_dir="$1"
+    local server_ip="${MIRRORET_SERVER_IP}"
+    local web_port="${MIRRORET_WEB_PORT:-8080}"
+    local insecure="${MIRRORET_RPM_INSECURE:-0}"
+
+    local -a real_specs=()
+    local sp
+    for sp in "${MIRRORET_RPM_SPECS[@]:-}"; do
+        [[ -n "${sp}" ]] && real_specs+=("${sp}")
+    done
+    [[ ${#real_specs[@]} -eq 0 ]] && return 0
+
+    section "Generating RPM client configs (${#real_specs[@]} target(s))"
+
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would write RPM client configs to ${config_dir}/"
+        return 0
+    fi
+
+    mkdir -p "${config_dir}"
+    local first=1
+
+    for sp in "${real_specs[@]}"; do
+        local flavor major repo_ids
+        flavor="$(_rpm_spec_field "${sp}" flavor)"
+        major="$(_rpm_spec_field "${sp}" version)"
+        repo_ids="$(mirroret_json_field "${sp}" repos)"
+        [[ -z "${repo_ids}" ]] && continue
+
+        local gpg_check_line gpg_key_line
+        if [[ "${insecure}" == "1" ]]; then
+            warn_insecure "RPM client config for ${flavor}${major}: gpgcheck=0 (GPG DISABLED)."
+            gpg_check_line="gpgcheck=0"
+            gpg_key_line=""
+        elif [[ -n "${MIRRORET_RPM_GPGKEY_URL:-}" ]]; then
+            gpg_check_line="gpgcheck=1"
+            gpg_key_line="gpgkey=${MIRRORET_RPM_GPGKEY_URL}"
+        else
+            # gpgcheck=1 with no gpgkey fails EVERY client dnf call. Mirrored
+            # rpms keep their upstream signature, so point at the vendor key
+            # a stock client already ships.
+            gpg_check_line="gpgcheck=1"
+            local key
+            key="$(rpm_flavor_gpgkey "${flavor}" "${major}")"
+            if [[ -n "${key}" ]]; then
+                gpg_key_line="gpgkey=${key}"
+            else
+                gpg_key_line="# gpgkey= # set MIRRORET_RPM_GPGKEY_URL"
+            fi
+        fi
+
+        local out="${config_dir}/${flavor}${major}.repo"
+        {
+            printf '# mirroret RPM client config - %s %s\n' "${flavor}" "${major}"
+            printf '# Install as /etc/yum.repos.d/mirroret.repo on clients.\n'
+            printf '#\n'
+            printf '# repo_gpgcheck is deliberately absent: a filtered mirror\n'
+            printf '# (arch subset or newest-only) has locally rebuilt repodata,\n'
+            printf '# so upstream signature on repomd.xml no longer applies.\n'
+            printf '# Package signatures are untouched, which is what gpgcheck=1\n'
+            printf '# below verifies.\n\n'
+            local repo
+            for repo in ${repo_ids}; do
+                printf '[mirroret-%s-%s]\n' "${flavor}${major}" "${repo}"
+                printf 'name=Mirroret %s %s - %s\n' "${flavor}" "${major}" "${repo}"
+                printf 'baseurl=http://%s:%s/redhat/%s/%s/%s\n' \
+                    "${server_ip}" "${web_port}" "${flavor}" "${major}" "${repo}"
+                printf 'enabled=1\n'
+                printf '%s\n' "${gpg_check_line}"
+                [[ -n "${gpg_key_line}" ]] && printf '%s\n' "${gpg_key_line}"
+                printf '\n'
+            done
+            printf '# -- Client setup --------------------------------------------\n'
+            printf '# After installing this file, DISABLE the upstream repos or\n'
+            printf '# dnf keeps reaching the internet and bypasses this mirror:\n'
+            printf '#\n'
+            printf '#   sudo dnf config-manager --set-disabled "*"\n'
+            printf '#   sudo dnf config-manager --set-enabled "mirroret-*"\n'
+            printf '#   sudo dnf clean all && sudo dnf repolist\n'
+        } > "${out}"
+
+        info "  ${out}"
+        if [[ "${first}" == "1" ]]; then
+            cp -f "${out}" "${config_dir}/redhat-client.repo"
+            first=0
+        fi
+    done
+
+    success "RPM client configs written to ${config_dir}/"
 }

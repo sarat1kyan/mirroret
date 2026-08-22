@@ -180,8 +180,11 @@ uninstall_components_present() {
     fi
 
     # APT mirror tool config
-    if [[ -f /etc/apt/mirror.list ]] || [[ -d /opt/mirroret-apt-mirror2 ]]; then
+    if [[ -f /etc/apt/mirror.list ]] || [[ -d /opt/mirroret-apt-mirror2 ]] || \
+       [[ -f "${MIRRORET_BASE_DIR}/scripts/sync-apt-repos.sh" ]] || \
+       [[ -d "${MIRRORET_BASE_DIR}/apt" ]]; then
         local extras=()
+        [[ -f "${MIRRORET_BASE_DIR}/scripts/sync-apt-repos.sh" ]] && extras+=("native sync script")
         [[ -f /etc/apt/mirror.list ]] && extras+=("/etc/apt/mirror.list")
         [[ -d /opt/mirroret-apt-mirror2 ]] && extras+=("apt-mirror2 venv")
         echo " APT mirror : present (${extras[*]})"
@@ -189,11 +192,21 @@ uninstall_components_present() {
         echo " APT mirror : not found"
     fi
 
-    # RPM sync script
-    if [[ -f "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh" ]]; then
+    # RPM sync script (native engine or the legacy reposync script)
+    if [[ -f "${MIRRORET_BASE_DIR}/scripts/sync-rpm-repos.sh" ]] || \
+       [[ -f "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh" ]]; then
         echo " RPM mirror : present (sync script)"
     else
         echo " RPM mirror : not found"
+    fi
+
+    # Native mirroring engines + target specs
+    if [[ -d "${MIRRORET_BASE_DIR}/engines" ]]; then
+        echo " Engines    : present ($(ls -1 "${MIRRORET_BASE_DIR}/engines" 2>/dev/null | wc -l | tr -d ' ') files)"
+    fi
+    local _tdir="${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"
+    if [[ -d "${_tdir}" ]]; then
+        echo " Targets    : $(ls -1 "${_tdir}"/*.json 2>/dev/null | wc -l | tr -d ' ') spec(s) in ${_tdir}"
     fi
 
     # Mirror data
@@ -390,6 +403,12 @@ uninstall_apt() {
 
     uninst_remove_file "/etc/apt/mirror.list"
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-apt-debmirror.sh"
+    uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-apt-repos.sh"
+    # Native-engine target specs.
+    local spec
+    for spec in "${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"/apt-*.json; do
+        [[ -f "${spec}" ]] && uninst_remove_file "${spec}"
+    done
 
     # apt-mirror2 venv created by lib/apt.sh when falling back via pip.
     if [[ -L /usr/local/bin/apt-mirror2 ]]; then
@@ -406,6 +425,11 @@ uninstall_apt() {
 uninstall_rpm() {
     section "Removing RPM mirror config"
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh"
+    uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-rpm-repos.sh"
+    local spec
+    for spec in "${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"/rpm-*.json; do
+        [[ -f "${spec}" ]] && uninst_remove_file "${spec}"
+    done
     # RPM has no separate config file. Mirror data lives under
     # ${MIRRORET_BASE_DIR}/redhat/ and is handled by --purge.
 }
@@ -565,7 +589,15 @@ uninstall_master_sync() {
     if [[ -L /usr/local/bin/mirroretctl ]]; then
         uninst_remove_file "/usr/local/bin/mirroretctl"
     fi
+    # The mirroring engines installed under the base dir.
+    uninst_remove_dir "${MIRRORET_BASE_DIR}/engines"
+    # Target specs directory, once its contents are gone.
+    local tdir="${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"
+    if [[ -d "${tdir}" ]] && [[ -z "$(ls -A "${tdir}" 2>/dev/null)" ]]; then
+        uninst_remove_dir "${tdir}"
+    fi
     # Stale sync locks (harmless if a sync is not running).
+    uninst_remove_file "/var/lock/mirroret-sync-apt.lock"
     uninst_remove_file "/var/lock/mirroret-sync-redhat.lock"
     uninst_remove_file "/var/lock/mirroret-sync-pip.lock"
     uninst_remove_file "/var/lock/mirroret-sync-npm.lock"

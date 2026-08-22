@@ -58,27 +58,27 @@ teardown() {
 # ------------------------------------------------------------- root gating ----
 
 @test "cli: state-changing subcommand refuses to run without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" sync all
     [ "$status" -eq 1 ]
     [[ "$output" == *"needs root"* ]]
 }
 
 @test "cli: upgrade refuses without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" upgrade
     [ "$status" -eq 1 ]
     [[ "$output" == *"needs root"* ]]
 }
 
 @test "cli: clean refuses without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" clean report
     [ "$status" -eq 1 ]
 }
 
 @test "cli: read-only subcommands do NOT require root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     for sub in status "sync status" "sync last" "client list" "logs list" "config path"; do
         # shellcheck disable=SC2086
         run bash "${CTL}" $sub
@@ -221,18 +221,40 @@ EOF
 
 # ------------------------------------------------------------- config diff ----
 
-@test "cli: config diff reports generated script values" {
-    cat > "${FAKE_BASE}/scripts/sync-redhat-repos.sh" <<'EOF'
-#!/usr/bin/env bash
-FLAVOR="ol"
-ARCH="x86_64"
-NEWEST_ONLY="1"
-INCLUDE_SOURCE="0"
-REPOS=(ol9_baseos_latest)
-EOF
+@test "cli: config diff lists the sync scripts that are present" {
+    # config diff used to grep FLAVOR=/ARCH= out of the legacy
+    # sync-redhat-repos.sh. That told you nothing on a native install (which
+    # has no such file) and nothing about APT ever. It now reports the live
+    # generated state instead.
+    printf '#!/usr/bin/env bash\nFLAVOR="ol"\n' \
+        > "${FAKE_BASE}/scripts/sync-redhat-repos.sh"
+    chmod +x "${FAKE_BASE}/scripts/sync-redhat-repos.sh"
     run bash "${CTL}" config diff
     [ "$status" -eq 0 ]
-    [[ "$output" == *'FLAVOR="ol"'* ]]
+    [[ "$output" == *"sync-redhat-repos.sh"* ]]
+    [[ "$output" == *"Targets: requested vs generated"* ]]
+}
+
+@test "cli: config diff flags a sync script that is not executable" {
+    # A zip transfer does not preserve the execute bit, so every script is
+    # present and cron silently runs none of them. This project's own
+    # runbook documents that failure; the diagnostic has to catch it.
+    printf '#!/usr/bin/env bash\ntrue\n' \
+        > "${FAKE_BASE}/scripts/sync-rpm-repos.sh"
+    chmod -x "${FAKE_BASE}/scripts/sync-rpm-repos.sh"
+    run bash "${CTL}" config diff
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"NOT EXECUTABLE"* ]]
+    [[ "$output" == *"chmod +x"* ]]
+    # And it must not claim the file is absent.
+    ! [[ "$output" == *"no generated sync scripts at all"* ]]
+}
+
+@test "cli: config diff says so when there are no sync scripts at all" {
+    run bash "${CTL}" config diff
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no generated sync scripts at all"* ]]
+    [[ "$output" == *"mirroretctl upgrade"* ]]
 }
 
 # ================= service binary resolution (203/EXEC bug) =================
@@ -267,7 +289,12 @@ EOF
 @test "pip: _resolve_pypiserver_bin exists and checks the venv first" {
     grep -q '_resolve_pypiserver_bin' "${SCRIPT_DIR}/lib/pip.sh"
     section="$(awk '/_resolve_pypiserver_bin\(\)/,/^}/' "${SCRIPT_DIR}/lib/pip.sh")"
-    [[ "$section" == *'mirroret-pypiserver/bin/pypi-server'* ]]
+    # The venv path is overridable, so the literal is
+    # ${MIRRORET_PYPI_VENV:-/opt/mirroret-pypiserver}/bin/pypi-server.
+    # Assert the two halves rather than a substring the code never contained.
+    [[ "$section" == *'mirroret-pypiserver'*'/bin/pypi-server'* ]]
+    # The venv candidate must be FIRST, before anything found on PATH.
+    [[ "$section" == *'candidates=('*'mirroret-pypiserver'* ]]
     [[ "$section" == *'-x "$c"'* ]]
 }
 
@@ -428,8 +455,13 @@ EOF
     [[ "$section" == *'docker-distribution'* ]]
 }
 
-@test "npm: sync clears stale tarballs before packing" {
-    grep -q 'cannot pick up a tarball' "${SCRIPT_DIR}/lib/npm.sh"
+@test "npm: sync starts from a clean work dir every run" {
+    # A tarball or node_modules tree left behind by an earlier run would make
+    # the per-package result reporting lie about what was actually fetched.
+    grep -q 'clean work dir' "${SCRIPT_DIR}/lib/npm.sh"
+    grep -qF 'rm -rf "\${WORK_DIR}/warm"' "${SCRIPT_DIR}/lib/npm.sh"
+    # Approval mode collects tarballs instead, so those get cleared too.
+    grep -q "name '\*.tgz' -delete" "${SCRIPT_DIR}/lib/npm.sh"
 }
 
 @test "config example documents every new knob" {
@@ -497,7 +529,11 @@ EOF
 @test "cli: client simulate is listed in help and the menu" {
     run bash "${CTL}" help
     [[ "$output" == *"client simulate"* ]]
-    grep -qE '^ +17\) +cmd_client simulate' "${CTL}"
+    # Match the dispatch, not a hardcoded menu number: pinning the number
+    # means every menu addition breaks this test for no reason. The
+    # menu-to-branch mapping has its own dedicated test.
+    grep -qE '^ +[0-9]+\) +cmd_client simulate' "${CTL}"
+    grep -qE '^ +[0-9]+\) client simulate' "${CTL}"
 }
 
 @test "cli: client simulate probes i686 by default" {
@@ -525,7 +561,7 @@ EOF
 # ---------------------------------------------------------------- approve ----
 
 @test "cli: approve list works without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" approve list
     [ "$status" -eq 0 ]
 }
@@ -536,7 +572,7 @@ EOF
 }
 
 @test "cli: approve all refuses without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" approve all rpm
     [ "$status" -ne 0 ]
 }

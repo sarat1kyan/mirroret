@@ -47,6 +47,13 @@ configure_nginx_unified() {
     # MIRRORET_APT_DATA_PATH is exported by apt.sh; fall back to the classic path.
     local apt_data_path="${MIRRORET_APT_DATA_PATH:-${base_dir}/debian/mirror/mirror/archive.ubuntu.com/ubuntu}"
 
+    # One location per mirrored APT flavor. With the native engine each
+    # flavor is a real archive root (dists/ + pool/) under apt/<flavor>, so
+    # /ubuntu, /debian and /ubuntu-ports can all be served from one server -
+    # which a single hardcoded /ubuntu location could not do.
+    local apt_locations=""
+    apt_locations="$(_nginx_apt_locations "${base_dir}" "${apt_data_path}")"
+
     # Approval-aware pip/npm paths: serve approved/ when enabled.
     local pip_serve_dir
     local npm_serve_dir
@@ -60,13 +67,7 @@ configure_nginx_unified() {
 
     _write_nginx_config "$backup_id" "$base_dir" "$web_port" \
         "$(cat <<NGINX_EOF
-
-    # APT mirror - path set by MIRRORET_APT_DATA_PATH (tool-agnostic)
-    # Clients use: deb http://server:PORT/ubuntu codename main
-    location /ubuntu/ {
-        alias ${apt_data_path}/;
-        autoindex on;
-    }
+${apt_locations}
 
     # RPM mirror - reposync writes to redhat/mirror/rocky/VER/REPO/
     # Clients use: baseurl=http://server:PORT/redhat/rocky/VER/baseos
@@ -150,6 +151,49 @@ NGINX_EOF
             fi
         fi
     fi
+}
+
+# _nginx_apt_locations <base_dir> <legacy_apt_data_path>
+#
+# Emits an nginx location block for each APT flavor this server mirrors.
+# Native-engine trees live at <base>/apt/<flavor>/{dists,pool}; a legacy
+# apt-mirror/debmirror tree lives wherever MIRRORET_APT_DATA_PATH points.
+_nginx_apt_locations() {
+    local base_dir="$1" legacy_path="$2"
+    local -a dirs=()
+    local sp dir
+
+    for sp in "${MIRRORET_APT_SPECS[@]:-}"; do
+        [[ -n "${sp}" ]] || continue
+        [[ -f "${sp}" ]] || continue
+        dir="$(mirroret_json_field "${sp}" dir)"
+        [[ -z "${dir}" ]] && continue
+        # De-duplicate: several releases of one flavor share an archive root.
+        local seen=0 d
+        for d in ${dirs[@]+"${dirs[@]}"}; do
+            [[ "$d" == "${dir}" ]] && seen=1
+        done
+        [[ "${seen}" == "0" ]] && dirs+=("${dir}")
+    done
+
+    printf '\n    # APT mirrors. Clients use:\n'
+    printf '    #   deb http://server:PORT/<flavor> <codename> <components>\n'
+    if [[ ${#dirs[@]} -eq 0 ]]; then
+        # No native targets: serve the legacy single-flavor tree so an
+        # existing apt-mirror/debmirror install keeps working after upgrade.
+        printf '    location /ubuntu/ {\n        alias %s/;\n        autoindex on;\n    }\n' \
+            "${legacy_path}"
+        return 0
+    fi
+    for dir in "${dirs[@]}"; do
+        printf '    location /%s/ {\n' "${dir}"
+        printf '        alias %s/apt/%s/;\n' "${base_dir}" "${dir}"
+        printf '        autoindex on;\n'
+        printf '    }\n'
+    done
+    # Browsable index of every APT tree at once.
+    printf '    location /apt/ {\n        alias %s/apt/;\n        autoindex on;\n    }\n' \
+        "${base_dir}"
 }
 
 # -- Internal helpers ---------------------------------------------------------

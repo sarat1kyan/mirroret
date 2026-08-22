@@ -7,6 +7,10 @@ TESTING.md
 /tmp/
 tests/tmp/
 
+# Python bytecode from the mirroring engines
+__pycache__/
+*.pyc
+
 # Editor swap
 *.swp
 *.swo

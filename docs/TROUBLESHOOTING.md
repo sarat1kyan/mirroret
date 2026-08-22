@@ -71,6 +71,76 @@ systemctl restart verdaccio
 
 ## APT mirror
 
+### No .deb is ever downloaded, and nothing reports an error
+
+The single most common cause: **no APT target is configured.**
+
+```bash
+mirroretctl targets
+```
+
+If that prints no APT target, or install.sh warned "APT mirroring is enabled
+but no target resolved", the server has nothing to mirror. What a server
+mirrors is configuration, not a consequence of what it runs, so a RHEL or
+CentOS mirror server has nothing to guess from:
+
+```bash
+sudo tee -a /etc/mirroret/mirroret.conf >/dev/null <<'EOF'
+MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
+EOF
+sudo ./install.sh --upgrade
+mirroretctl targets            # each target should now be listed
+sudo mirroretctl sync apt
+```
+
+On installs older than the multi-distro change, APT setup was gated on the
+mirror server being Debian-based and simply skipped on any other host - no
+error, because skipping was the designed behaviour. See
+[MULTI-DISTRO.md](MULTI-DISTRO.md).
+
+### A suite exists but clients get 404 on every package
+
+```bash
+# Are there packages at all?
+find /srv/mirroret/apt -name '*.deb' | wc -l
+
+# Does the tree have indices but no pool?
+ls /srv/mirroret/apt/ubuntu/
+```
+
+`dists/` with no `pool/` means indices were published without packages. The
+native engine cannot produce that state (it publishes `Release` last, only
+after every listed package is on disk), so this indicates a legacy
+apt-mirror/debmirror tree or a manual edit. Re-run the sync:
+
+```bash
+sudo mirroretctl sync apt
+```
+
+### The sync says "signature: NOT verified locally"
+
+Expected on a mirror server that is not Debian/Ubuntu: verifying a suite's
+`Release` needs the matching archive keyring, and a RHEL host has no
+`ubuntu-archive-keyring`.
+
+It is not a security hole. The archive is mirrored byte-for-byte including
+its signature, so every client re-verifies it with its own keyring - which is
+the check that actually protects the client. To make it fatal instead of a
+warning, install the keyring on the mirror server (or point
+`--keyring` at a copy) and set:
+
+```bash
+MIRRORET_APT_REQUIRE_SIGNATURE=1
+```
+
+### The sync fails with "sha256 mismatch" on one package
+
+The upstream archive was mid-publish, or a proxy truncated the transfer. The
+engine retries each download, so a persistent mismatch means the bytes really
+do differ. It refuses to publish the suite, leaving the previous state
+serving. Re-run the sync; if it persists for the same package, the upstream
+mirror is inconsistent - try a different `MIRRORET_APT_UPSTREAM_HOST`.
+
 ### apt-mirror sync fails
 
 ```bash
@@ -121,6 +191,79 @@ sudo ./install.sh --check
 ---
 
 ## RPM / yum / dnf
+
+### Clients resolve a package, then get 404 downloading it
+
+The metadata lists packages that are not on disk. This happens when a
+FILTERED mirror (an arch subset, or the default `--newest-only`) is served
+with upstream's metadata, which advertises everything upstream has.
+
+The native engine cannot produce this: it rewrites metadata to list exactly
+what it downloaded, and publishes `repodata/` only after every selected
+package has verified. If you are seeing it:
+
+```bash
+# 1. Are you keeping upstream metadata on a filtered mirror?
+grep MIRRORET_RPM_KEEP_UPSTREAM_METADATA /etc/mirroret/mirroret.conf
+
+# 2. Re-sync so metadata matches disk:
+sudo mirroretctl sync rpm
+
+# 3. Prove a client can resolve AND download:
+mirroretctl client simulate
+```
+
+`mirroretctl client simulate` is the check that matters - it queries the
+mirror over HTTP exactly as a client does and then fetches the package the
+metadata points at.
+
+### "dnf install glibc.i686" fails with "No match for argument"
+
+The i686 subpackages were never mirrored. Add the architecture and re-sync:
+
+```bash
+sudo sed -i 's/^#\?MIRRORET_RPM_ARCH=.*/MIRRORET_RPM_ARCH="x86_64 i686"/' \
+    /etc/mirroret/mirroret.conf
+sudo ./install.sh --upgrade
+sudo mirroretctl sync rpm
+```
+
+Cost: roughly 10-15% more disk on baseos/appstream.
+
+### Clients fail with a repomd.xml signature error
+
+A filtered mirror rebuilds `repomd.xml` locally, so upstream's detached
+signature no longer applies and is deliberately not published. Remove
+`repo_gpgcheck=1` from the client's `.repo` file - the generated configs do
+not set it.
+
+Package signatures are untouched by mirroring, so `gpgcheck=1` still works
+and still verifies the vendor's signature. To keep upstream's signed
+metadata you must mirror everything:
+
+```bash
+MIRRORET_RPM_NEWEST_ONLY=0
+MIRRORET_RPM_SOURCE=1
+MIRRORET_RPM_ARCH=""     # every architecture upstream publishes
+```
+
+That is terabytes on most repos. Read
+[MULTI-DISTRO.md](MULTI-DISTRO.md) first.
+
+### "did not return repository metadata" / "not <repomd>"
+
+The upstream URL answered, but with something that is not repository
+metadata - almost always a proxy block page. The engine prints the first
+bytes of the response so you can see what it got:
+
+```bash
+# Confirm from the mirror server:
+curl -sS -o /dev/null -w '%{http_code}\n' \
+    https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/repodata/repomd.xml
+```
+
+A 403 here is a proxy policy decision, not a mirroret problem. See
+[PROXY_AND_CA.md](PROXY_AND_CA.md) and FIXME-ENVIRONMENT.md BLOCKER 1.
 
 ### reposync fails
 

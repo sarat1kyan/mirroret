@@ -238,6 +238,14 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # The conf file is shell syntax. Sourcing it here would let a stray line
 # clobber this script's own variables, so values are extracted one at a
 # time from a sandboxed subshell instead.
+# conf_get <key> [default] - resolve a setting the way the running install does.
+#
+# Precedence: the config file (which is what install.sh honours), then this
+# process's environment, then the built-in default. The environment fallback
+# matters: this collector is what you run when the install is broken, and on a
+# host with no config file yet an operator who exported MIRRORET_BASE_DIR
+# would otherwise get a report about /srv/mirroret while their data sits
+# somewhere else entirely.
 conf_get() {
     local key="$1" def="${2:-}"
     if [[ -r "${CONF_FILE}" ]]; then
@@ -245,6 +253,8 @@ conf_get() {
         v="$(bash -c "set +u; source '${CONF_FILE}' >/dev/null 2>&1; printf '%s' \"\${${key}:-}\"" 2>/dev/null)"
         if [[ -n "${v}" ]]; then printf '%s' "${v}"; return 0; fi
     fi
+    local env_v="${!key:-}"
+    if [[ -n "${env_v}" ]]; then printf '%s' "${env_v}"; return 0; fi
     printf '%s' "${def}"
 }
 
@@ -455,8 +465,9 @@ sec "GENERATED SCRIPTS"
 caps "scripts dir" "ls -la '${SCRIPTS_DIR}' 2>/dev/null"
 
 MANAGED_MARKER="MIRRORET-MANAGED"
-for s in sync-all.sh sync-redhat-repos.sh sync-pip-packages.sh sync-npm-packages.sh \
-         sync-docker-images.sh sync-apt-mirror.sh cleanup-old-versions.sh; do
+for s in sync-all.sh sync-apt-repos.sh sync-rpm-repos.sh sync-redhat-repos.sh \
+         sync-apt-debmirror.sh sync-pip-packages.sh sync-npm-packages.sh \
+         sync-docker-images.sh cleanup-all.sh cleanup-old-versions.sh; do
     f="${SCRIPTS_DIR}/${s}"
     sub "script: ${s}"
     if [[ ! -e "$f" ]]; then
@@ -709,6 +720,106 @@ caps "log dir size and count" \
 LOGN=$(( $(find "${LOGS_DIR}" -type f 2>/dev/null | wc -l) ))
 if [[ "${LOGN}" -gt 2000 ]]; then
     finding WARN "${LOGN} files in ${LOGS_DIR}. logrotate is probably not covering them; unbounded log growth eventually fills the volume."
+fi
+
+# =============================================================================
+# 14b  Mirror targets (which distributions this server serves)
+# =============================================================================
+sec "MIRROR TARGETS"
+TARGETS_DIR="${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"
+caps "targets dir" "ls -la '${TARGETS_DIR}' 2>/dev/null"
+caps "engines dir" "ls -la '${BASE_DIR}/engines' 2>/dev/null"
+caps "python3" "python3 -V 2>&1"
+
+_TGT_APT=0
+_TGT_RPM=0
+if [[ -d "${TARGETS_DIR}" ]]; then
+    for f in "${TARGETS_DIR}"/*.json; do
+        [[ -f "$f" ]] || continue
+        sub "target: $(basename "$f")"
+        # Print the spec verbatim: it is small, and it is the single source of
+        # truth for what this server mirrors.
+        out "$(cat "$f" 2>/dev/null)"
+        case "$(basename "$f")" in
+            apt-*) _TGT_APT=$(( _TGT_APT + 1 )) ;;
+            rpm-*) _TGT_RPM=$(( _TGT_RPM + 1 )) ;;
+        esac
+    done
+fi
+out ""
+out "APT targets: ${_TGT_APT}"
+out "RPM targets: ${_TGT_RPM}"
+
+# The failure this exists to catch: APT enabled, no APT target, so nothing
+# is ever downloaded and nothing complains.
+if [[ "${_TGT_APT}" -eq 0 ]] && [[ -d "${BASE_DIR}" ]]; then
+    if [[ ! -f "${SCRIPTS_DIR}/sync-apt-debmirror.sh" ]] && \
+       [[ ! -f /etc/apt/mirror.list ]]; then
+        finding WARN "No APT mirror target is configured, so no .deb is ever downloaded and no error is reported. If Debian/Ubuntu clients should use this server, set MIRRORET_APT_TARGETS (e.g. \"ubuntu:jammy debian:bookworm\") in /etc/mirroret/mirroret.conf and run: sudo ./install.sh --upgrade"
+    fi
+fi
+if [[ "${_TGT_RPM}" -eq 0 ]] && [[ -d "${BASE_DIR}" ]] && \
+   [[ ! -f "${SCRIPTS_DIR}/sync-redhat-repos.sh" ]]; then
+    finding WARN "No RPM mirror target is configured. If RHEL-family clients should use this server, set MIRRORET_RPM_TARGETS (e.g. \"ol:9 rocky:9\") and run: sudo ./install.sh --upgrade"
+fi
+
+# =============================================================================
+# 14c  APT mirror contents
+# =============================================================================
+sec "APT MIRROR CONTENTS"
+APT_ROOT="${BASE_DIR}/apt"
+caps "apt root listing" "ls -la '${APT_ROOT}' 2>/dev/null"
+
+if [[ -d "${APT_ROOT}" ]]; then
+    sub "published suites (a suite is published when its Release file exists)"
+    _APT_SUITES=0
+    # Iterate dists/<suite>/ directories directly. Globbing for any
+    # Release/InRelease anywhere under dists/ also matches the per-component
+    # <comp>/binary-<arch>/Release files, which counts one real suite three
+    # times and prints a nonsense row for each component.
+    for flav in "${APT_ROOT}"/*; do
+        [[ -d "${flav}/dists" ]] || continue
+        for suite_dir in "${flav}/dists"/*; do
+            [[ -d "${suite_dir}" ]] || continue
+            if [[ ! -f "${suite_dir}/Release" ]] && [[ ! -f "${suite_dir}/InRelease" ]]; then
+                printf '%-58s %s\n' \
+                    "$(basename "$flav")/$(basename "$suite_dir")" \
+                    "NOT PUBLISHED (no Release)" >>"${BODY}"
+                continue
+            fi
+            _APT_SUITES=$(( _APT_SUITES + 1 ))
+            n_pkg=0
+            for idx in "${suite_dir}"/*/binary-*/Packages*; do
+                [[ -f "$idx" ]] || continue
+                case "$idx" in
+                    *.gz) n=$(gzip -dc "$idx" 2>/dev/null | grep -c '^Filename:' || true) ;;
+                    *.xz) n=$(xz -dc "$idx" 2>/dev/null | grep -c '^Filename:' || true) ;;
+                    *)    n=$(grep -c '^Filename:' "$idx" 2>/dev/null || true) ;;
+                esac
+                n_pkg=$(( n_pkg + ${n:-0} ))
+            done
+            printf '%-58s %8s packages listed\n' \
+                "$(basename "$flav")/$(basename "$suite_dir")" "${n_pkg}" >>"${BODY}"
+        done
+    done
+    out ""
+    out "published suites: ${_APT_SUITES}"
+
+    sub "pool contents"
+    caps "deb count" "find '${APT_ROOT}' -name '*.deb' 2>/dev/null | wc -l"
+    caps "pool size" "du -sh '${APT_ROOT}' 2>/dev/null"
+
+    # A tree with a dists/ but no pool means indices were published without
+    # packages, which gives clients 404s on every install.
+    for flav in "${APT_ROOT}"/*; do
+        [[ -d "$flav" ]] || continue
+        if [[ -d "${flav}/dists" ]] && [[ ! -d "${flav}/pool" ]]; then
+            finding FAIL "$(basename "$flav"): dists/ exists but pool/ does not. Clients will resolve packages and then get 404 on download. Re-run the APT sync: sudo ${SCRIPTS_DIR}/sync-apt-repos.sh"
+        fi
+    done
+    if [[ "${_APT_SUITES}" -eq 0 ]] && [[ "${_TGT_APT}" -gt 0 ]]; then
+        finding WARN "${_TGT_APT} APT target(s) configured but no suite has been published yet. Run: sudo ${SCRIPTS_DIR}/sync-apt-repos.sh"
+    fi
 fi
 
 # =============================================================================

@@ -1,6 +1,33 @@
 # mirroret
 
-Local package repository server for Linux. Mirrors APT, RPM, pip, Docker, and npm packages so air-gapped or bandwidth-constrained machines can install packages from a local server instead of the internet.
+One server that every Linux machine on your network installs packages from.
+
+Install it on a single host and it mirrors APT (Ubuntu, Debian), RPM (Oracle
+Linux, Rocky, AlmaLinux, CentOS Stream, RHEL, Fedora, EPEL), pip, npm and
+Docker images. Clients point at it instead of the internet.
+
+**The mirror server's own distribution is irrelevant.** A RHEL 9 box mirrors
+Ubuntu 22.04 + 24.04 + Debian 12 + Oracle Linux 9 side by side; so does a
+Debian 12 box. What gets mirrored is configuration, not a consequence of what
+the server happens to run:
+
+```bash
+# in /etc/mirroret/mirroret.conf
+MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
+MIRRORET_RPM_TARGETS="ol:9 rocky:9 epel:9"
+```
+
+New here? [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) walks the whole
+thing end to end. [docs/MULTI-DISTRO.md](docs/MULTI-DISTRO.md) is the full
+model behind the two lines above.
+
+APT and RPM mirroring are done by two self-contained Python 3 engines
+(`engines/`) that need only the standard library — no `apt-mirror`,
+`debmirror`, `reposync` or `createrepo`, and no requirement that the
+repository be configured in the mirror server's own package manager. Both
+publish metadata only after every package it references is on disk and
+verified, so an interrupted sync never leaves clients resolving packages that
+404.
 
 ---
 
@@ -10,7 +37,9 @@ Local package repository server for Linux. Mirrors APT, RPM, pip, Docker, and np
 
 - Linux: Ubuntu 20.04+, Debian 11+, or RHEL/CentOS/Rocky/AlmaLinux 8+
 - Root access on the mirror server
-- 50 GB free disk space minimum (200-500 GB recommended for a full APT mirror)
+- `python3` (present by default on every supported distro)
+- 50 GB free disk space minimum; see the sizing table in
+  [docs/MULTI-DISTRO.md](docs/MULTI-DISTRO.md)
 - Outbound internet access during installation and sync (see [docs/NETWORK_ACCESS.md](docs/NETWORK_ACCESS.md))
 
 ### Installation
@@ -18,6 +47,11 @@ Local package repository server for Linux. Mirrors APT, RPM, pip, Docker, and np
 ```bash
 git clone https://github.com/sarat1kyan/mirroret.git
 cd mirroret
+
+# Decide what your CLIENTS run - not what this server runs:
+sudo ./install.sh \
+    --apt-targets "ubuntu:jammy ubuntu:noble debian:bookworm" \
+    --rpm-targets "ol:9 rocky:9 epel:9"
 
 # Preview without making any changes:
 sudo ./install.sh --dry-run
@@ -67,18 +101,29 @@ tokens and proxy credentials before writing. The report is created mode 600.
 ### After installation
 
 ```bash
-# 1. Open firewall ports for clients (if not done automatically):
+# 1. Confirm what this server is configured to mirror:
+mirroretctl targets
+
+# 2. Open firewall ports for clients (if not done automatically):
 # See docs/NETWORK_ACCESS.md for firewall commands.
 
-# 2. Run the initial sync (takes minutes to hours depending on what you mirror):
+# 3. Run the initial sync (minutes to hours depending on what you mirror):
 sudo /srv/mirroret/scripts/sync-all.sh
+#    ...or one ecosystem at a time:
+sudo mirroretctl sync apt
+sudo mirroretctl sync rpm
 
-# 3. Validate the installation:
+# 4. Validate:
 sudo ./install.sh --check
+mirroretctl targets            # every target should now report "published"
+mirroretctl client simulate    # resolve AND download as a client would
 
-# 4. Distribute client configs to your machines:
+# 5. Distribute client configs (one per target):
 ls /srv/mirroret/config/
 ```
+
+`mirroretctl targets` is the first command to reach for. It answers "what
+does this box actually serve, and has it synced?" per target, in one screen.
 
 ---
 
@@ -130,8 +175,8 @@ sentinel line you removed is left alone. Full docs: [docs/RETENTION.md](docs/RET
 
 | Type | Service | Default port | Client config |
 |------|---------|-------------|---------------|
-| APT (Debian/Ubuntu) | nginx | 8080 | `config/debian-client.list` |
-| RPM (RHEL/CentOS/Rocky) | nginx | 8080 | `config/redhat-client.repo` |
+| APT (Ubuntu, Ubuntu ports, Debian) | nginx | 8080 | `config/<flavor>-<release>.list` and `.sources` |
+| RPM (Oracle, Rocky, Alma, CentOS Stream, RHEL, Fedora, EPEL) | nginx | 8080 | `config/<flavor><major>.repo` |
 | pip (Python) | pypiserver | 8081 | `config/pip.conf` |
 | Docker images | docker-distribution / registry:2 | 5000 | `config/docker-daemon.json` |
 | npm | Verdaccio | 4873 | `config/.npmrc` |
@@ -143,9 +188,17 @@ All ports are configurable. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Supported distributions
 
-**Server:** Ubuntu 20.04/22.04/24.04, Debian 11/12, RHEL/CentOS/Rocky/AlmaLinux 8/9
+**Server:** Ubuntu 20.04/22.04/24.04, Debian 11/12, RHEL/CentOS/Rocky/AlmaLinux 8/9.
+Which one it is does not constrain what it can mirror.
 
-**Clients:** Any Linux distribution that uses APT, yum/dnf, pip, Docker, or npm.
+**Clients — APT:** Ubuntu 20.04/22.04/24.04 (amd64 and, via `ubuntu-ports`,
+arm64/armhf/ppc64el/s390x), Debian 11/12/13.
+
+**Clients — RPM:** Oracle Linux 8/9, Rocky 8/9, AlmaLinux 8/9, CentOS
+Stream 9/10, RHEL 8/9 (entitlement certificate required for the CDN),
+Fedora, EPEL.
+
+**Clients — language ecosystems:** anything using pip, npm or Docker.
 
 ---
 
@@ -170,15 +223,21 @@ MIRRORET_DOCKER_MODE=cache # cache (default, pull-through) | hosted
 MIRRORET_DOCKER_BACKEND=native # Use OS-native registry (no Docker daemon)
 MIRRORET_DOCKER_UPSTREAM_URL=https://registry-1.docker.io # cache-mode upstream
 
+# What to mirror (the setting most installs actually need)
+MIRRORET_APT_TARGETS="ubuntu:jammy debian:bookworm" # flavor:release ...
+MIRRORET_RPM_TARGETS="ol:9 rocky:9 epel:9"          # flavor:major ...
+
 # APT
-MIRRORET_APT_FLAVOR=auto # auto | ubuntu | debian
+MIRRORET_APT_MIRROR_TOOL=auto # auto (native engine) | native | apt-mirror | debmirror
+MIRRORET_APT_COMPONENTS= # biggest disk lever: "main restricted" is ~10% of full
+MIRRORET_APT_BACKPORTS=0 # also mirror <release>-backports
 MIRRORET_APT_UPSTREAM_HOST= # override upstream archive host
-MIRRORET_APT_MIRROR_TOOL=debmirror # Required on Debian 12 (apt-mirror removed)
-MIRRORET_APT_RESIGN=0 # See docs/SECURITY.md before enabling
+MIRRORET_APT_REQUIRE_SIGNATURE=0 # fail, not warn, if Release cannot be verified here
 
 # RPM
-MIRRORET_RPM_FLAVOR= # Override OS_ID-based directory name
-MIRRORET_RPM_REPOS= # Space-separated repo names to sync
+MIRRORET_RPM_ENGINE=auto # auto (native engine) | native | reposync
+MIRRORET_RPM_REPOS= # Space-separated repo ids to sync
+MIRRORET_RPM_ARCH="x86_64 i686" # add i686 if clients install 32-bit multilib
 
 # Other
 MIRRORET_TLS_SELF_SIGNED=1 # Auto-generate a self-signed TLS cert
@@ -271,6 +330,8 @@ make dry-run # run install.sh --dry-run
 
 | Document | Contents |
 |----------|---------|
+| [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | **Start here** - install, configure targets, first sync, point clients at it, day-to-day commands. Every step has a check. |
+| [docs/MULTI-DISTRO.md](docs/MULTI-DISTRO.md) | **Mirroring several distributions from one server** - target syntax, upstream catalog, client URLs, disk sizing, what the engines guarantee |
 | [docs/NETWORK_ACCESS.md](docs/NETWORK_ACCESS.md) | **Firewall rules** - inbound ports for clients, outbound ports for sync, firewall commands for ufw/firewalld/iptables |
 | [docs/PROXY_AND_CA.md](docs/PROXY_AND_CA.md) | HTTP/HTTPS proxy setup and corporate TLS-inspection CA trust (sudo, apt/dnf, pip, npm, docker, podman, systemd, cron) |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Full variable reference: TLS, GPG, approval, Docker mode, APT tool |
@@ -301,6 +362,10 @@ mirroret/
 +-- Makefile lint / test / format / check-deps targets
 +-- config/
 | +-- mirroret.conf.example Documented config file template
++-- engines/
+| +-- mirroret_fetch.py Shared retrying, checksum-verified fetcher
+| +-- mirroret_apt.py APT mirroring engine (stdlib Python only)
+| +-- mirroret_rpm.py RPM mirroring engine (stdlib Python only)
 +-- lib/
 | +-- logging.sh Logging: section/info/warn/error/success/die
 | +-- common.sh xrun() DRY_RUN wrapper, atomic_write, helpers
@@ -310,8 +375,9 @@ mirroret/
 | +-- nginx.sh nginx config (HTTP + optional TLS block)
 | +-- systemd.sh systemd unit writing and enable/start
 | +-- firewall.sh Firewall rules (ufw / firewalld / iptables)
-| +-- apt.sh APT mirror: apt-mirror / apt-mirror2 / debmirror
-| +-- rpm.sh RPM mirror: createrepo, reposync
+| +-- targets.sh Upstream catalog + target specs (which distros to mirror)
+| +-- apt.sh APT mirror: native engine / apt-mirror / debmirror
+| +-- rpm.sh RPM mirror: native engine / reposync + createrepo
 | +-- docker_registry.sh Docker registry: native or container backend
 | +-- pip.sh pypiserver: install, unit, sync script
 | +-- npm.sh Verdaccio: install, config, sync script
@@ -326,6 +392,9 @@ mirroret/
 | +-- test_security.bats 11 tests - security defaults, insecure flags
 | +-- test_dryrun.bats 6 tests - DRY_RUN behaviour
 | +-- test_integration.bats TLS, GPG, approval, Docker backend
+| +-- test_engines.bats End-to-end engine tests against a local archive
+| +-- test_targets.bats Multi-distro targets, catalog, wiring
+| +-- fixtures/ Archive/repo generators + a repodata validator
 +-- docs/
     +-- NETWORK_ACCESS.md Firewall rules - inbound and outbound
     +-- CONFIGURATION.md Config variable reference
@@ -341,26 +410,35 @@ mirroret/
 
 ## Known limitations and unsupported scenarios
 
-- Mirroret has not been end-to-end validated against every real upstream;
-  installs are tested under DRY_RUN and with mocked `/etc/os-release` only.
-  Treat the first real sync as a smoke test, not a guarantee.
-- Full APT mirror requires 200-500 GB and several hours on first sync.
-  Sizes grow over time - there is no automatic retention/cleanup.
+- The mirroring engines are tested end-to-end against real (small) archives
+  served over HTTP, including checksum verification, publish ordering,
+  metadata rewriting and pruning. The installer's system-level steps
+  (systemd, SELinux, firewall) are still exercised under DRY_RUN and with a
+  mocked `/etc/os-release` only. Treat the first real sync of a large target
+  as a capacity test.
+- A full Ubuntu or Debian mirror is 300-600 GB per flavor and takes hours on
+  first sync. `MIRRORET_APT_COMPONENTS="main restricted"` cuts that by
+  roughly 90%. Retention is available but off by default
+  ([docs/RETENTION.md](docs/RETENTION.md)).
 - Docker registry has two operating modes (see `MIRRORET_DOCKER_MODE`):
     - `cache` (default): pull-through proxy. Clients pull through the
       mirror and layers are cached on demand. Pushes are rejected - this
       is a registry-level restriction, not a mirroret choice.
     - `hosted`: the registry accepts `docker push`. `sync-docker-images.sh`
       pre-seeds a curated list using a local `docker` or `podman` CLI.
-- npm auto-publish to Verdaccio requires `npm login` unless you set
-  `MIRRORET_NPM_ALLOW_ANON_PUBLISH=1`.
+- npm pre-seeding warms Verdaccio's cache by installing each package
+  *through* it, which needs no credentials and caches the whole dependency
+  tree. `MIRRORET_NPM_ALLOW_ANON_PUBLISH` now only governs whether people may
+  `npm publish` in-house packages into the registry.
 - **APT signed-by:** by default, generated client configs do NOT emit
   `signed-by=mirroret.gpg`. The mirrored Release files are signed by the
   upstream archive (Ubuntu/Debian), not by mirroret. If you re-sign the
   Release files manually, set `MIRRORET_APT_RESIGN=1` to have the client
   configs reference your mirror keyring. See `docs/SECURITY.md`.
-- Debian 12 (Bookworm) removed `apt-mirror` from its repos. Set
-  `MIRRORET_APT_MIRROR_TOOL=debmirror` or let mirroret fall back automatically.
+- Debian 12 removed `apt-mirror` from its repos, and neither `apt-mirror` nor
+  `debmirror` is installable on a RHEL host. The default native engine needs
+  only `python3`, so this is no longer a constraint; the legacy tools remain
+  available via `MIRRORET_APT_MIRROR_TOOL`.
 - SELinux: file contexts are set blanket-style (`httpd_sys_content_t`)
   and `httpd_can_network_connect` is enabled. A custom policy module is
   not generated.
@@ -372,6 +450,16 @@ mirroret/
   NOT remove OS packages like nginx/Docker/Podman that the operator may
   use for other things - strip those by hand if desired. See
   [docs/UNINSTALL.md](docs/UNINSTALL.md).
-- Mirroring more than one distro family on a single host concurrently
-  (e.g. Rocky AND AlmaLinux) is possible but largely untested - set
-  `MIRRORET_RPM_FLAVOR` explicitly per install.
+- Mirroring several distro families concurrently is a supported, tested
+  configuration - list them in `MIRRORET_APT_TARGETS` /
+  `MIRRORET_RPM_TARGETS`. Each gets its own tree, URL prefix and client
+  config.
+- A filtered RPM mirror (an arch subset, or the default `--newest-only`) has
+  locally rebuilt `repomd.xml`, so clients cannot use `repo_gpgcheck=1` on
+  it. Package signatures are untouched, so `gpgcheck=1` still verifies the
+  vendor's signature. Mirror everything
+  (`MIRRORET_RPM_NEWEST_ONLY=0 MIRRORET_RPM_SOURCE=1`) to keep upstream's
+  signed metadata.
+- Mirroring RHEL itself from `cdn.redhat.com` needs this host's entitlement
+  certificate; the engine picks up `/etc/pki/entitlement/*.pem`
+  automatically on a registered host.

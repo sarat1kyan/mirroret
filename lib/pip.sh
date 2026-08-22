@@ -180,6 +180,11 @@ _write_pip_sync_script() {
         dest_dir="${base_dir}/pip/approved"
     fi
 
+    # Wheel matrix: the interpreter/platform combinations client hosts
+    # actually use. manylinux2014 covers glibc 2.17+, i.e. RHEL 8/9 and
+    # every current Ubuntu/Debian.
+    local pip_platforms="${MIRRORET_PIP_PLATFORMS:-3.9:manylinux2014_x86_64 3.11:manylinux2014_x86_64 3.12:manylinux2014_x86_64}"
+
     # Read package list from MIRRORET_PIP_PACKAGES_FILE when set; otherwise
     # fall back to a small, well-known default list.
     local packages_block
@@ -260,6 +265,17 @@ PACKAGES=(
 ${packages_block}
 )
 
+# "pythonversion:platformtag" pairs to fetch wheels for, on top of whatever
+# this host's own interpreter matches. Override with MIRRORET_PIP_PLATFORMS
+# in /etc/mirroret/mirroret.conf (space separated, same syntax); set it to
+# "-" to fetch only for this host.
+PLATFORM_MATRIX=(${pip_platforms})
+if [[ "\${MIRRORET_PIP_PLATFORMS:-}" == "-" ]]; then
+    PLATFORM_MATRIX=()
+elif [[ -n "\${MIRRORET_PIP_PLATFORMS:-}" ]]; then
+    read -r -a PLATFORM_MATRIX <<< "\${MIRRORET_PIP_PLATFORMS}"
+fi
+
 failed=0
 for package in "\${PACKAGES[@]}"; do
     if ! _check_disk; then
@@ -268,7 +284,28 @@ for package in "\${PACKAGES[@]}"; do
         break
     fi
     echo "Downloading \${package}..."
-    if pip3 download --no-cache-dir --timeout 60 --retries 3 "\${package}" -d "\${DEST_DIR}"; then
+    pkg_ok=1
+    # Plain download: resolves dependencies and picks wheels/sdists for the
+    # interpreter running here.
+    if ! pip3 download --no-cache-dir --timeout 60 --retries 3 \\
+            "\${package}" -d "\${DEST_DIR}"; then
+        pkg_ok=0
+    fi
+    # Cross-platform wheels. A mirror serving a fleet needs the wheels those
+    # clients will ask for, not only the ones matching the mirror server's
+    # own Python and glibc. Without this a RHEL 9 mirror server hands
+    # Ubuntu 22.04 clients nothing usable for anything with C extensions.
+    for _spec in \${PLATFORM_MATRIX[@]+"\${PLATFORM_MATRIX[@]}"}; do
+        _py="\${_spec%%:*}"
+        _plat="\${_spec#*:}"
+        # --only-binary is mandatory with --platform/--python-version.
+        pip3 download --no-cache-dir --timeout 60 --retries 3 \\
+            --only-binary=:all: --python-version "\${_py}" \\
+            --platform "\${_plat}" \\
+            "\${package}" -d "\${DEST_DIR}" >/dev/null 2>&1 \\
+            || echo "   note: no \${_plat} / py\${_py} wheel for \${package} (source-only?)"
+    done
+    if [[ "\${pkg_ok}" == "1" ]]; then
         echo " OK: \${package}"
     else
         echo " FAILED: \${package}"
@@ -313,15 +350,27 @@ trusted-host = ${server_ip}
 PIP_EOF
 
     else
-        # pypiserver serves plain HTTP by default. Use http:// unless TLS is
-        # explicitly configured on the server via a reverse proxy.
-        # Set MIRRORET_PIP_INSECURE=1 to suppress this note in lab mode.
+        # pypiserver serves plain HTTP. pip REFUSES to use an http:// index
+        # unless the host is in trusted-host: it prints
+        #   "The repository located at <ip> is not a trusted or secure host
+        #    and is being ignored"
+        # and then fails to find any package. So trusted-host is not an
+        # "insecure mode" nicety here, it is required for the config to work
+        # at all over HTTP. Omitting it produced a pip.conf that looked fine
+        # and broke every client.
+        #
+        # trusted-host on a plain-HTTP index does not disable anything that
+        # HTTP was protecting: there is no certificate to check. If you need
+        # real transport security, serve the index over TLS (see
+        # docs/SECURITY.md) and drop the trusted-host line.
         cat > "$output_file" <<PIP_EOF
 [global]
 index-url = http://${server_ip}:${pip_port}/simple/
+# Required: pip ignores a plain-HTTP index unless its host is trusted.
+trusted-host = ${server_ip}
 PIP_EOF
-        info "pip client config written (http). For TLS, front pypiserver with an nginx TLS proxy."
-        info "See docs/SECURITY.md for TLS setup."
+        info "pip client config written (http + trusted-host, which pip requires for HTTP)."
+        info "For TLS, front pypiserver with an nginx TLS proxy - see docs/SECURITY.md."
     fi
 
     success "pip client config written: ${output_file}"

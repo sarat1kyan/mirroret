@@ -10,14 +10,20 @@
 #                    A bare port makes Verdaccio bind "localhost", which
 #                    resolves to [::1] on a dual-stack host, so every
 #                    client gets connection refused.
-# MIRRORET_NPM_ALLOW_ANON_PUBLISH=1 allow unauthenticated publish to Verdaccio
-# (useful in isolated networks with no auth needed).
+# MIRRORET_NPM_ALLOW_ANON_PUBLISH=1 allow unauthenticated `npm publish` into
+# Verdaccio. Only needed if humans publish
+# in-house packages here. Pre-seeding does NOT
+# need it any more: the sync script warms
+# Verdaccio's cache by installing through it
+# rather than publishing into it, which is why
+# the old runs logged ENEEDAUTH on every
+# package.
 # MIRRORET_APPROVAL_ENABLED=1 download tarballs to staging/npm/ instead of
 # publishing directly; admin promotes via approval.sh.
 #
-# NOTE: npm auto-publish via verdaccio has limitations. Verdaccio must be
-# running and reachable on localhost before the sync script can publish.
-# Scoped packages (@org/pkg) require the registry to have the scope configured.
+# NOTE: Verdaccio must be running and able to reach its npmjs uplink before
+# the sync script can warm the cache; the script checks and says so. Once
+# warmed, clients install from this server with no internet access.
 # See docs/OPERATIONS.md for the full npm mirroring workflow.
 
 MIRRORET_NPM_USER="${MIRRORET_NPM_USER:-mirroret-npm}"
@@ -328,7 +334,6 @@ _write_npm_sync_script() {
     local npm_port="${MIRRORET_NPM_PORT:-4873}"
     local approval="${MIRRORET_APPROVAL_ENABLED:-0}"
     local packages_file="${MIRRORET_NPM_PACKAGES_FILE:-}"
-    local allow_anon="${MIRRORET_NPM_ALLOW_ANON_PUBLISH:-0}"
     local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
@@ -364,40 +369,53 @@ _write_npm_sync_script() {
     "eslint"'
     fi
 
-    # Approval mode: download to staging, do NOT publish automatically.
-    # Non-approval mode: download then publish to Verdaccio.
-    local publish_block
+    # How packages get into the registry.
+    #
+    # This used to run `npm pack` against npmjs and then `npm publish` into
+    # Verdaccio. That fails with ENEEDAUTH on every package unless anonymous
+    # publish is enabled, which on a 0.0.0.0 listener means anyone on the
+    # network can publish into your registry.
+    #
+    # Warming the cache instead is both safer and more useful: asking
+    # Verdaccio itself for the package makes it fetch from its npmjs uplink
+    # and store the tarball in its own storage, so the package is served
+    # offline afterwards - and `npm install` resolves the FULL dependency
+    # tree, which `npm pack` never did. Pre-seeding express used to leave
+    # its 50-odd dependencies missing.
+    local seed_block
     if [[ "${approval}" == "1" ]]; then
-        publish_block="# Approval mode: tarballs land in staging. Run mirroret --approve-all-npm to promote."
-    elif [[ "${allow_anon}" == "1" ]]; then
-        publish_block=' tarball=$(ls -t "${WORK_DIR}/"*.tgz 2>/dev/null | head -1)
-    if [[ -n "${tarball}" ]]; then
-        _out="$(npm publish --loglevel=error "${tarball}" --registry "${VERDACCIO_URL}" 2>&1)" && _rc=0 || _rc=$?
-        if [[ $_rc -eq 0 ]]; then
-            echo " PUBLISHED: ${package}"
-        elif printf "%s" "$_out" | grep -qiE "EPUBLISHCONFLICT|cannot publish over|already present|previously published"; then
-            # Version already in the registry from an earlier sync. That is
-            # the steady state, not an error - without this the nightly run
-            # reports "FAILED: npm" forever and operators tune it out.
-            echo " ALREADY PRESENT: ${package}"
-        else
-            echo " PUBLISH FAILED: ${package}"
-            printf "%s\n" "$_out"
-            failed=$(( failed + 1 ))
-        fi
+        # Approval mode has no uplink (see _write_verdaccio_config), so
+        # warming is impossible by design: tarballs are fetched from npmjs
+        # into staging and an operator promotes them.
+        seed_block='    if npm pack --loglevel=error --fetch-timeout=60000 --fetch-retries=3 \
+            "${package}" >/dev/null; then
+        echo " STAGED: ${package}"
+    else
+        echo " DOWNLOAD FAILED: ${package}"
+        failed=$(( failed + 1 ))
     fi'
     else
-        publish_block=' # Verdaccio requires authentication by default.
-    # Set MIRRORET_NPM_ALLOW_ANON_PUBLISH=1 to enable anonymous publish,
-    # or run: npm login --registry="${VERDACCIO_URL}" before syncing.
-    tarball=$(ls -t "${WORK_DIR}/"*.tgz 2>/dev/null | head -1)
-    if [[ -n "${tarball}" ]]; then
-        if npm publish --loglevel=error "${tarball}" --registry "${VERDACCIO_URL}"; then
-            echo " PUBLISHED: ${package}"
-        else
-            echo " PUBLISH FAILED (auth required?): ${package}"
-            failed=$(( failed + 1 ))
-        fi
+        seed_block='    # Resolve and fetch the whole tree THROUGH Verdaccio so every
+    # tarball lands in its storage and is later served offline.
+    # --cache is essential: npm would otherwise satisfy most of the tree
+    # from its OWN cache in root'"'"'s home and never ask Verdaccio for those
+    # tarballs, leaving them missing from the mirror. Measured on express:
+    # 21 of 66 tarballs reached Verdaccio with npm'"'"'s cache in play, 66 of 66
+    # without.
+    if npm install --prefix "${WORK_DIR}/warm" \
+            --cache "${WORK_DIR}/npm-cache" \
+            --registry "${VERDACCIO_URL}" \
+            --no-audit --no-fund --loglevel=error \
+            --fetch-timeout=60000 --fetch-retries=3 \
+            --omit=dev --ignore-scripts \
+            "${package}" >/dev/null 2>&1; then
+        _n=$(find "${WORK_DIR}/warm/node_modules" -maxdepth 2 -name package.json 2>/dev/null | wc -l)
+        echo " CACHED: ${package} (+ deps: ${_n})"
+    else
+        echo " CACHE FAILED: ${package}"
+        echo "   Verdaccio could not reach its npmjs uplink, or the package"
+        echo "   name is wrong. Check: journalctl -u verdaccio -n 50"
+        failed=$(( failed + 1 ))
     fi'
     fi
 
@@ -410,8 +428,11 @@ ${MIRRORET_MANAGED_MARKER}
 # before running install.sh - do NOT edit this file directly.
 
 # npm package sync script - generated by mirroret.
-# Downloads tarballs via 'npm pack' and (when approval is off) publishes them
-# to Verdaccio.
+#
+# Pre-seeds the local Verdaccio registry by installing each package THROUGH
+# it, which makes Verdaccio cache the tarball (and every dependency's
+# tarball) in its own storage. After a successful run those packages install
+# from this server with no internet access at all.
 
 VERDACCIO_URL="http://localhost:${npm_port}/"
 # When approval mode is on, download to staging/npm (approval.sh promotes to approved/npm).
@@ -473,9 +494,23 @@ else
 fi
 failed=0
 
-# Start from a clean work dir so 'ls -t | head -1' cannot pick up a tarball
-# left behind by an earlier run (which would publish the wrong package).
+# Start from a clean work dir: a tarball or node_modules tree left by an
+# earlier run would make the per-package result reporting lie.
 if [[ "\${APPROVAL_MODE}" != "1" ]]; then
+    rm -rf "\${WORK_DIR}/warm" "\${WORK_DIR}/npm-cache"
+    mkdir -p "\${WORK_DIR}/warm" "\${WORK_DIR}/npm-cache"
+    # npm refuses to install into a prefix with no package.json.
+    printf '{"name":"mirroret-warm","version":"1.0.0","private":true}\\n' \\
+        > "\${WORK_DIR}/warm/package.json"
+
+    # The registry must be up before we can warm it through.
+    if ! curl -fsS -o /dev/null --max-time 10 "\${VERDACCIO_URL}"; then
+        echo "ERROR: Verdaccio is not answering on \${VERDACCIO_URL}."
+        echo "       Start it first: sudo systemctl restart verdaccio"
+        echo "       Then: sudo journalctl -u verdaccio -n 50 --no-pager"
+        exit 5
+    fi
+else
     find "\${WORK_DIR}" -maxdepth 1 -name '*.tgz' -delete 2>/dev/null || true
 fi
 
@@ -487,15 +522,14 @@ for package in "\${PACKAGES[@]}"; do
     fi
     echo "Processing \${package}..."
     pushd "\${WORK_DIR}" >/dev/null
-    if npm pack --loglevel=error --fetch-timeout=60000 --fetch-retries=3 "\${package}"; then
-        echo " DOWNLOADED: \${package}"
-${publish_block}
-    else
-        echo " DOWNLOAD FAILED: \${package}"
-        failed=\$(( failed + 1 ))
-    fi
+${seed_block}
     popd >/dev/null
 done
+
+if [[ "\${APPROVAL_MODE}" != "1" ]]; then
+    echo "Registry storage now holds: \$(find "\${APPROVED_DIR}" -name '*.tgz' 2>/dev/null | wc -l) tarball(s)"
+    rm -rf "\${WORK_DIR}/warm" "\${WORK_DIR}/npm-cache"
+fi
 
 echo "npm sync completed: \$(date) (\${failed} failures)"
 if [[ "\${APPROVAL_MODE}" == "1" ]]; then

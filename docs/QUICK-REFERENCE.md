@@ -1,5 +1,35 @@
 # Quick Reference Card - Local Repository Server
 
+## What does this server mirror?
+
+```bash
+mirroretctl targets            # every target + whether it has synced
+mirroretctl client list        # generated client configs and their URLs
+mirroretctl client verify      # configs vs what is actually published
+```
+
+Set it in `/etc/mirroret/mirroret.conf`, then `sudo mirroretctl upgrade`:
+
+```bash
+MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
+MIRRORET_RPM_TARGETS="ol:9 rocky:9 epel:9"
+```
+
+The mirror server's own distro is irrelevant - see docs/MULTI-DISTRO.md.
+
+## Sync one ecosystem
+
+```bash
+sudo mirroretctl sync apt      # Ubuntu / Debian
+sudo mirroretctl sync rpm      # Oracle / Rocky / Alma / CentOS / EPEL / RHEL
+sudo mirroretctl sync pip
+sudo mirroretctl sync npm
+sudo mirroretctl sync all
+sudo mirroretctl sync stop     # stop whatever is running
+```
+
+
+
 ## Installation (One Command)
 ```bash
 sudo ./mirroret-server-install.sh

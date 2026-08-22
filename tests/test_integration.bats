@@ -307,17 +307,23 @@ teardown() {
     grep -q "staging/npm" "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
 }
 
-@test "npm: sync script contains auto-publish block when anon publish enabled" {
+@test "npm: seeding needs no publish credentials" {
+    # MIRRORET_NPM_ALLOW_ANON_PUBLISH used to be required for pre-seeding to
+    # work at all. Seeding now warms Verdaccio's cache by installing through
+    # it, so the knob only governs whether humans may publish in-house
+    # packages - and the generated script must not depend on it.
     DRY_RUN=0
+    MIRRORET_NPM_ALLOW_ANON_PUBLISH=0
     MIRRORET_APPROVAL_ENABLED=0
-    MIRRORET_NPM_ALLOW_ANON_PUBLISH=1
-    MIRRORET_NPM_PORT=4873
     mkdir -p "${MIRRORET_BASE_DIR}/scripts"
     _write_npm_sync_script "${MIRRORET_BASE_DIR}"
-    grep -q "npm publish" "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+    local script="${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+    ! grep -q 'npm publish' "$script"
+    grep -q 'npm install --prefix' "$script"
+    # It must fail loudly rather than silently when Verdaccio is down, since
+    # warming is impossible without it.
+    grep -q 'Verdaccio is not answering' "$script"
 }
-
-# -- pip sync script -----------------------------------------------------------
 
 @test "pip: sync script targets staging when approval enabled" {
     DRY_RUN=0

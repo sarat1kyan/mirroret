@@ -44,6 +44,8 @@ source "${SCRIPT_DIR}/lib/nginx.sh"
 source "${SCRIPT_DIR}/lib/systemd.sh"
 # shellcheck source=lib/firewall.sh
 source "${SCRIPT_DIR}/lib/firewall.sh"
+# shellcheck source=lib/targets.sh
+source "${SCRIPT_DIR}/lib/targets.sh"
 # shellcheck source=lib/apt.sh
 source "${SCRIPT_DIR}/lib/apt.sh"
 # shellcheck source=lib/rpm.sh
@@ -103,6 +105,16 @@ MIRRORET_APT_RESIGN="${MIRRORET_APT_RESIGN:-0}"
 # RPM flavor / repos.
 MIRRORET_RPM_FLAVOR="${MIRRORET_RPM_FLAVOR:-}"
 MIRRORET_RPM_REPOS="${MIRRORET_RPM_REPOS:-}"
+MIRRORET_RPM_ENGINE="${MIRRORET_RPM_ENGINE:-auto}"
+
+# Multi-distribution targets. THIS is what makes one server a central
+# mirror for every client distro instead of only its own:
+#   MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
+#   MIRRORET_RPM_TARGETS="ol:9 rocky:9 epel:9"
+# Unset means "guess from this host", which is only meaningful when the
+# mirror server happens to run the same distro as its clients.
+MIRRORET_APT_TARGETS="${MIRRORET_APT_TARGETS:-}"
+MIRRORET_RPM_TARGETS="${MIRRORET_RPM_TARGETS:-}"
 
 # Preflight network probe (off by default; on means outbound HTTPS).
 MIRRORET_PREFLIGHT_NETWORK="${MIRRORET_PREFLIGHT_NETWORK:-0}"
@@ -233,6 +245,18 @@ parse_args() {
                 shift
                 MIRRORET_DOCKER_MODE="$1"
                 ;;
+            --apt-targets)
+                shift
+                MIRRORET_APT_TARGETS="$1"
+                ;;
+            --rpm-targets)
+                shift
+                MIRRORET_RPM_TARGETS="$1"
+                ;;
+            --rpm-engine)
+                shift
+                MIRRORET_RPM_ENGINE="$1"
+                ;;
             --apt-flavor)
                 shift
                 MIRRORET_APT_FLAVOR="$1"
@@ -352,6 +376,12 @@ Options:
   --insecure Enable all insecure modes (LAB ONLY)
   --docker-mode <cache|hosted> cache: pull-through proxy (default).
                                 hosted: accept docker push, no proxy.
+  --apt-targets "<f:rel ...>" distros to mirror for APT clients
+                            e.g. "ubuntu:jammy ubuntu:noble debian:bookworm"
+  --rpm-targets "<f:maj ...>" distros to mirror for RPM clients
+                            e.g. "ol:9 rocky:9 epel:9"
+  --rpm-engine <auto|native|reposync>
+                            RPM mirroring engine (default auto)
   --apt-flavor <auto|ubuntu|debian> override APT upstream flavor
   --network-preflight run optional outbound HTTPS preflight probe
   --upgrade Fast re-install: skip pkg install + user create; refresh
@@ -418,6 +448,8 @@ create_directory_structure() {
     section "Creating Directory Structure"
 
     local dirs=(
+        "${MIRRORET_BASE_DIR}/apt"
+        "${MIRRORET_BASE_DIR}/engines"
         "${MIRRORET_BASE_DIR}/debian/mirror/ubuntu"
         "${MIRRORET_BASE_DIR}/debian/mirror/debian"
         "${MIRRORET_BASE_DIR}/debian/approved"
@@ -512,6 +544,45 @@ install_system_packages() {
     success "System packages installed."
 }
 
+# -- Mirror engines ------------------------------------------------------------
+# The APT and RPM engines are plain Python scripts. They are copied into the
+# base directory so the generated sync scripts have a stable path that does
+# not depend on where the install tree happens to live (a zip-based upgrade
+# extracts to a new directory, and the old code silently broke when that
+# happened).
+install_mirror_engines() {
+    local src="${SCRIPT_DIR}/engines"
+    local dst="${MIRRORET_BASE_DIR}/engines"
+
+    if [[ ! -d "${src}" ]]; then
+        warn "engines/ not found in the install tree (${src})."
+        warn "The native APT/RPM mirroring engines will be unavailable."
+        return 0
+    fi
+
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would install mirror engines to ${dst}/"
+        return 0
+    fi
+
+    section "Installing Mirror Engines"
+    mkdir -p "${dst}"
+    local f
+    for f in "${src}"/*.py; do
+        [[ -f "${f}" ]] || continue
+        install -m 0755 "${f}" "${dst}/$(basename "${f}")"
+        debug "installed engine: $(basename "${f}")"
+    done
+
+    if ! check_command python3; then
+        warn "python3 is not installed. The native mirroring engines need it."
+        warn "  Install it: ${PKG_MGR_INSTALL} python3"
+    else
+        info "Engine interpreter: $(python3 -V 2>&1)"
+    fi
+    success "Mirror engines installed: ${dst}/"
+}
+
 # -- Cron setup ----------------------------------------------------------------
 # We bracket our cron lines with sentinel comments. Re-runs replace only
 # the bracketed region, so unrelated operator cron lines are preserved
@@ -582,12 +653,26 @@ write_master_sync_script() {
 
     # Choose the APT sync command based on whichever tool was resolved.
     # MIRRORET_APT_RESOLVED_TOOL is exported by configure_apt_mirror().
+    #
+    # NOT gated on DISTRO_TYPE. The native engine mirrors Ubuntu and Debian
+    # from any host, and gating this on the mirror server's own distro is
+    # exactly why a RHEL server never downloaded a single .deb.
     local apt_sync_cmd=""
-    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
-        case "${MIRRORET_APT_RESOLVED_TOOL:-apt-mirror}" in
-            debmirror) apt_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-apt-debmirror.sh" ;;
+    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]]; then
+        case "${MIRRORET_APT_RESOLVED_TOOL:-native}" in
+            native)      apt_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-apt-repos.sh" ;;
+            debmirror)   apt_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-apt-debmirror.sh" ;;
             apt-mirror2) apt_sync_cmd="/usr/local/bin/apt-mirror2" ;;
-            *) apt_sync_cmd="/usr/bin/apt-mirror" ;;
+            *)           apt_sync_cmd="/usr/bin/apt-mirror" ;;
+        esac
+    fi
+
+    # Same for RPM: the native engine needs no dnf and no local .repo file.
+    local rpm_sync_cmd=""
+    if [[ "${MIRRORET_ENABLE_RPM}" == "1" ]]; then
+        case "${MIRRORET_RPM_RESOLVED_ENGINE:-native}" in
+            reposync) rpm_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-redhat-repos.sh" ;;
+            *)        rpm_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-rpm-repos.sh" ;;
         esac
     fi
 
@@ -661,7 +746,7 @@ _run_step() {
 }
 
 _run_step "apt" "${apt_sync_cmd}"
-_run_step "RHEL repos" "\${BASE_DIR}/scripts/sync-redhat-repos.sh"
+_run_step "rpm" "${rpm_sync_cmd}"
 _run_step "pip" "\${BASE_DIR}/scripts/sync-pip-packages.sh"
 _run_step "Docker" "${docker_sync_cmd}"
 _run_step "npm" "\${BASE_DIR}/scripts/sync-npm-packages.sh"
@@ -851,19 +936,34 @@ generate_all_client_configs() {
     section "Generating Client Configuration Files"
 
     local config_dir="${MIRRORET_BASE_DIR}/config"
-    mkdir -p "$config_dir"
-
-    # APT and RPM client configs only make sense when this server actually
-    # mirrors that ecosystem. Since configure_apt_mirror / configure_createrepo
-    # are gated on DISTRO_TYPE, the client-config side must be too - otherwise
-    # you get either a nonsense config or a hard fail (e.g. asking for the
-    # Ubuntu codename of "9.8" on a RHEL host).
-    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
-        generate_apt_client_config "${config_dir}/debian-client.list"
+    # Respect DRY_RUN: the per-ecosystem generators below each no-op under it,
+    # so creating the directory here was the one thing a dry run still wrote
+    # to the filesystem.
+    if [[ "${DRY_RUN}" != "1" ]]; then
+        mkdir -p "$config_dir"
     fi
 
-    if [[ "${MIRRORET_ENABLE_RPM}" == "1" ]] && [[ "${DISTRO_TYPE}" == "rhel" ]]; then
-        generate_rpm_client_config "${config_dir}/redhat-client.repo"
+    # Client configs follow the configured TARGETS, not the mirror server's
+    # own distro. That is the whole point of a central mirror: a RHEL server
+    # hands out Ubuntu sources.list files, and a Debian server hands out
+    # .repo files, because what matters is what the CLIENTS run.
+    #
+    # The legacy per-host generators are still used when an operator pinned
+    # a legacy mirroring tool, since those write a single-flavor tree.
+    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]]; then
+        if [[ "${MIRRORET_APT_RESOLVED_TOOL:-native}" == "native" ]]; then
+            generate_apt_client_configs "${config_dir}"
+        elif [[ "${DISTRO_TYPE}" == "debian" ]]; then
+            generate_apt_client_config "${config_dir}/debian-client.list"
+        fi
+    fi
+
+    if [[ "${MIRRORET_ENABLE_RPM}" == "1" ]]; then
+        if [[ "${MIRRORET_RPM_RESOLVED_ENGINE:-native}" == "native" ]]; then
+            generate_rpm_client_configs "${config_dir}"
+        elif [[ "${DISTRO_TYPE}" == "rhel" ]]; then
+            generate_rpm_client_config "${config_dir}/redhat-client.repo"
+        fi
     fi
 
     [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && \
@@ -897,6 +997,24 @@ print_summary() {
     echo "Sync scripts: ${MIRRORET_BASE_DIR}/scripts/"
     echo "Logs: ${MIRRORET_BASE_DIR}/logs/"
     echo ""
+    local -a _apt_ids=() _rpm_ids=()
+    local _sp
+    for _sp in "${MIRRORET_APT_SPECS[@]:-}"; do
+        [[ -n "${_sp}" ]] && _apt_ids+=("$(_apt_spec_field "${_sp}" id)")
+    done
+    for _sp in "${MIRRORET_RPM_SPECS[@]:-}"; do
+        [[ -n "${_sp}" ]] && _rpm_ids+=("$(_rpm_spec_field "${_sp}" id)")
+    done
+    [[ ${#_apt_ids[@]} -gt 0 ]] && echo "APT targets: ${_apt_ids[*]}"
+    [[ ${#_rpm_ids[@]} -gt 0 ]] && echo "RPM targets: ${_rpm_ids[*]}"
+    if [[ ${#_apt_ids[@]} -eq 0 ]] && [[ "${MIRRORET_ENABLE_APT}" == "1" ]]; then
+        echo "APT targets: NONE - set MIRRORET_APT_TARGETS (e.g. \"ubuntu:jammy debian:bookworm\")"
+    fi
+    if [[ ${#_rpm_ids[@]} -eq 0 ]] && [[ "${MIRRORET_ENABLE_RPM}" == "1" ]]; then
+        echo "RPM targets: NONE - set MIRRORET_RPM_TARGETS (e.g. \"ol:9 rocky:9\")"
+    fi
+    echo ""
+
     echo "Next steps:"
     echo " 1. Run initial sync: ${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
     echo " 2. Verify: $0 --check"
@@ -1078,12 +1196,20 @@ main() {
         fi
     fi
 
-    # Configure distro-specific APT/RPM mirror.
-    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
+    # Install the mirroring engines, then resolve which distributions this
+    # server mirrors. Both are independent of what the server itself runs.
+    install_mirror_engines
+
+    section "Resolving Mirror Targets"
+    generate_target_specs
+
+    # Configure APT/RPM mirroring. No DISTRO_TYPE gate: one server mirrors
+    # every configured target.
+    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]]; then
         configure_apt_mirror "$backup_id"
     fi
-    if [[ "${MIRRORET_ENABLE_RPM}" == "1" ]] && [[ "${DISTRO_TYPE}" == "rhel" ]]; then
-        configure_createrepo "$backup_id"
+    if [[ "${MIRRORET_ENABLE_RPM}" == "1" ]]; then
+        configure_rpm_mirroring "$backup_id"
     fi
 
     # Configure additional services.
@@ -1119,6 +1245,13 @@ main() {
     fi
 
     print_summary
+
+    # DRY_RUN wrote the target specs to a scratch directory so the rest of
+    # the run could be predicted accurately. Nothing else references it now.
+    if [[ -n "${MIRRORET_DRYRUN_TARGETS_DIR:-}" ]] && \
+       [[ -d "${MIRRORET_DRYRUN_TARGETS_DIR}" ]]; then
+        rm -rf "${MIRRORET_DRYRUN_TARGETS_DIR}"
+    fi
 }
 
 _backup_existing_configs() {
