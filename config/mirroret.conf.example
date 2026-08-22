@@ -61,6 +61,16 @@
 # Default: 10
 #MIRRORET_APT_THREADS=10
 
+# -- pip wheel coverage -------------------------------------------------------
+
+# Interpreter/platform pairs to fetch wheels for, ON TOP OF whatever this
+# host's own Python matches. Without this a RHEL 9 mirror server (Python 3.9)
+# downloads nothing usable for an Ubuntu 24.04 client (Python 3.12) for any
+# package with C extensions.
+# Syntax: "pythonversion:platformtag ..."  Set to "-" for this host only.
+# Default: "3.9:manylinux2014_x86_64 3.11:manylinux2014_x86_64 3.12:manylinux2014_x86_64"
+#MIRRORET_PIP_PLATFORMS="3.9:manylinux2014_x86_64 3.12:manylinux2014_x86_64"
+
 # -- Security -----------------------------------------------------------------
 
 # APT client config: path to GPG keyring for package signing.
@@ -192,22 +202,109 @@
 
 # -- APT mirror tool / flavor / upstream --------------------------------------
 
+# ==============================================================================
+# WHAT THIS SERVER MIRRORS  (the setting most installs actually need)
+# ==============================================================================
+#
+# These two lines decide which distributions your CLIENTS can install from.
+# They have NOTHING to do with what the mirror server itself runs: a RHEL
+# server can mirror Ubuntu and Debian, and a Debian server can mirror Oracle
+# Linux and Rocky.
+#
+# Syntax:  flavor:release[:arch,arch...]   (space separated list)
+#
+# APT flavors:  ubuntu  ubuntu-ports (arm64 etc.)  debian
+# RPM flavors:  rocky  almalinux  ol  centos  fedora  epel  rhel
+#
+# Releases accept either the codename or the version number, so
+# "ubuntu:22.04" and "ubuntu:jammy" mean the same thing.
+#
+# Each APT target mirrors <release>, <release>-updates and
+# <release>-security. All releases of one flavor share a single archive
+# tree, so mirroring two Ubuntu releases costs far less than twice one.
+#
+#MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
+#MIRRORET_RPM_TARGETS="ol:9 rocky:9 epel:9"
+#
+# Leave them unset and mirroret mirrors whatever the SERVER runs, which is
+# only useful when the server and its clients run the same distribution.
+# On a RHEL server with no MIRRORET_APT_TARGETS, no APT mirroring happens at
+# all and install.sh says so.
+#
+# Also mirror <release>-backports.
+# Default: 0
+#MIRRORET_APT_BACKPORTS=0
+
+# -- APT engine ---------------------------------------------------------------
+
 # Which tool to use for mirroring APT repositories.
-# auto - try apt-mirror, then apt-mirror2 (pip), then debmirror
-# apt-mirror - use apt-mirror (classic)
-# debmirror - use debmirror (required on Debian 12+)
+# auto - the built-in native engine (default, recommended)
+# native - engines/mirroret_apt.py: stdlib Python only, works on any
+#              distro, publishes a suite's Release file only after every
+#              package it references is on disk
+# apt-mirror - legacy: apt-mirror (or apt-mirror2 via pip)
+# debmirror - legacy: debmirror
+#
+# The legacy tools only exist on Debian/Ubuntu hosts, cannot mirror more than
+# one flavor, and publish metadata before the packages it describes.
 #MIRRORET_APT_MIRROR_TOOL=auto
 
-# Which APT family to mirror.
+# Fail the sync instead of warning when a suite's Release signature cannot be
+# verified locally. Mirror-side verification needs the matching archive
+# keyring (ubuntu-archive-keyring / debian-archive-keyring), which a RHEL
+# mirror server does not have. Clients always verify the mirrored signature
+# with their own keyring regardless, so this is defence in depth.
+# Default: 0
+#MIRRORET_APT_REQUIRE_SIGNATURE=0
+
+# Mirror every compression variant of each index instead of only the best
+# one. Needed only by clients with a restricted Acquire::CompressionTypes.
+# Default: 0
+#MIRRORET_APT_ALL_COMPRESSIONS=0
+
+# Mirror source packages (deb-src). Default: 0
+#MIRRORET_APT_SOURCE=0
+
+# Mirror Translation-<lang> files (small; apt asks for them). Default: 1
+#MIRRORET_APT_TRANSLATIONS=1
+#MIRRORET_APT_LANGUAGES="en"
+
+# Mirror AppStream dep11 metadata and icons (tens of GB on Ubuntu universe).
+# Default: 0
+#MIRRORET_APT_DEP11=0
+
+# Mirror Contents-<arch> indices, used by apt-file. Large. Default: 0
+#MIRRORET_APT_CONTENTS=0
+
+# Delete pool files upstream no longer lists. Default: 1
+#MIRRORET_APT_DELETE=1
+
+# Parallel download workers for the APT engine. Default: 8
+#MIRRORET_APT_JOBS=8
+
+# Scheme used to reach the upstream APT archives: http (default) or https.
+# http is what stock sources.list uses and what every public mirror serves -
+# the archive is GPG-signed, so the transport is not what protects it.
+# Switch to https when your proxy only permits CONNECT on port 443, which
+# would otherwise block every APT fetch.
+#MIRRORET_APT_SCHEME=https
+
+# Which APT family to mirror. Only used when MIRRORET_APT_TARGETS is unset.
 # auto - derive from /etc/os-release on the mirror server (default)
 # ubuntu - force Ubuntu upstream (archive.ubuntu.com)
-# debian - force Debian upstream (deb.debian.org + security.debian.org)
+# debian - force Debian upstream (deb.debian.org + deb.debian.org/debian-security)
 #MIRRORET_APT_FLAVOR=auto
 
 # Override the upstream archive host. Useful for regional mirrors or
 # internal redistributors.
 #MIRRORET_APT_UPSTREAM_HOST=archive.ubuntu.com
-#MIRRORET_APT_SECURITY_HOST=security.debian.org
+#MIRRORET_APT_SECURITY_HOST=security.ubuntu.com
+# Path of the security archive on that host. Debian serves security from
+# /debian-security, NOT from /debian - reusing the main path 404s every
+# security suite from bullseye onward.
+#MIRRORET_APT_SECURITY_PATH=/debian-security
+# Host serving non-amd64 Ubuntu architectures (the ubuntu-ports flavor).
+#MIRRORET_APT_PORTS_HOST=ports.ubuntu.com
 
 # Override the components list. Defaults to:
 # Ubuntu: "main restricted universe multiverse"
@@ -219,11 +316,57 @@
 # Set to 1 ONLY if you have set up a re-sign workflow yourself.
 #MIRRORET_APT_RESIGN=0
 
+# -- RPM engine ---------------------------------------------------------------
+
+# Which engine mirrors RPM repositories.
+# auto - native, unless MIRRORET_RPM_REPOS names repo ids that are not in
+#              mirroret's upstream catalog (subscription ids such as
+#              rhel-9-for-x86_64-baseos-rpms), in which case reposync is used
+#              because only the host's own dnf knows their URLs
+# native - engines/mirroret_rpm.py: stdlib Python only, needs no dnf, no
+#              createrepo, and no .repo file on this host
+# reposync - legacy: needs dnf, and can only mirror repos the mirror SERVER
+#              is itself configured and entitled for
+#MIRRORET_RPM_ENGINE=auto
+
+# Parallel download workers for the RPM engine. Default: 8
+#MIRRORET_RPM_JOBS=8
+
+# TLS client certificate for a subscription CDN (cdn.redhat.com). On a
+# registered RHEL host the engine finds /etc/pki/entitlement/*.pem by itself;
+# set these only to point somewhere else.
+#MIRRORET_RPM_CLIENT_CERT=/etc/pki/entitlement/1234567890.pem
+#MIRRORET_RPM_CLIENT_KEY=/etc/pki/entitlement/1234567890-key.pem
+
+# Override an upstream base URL, e.g. to use a regional or internal mirror.
+#MIRRORET_RPM_ROCKY_BASE=https://dl.rockylinux.org/pub/rocky
+#MIRRORET_RPM_ALMA_BASE=https://repo.almalinux.org/almalinux
+#MIRRORET_RPM_ORACLE_BASE=https://yum.oracle.com/repo/OracleLinux
+#MIRRORET_RPM_CENTOS_BASE=https://mirror.stream.centos.org
+#MIRRORET_RPM_FEDORA_BASE=https://dl.fedoraproject.org/pub/fedora/linux
+#MIRRORET_RPM_EPEL_BASE=https://dl.fedoraproject.org/pub/epel
+#MIRRORET_RPM_RHEL_CDN=https://cdn.redhat.com/content/dist
+
 # -- RPM flavor / repos -------------------------------------------------------
 
-# Directory name under redhat/mirror/ - defaults to OS_ID, so AlmaLinux
-# servers store under almalinux/, Rocky under rocky/, etc.
+# Directory name under redhat/mirror/. Only used when MIRRORET_RPM_TARGETS
+# is unset; otherwise each target names its own flavor.
 #MIRRORET_RPM_FLAVOR=
+
+# Repo ids to mirror, space separated. Only used when MIRRORET_RPM_TARGETS
+# names a single target, or with the reposync engine.
+#
+# Catalog ids per flavor:
+#   rocky / almalinux : baseos appstream crb extras devel plus
+#                       highavailability resilientstorage nfv rt
+#                       (Rocky/Alma 8 use powertools instead of crb)
+#   ol (Oracle)       : baseos appstream uek codeready epel addons kvm
+#   centos (Stream)   : baseos appstream crb highavailability nfv rt
+#   fedora            : everything updates
+#   epel              : everything next
+#   rhel (needs an entitlement cert)
+#                     : baseos appstream codeready supplementary
+#MIRRORET_RPM_REPOS="baseos appstream crb"
 
 # -- RPM sync safety (IMPORTANT) -----------------------------------------------
 

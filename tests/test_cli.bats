@@ -58,27 +58,27 @@ teardown() {
 # ------------------------------------------------------------- root gating ----
 
 @test "cli: state-changing subcommand refuses to run without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" sync all
     [ "$status" -eq 1 ]
     [[ "$output" == *"needs root"* ]]
 }
 
 @test "cli: upgrade refuses without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" upgrade
     [ "$status" -eq 1 ]
     [[ "$output" == *"needs root"* ]]
 }
 
 @test "cli: clean refuses without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" clean report
     [ "$status" -eq 1 ]
 }
 
 @test "cli: read-only subcommands do NOT require root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     for sub in status "sync status" "sync last" "client list" "logs list" "config path"; do
         # shellcheck disable=SC2086
         run bash "${CTL}" $sub
@@ -267,7 +267,12 @@ EOF
 @test "pip: _resolve_pypiserver_bin exists and checks the venv first" {
     grep -q '_resolve_pypiserver_bin' "${SCRIPT_DIR}/lib/pip.sh"
     section="$(awk '/_resolve_pypiserver_bin\(\)/,/^}/' "${SCRIPT_DIR}/lib/pip.sh")"
-    [[ "$section" == *'mirroret-pypiserver/bin/pypi-server'* ]]
+    # The venv path is overridable, so the literal is
+    # ${MIRRORET_PYPI_VENV:-/opt/mirroret-pypiserver}/bin/pypi-server.
+    # Assert the two halves rather than a substring the code never contained.
+    [[ "$section" == *'mirroret-pypiserver'*'/bin/pypi-server'* ]]
+    # The venv candidate must be FIRST, before anything found on PATH.
+    [[ "$section" == *'candidates=('*'mirroret-pypiserver'* ]]
     [[ "$section" == *'-x "$c"'* ]]
 }
 
@@ -428,8 +433,13 @@ EOF
     [[ "$section" == *'docker-distribution'* ]]
 }
 
-@test "npm: sync clears stale tarballs before packing" {
-    grep -q 'cannot pick up a tarball' "${SCRIPT_DIR}/lib/npm.sh"
+@test "npm: sync starts from a clean work dir every run" {
+    # A tarball or node_modules tree left behind by an earlier run would make
+    # the per-package result reporting lie about what was actually fetched.
+    grep -q 'clean work dir' "${SCRIPT_DIR}/lib/npm.sh"
+    grep -qF 'rm -rf "\${WORK_DIR}/warm"' "${SCRIPT_DIR}/lib/npm.sh"
+    # Approval mode collects tarballs instead, so those get cleared too.
+    grep -q "name '\*.tgz' -delete" "${SCRIPT_DIR}/lib/npm.sh"
 }
 
 @test "config example documents every new knob" {
@@ -525,7 +535,7 @@ EOF
 # ---------------------------------------------------------------- approve ----
 
 @test "cli: approve list works without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" approve list
     [ "$status" -eq 0 ]
 }
@@ -536,7 +546,7 @@ EOF
 }
 
 @test "cli: approve all refuses without root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${CTL}" approve all rpm
     [ "$status" -ne 0 ]
 }

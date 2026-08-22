@@ -198,6 +198,43 @@ mktemp_file() {
     mktemp /tmp/mirroret.XXXXXX
 }
 
+# -- Target spec helpers ------------------------------------------------------
+
+# mirroret_json_field <file> <field> - print one top-level value from a JSON
+# target spec, or nothing. Lists are joined with spaces.
+#
+# python3 is already a hard requirement for the mirroring engines, so this
+# avoids inventing a JSON parser in bash (and avoids the grep-based
+# "parsers" that break the first time a value contains a brace).
+mirroret_json_field() {
+    local file="$1" field="$2"
+    [[ -f "${file}" ]] || return 0
+    python3 - "${file}" "${field}" <<'MIRRORET_JSON_PY' 2>/dev/null || true
+import json
+import sys
+
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(1)
+value = data.get(sys.argv[2], "")
+if isinstance(value, list):
+    parts = []
+    for item in value:
+        if isinstance(item, dict):
+            # Lists of objects (suites, repos): print their id/suite key.
+            parts.append(str(item.get("suite") or item.get("id") or ""))
+        else:
+            parts.append(str(item))
+    print(" ".join(p for p in parts if p))
+elif isinstance(value, bool):
+    print("1" if value else "0")
+else:
+    print(value)
+MIRRORET_JSON_PY
+}
+
 # -- Misc ---------------------------------------------------------------------
 
 # get_server_ip - return the primary non-loopback IPv4 address.

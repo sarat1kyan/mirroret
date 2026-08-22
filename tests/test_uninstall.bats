@@ -82,14 +82,14 @@ teardown() {
 }
 
 @test "uninstall: --list does not require root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${SCRIPT_DIR}/uninstall.sh" --list --docker
     [ "$status" -eq 0 ]
     [[ "$output" == *"remove Docker registry"* ]]
 }
 
 @test "uninstall: --dry-run does not require root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run bash "${SCRIPT_DIR}/uninstall.sh" --dry-run --pip
     [ "$status" -eq 0 ]
     [[ "$output" == *"remove pypiserver"* ]]

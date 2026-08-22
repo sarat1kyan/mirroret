@@ -347,13 +347,86 @@ check_repo_files() {
         hint "Has install.sh been run? Re-run sudo ./install.sh --check after install."
         return
     fi
-    for d in scripts config logs; do
+    for d in scripts config logs engines; do
         if [[ -d "${base}/${d}" ]]; then
             pass "${base}/${d}: present"
         else
             warning "${base}/${d}: missing"
         fi
     done
+}
+
+# check_targets - which distributions this server mirrors, and whether each
+# has actually synced.
+#
+# The failure this exists to catch is silence: a server configured with no
+# APT target downloads no .deb and reports nothing wrong, because doing
+# nothing is exactly what it was told to do.
+check_targets() {
+    section_h "Mirror targets"
+    local base="${MIRRORET_BASE_DIR:-/srv/mirroret}"
+    local tdir="${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        failure "python3 is not installed. Both mirroring engines need it."
+        hint "Install it: dnf install python3   (or apt-get install python3)"
+        return
+    fi
+    pass "python3: $(python3 -V 2>&1)"
+
+    local n_apt=0 n_rpm=0 f
+    if [[ -d "$tdir" ]]; then
+        for f in "$tdir"/apt-*.json; do [[ -f "$f" ]] && n_apt=$(( n_apt + 1 )); done
+        for f in "$tdir"/rpm-*.json; do [[ -f "$f" ]] && n_rpm=$(( n_rpm + 1 )); done
+    fi
+
+    # APT
+    if [[ "$n_apt" -gt 0 ]]; then
+        local suites
+        suites="$(find "${base}/apt" -mindepth 3 -maxdepth 3 -path '*/dists/*' \
+                    -type d 2>/dev/null | wc -l | tr -d ' ')"
+        local published=0 d
+        while IFS= read -r d; do
+            [[ -z "$d" ]] && continue
+            if [[ -f "${d}/Release" ]] || [[ -f "${d}/InRelease" ]]; then
+                published=$(( published + 1 ))
+            fi
+        done < <(find "${base}/apt" -mindepth 3 -maxdepth 3 -path '*/dists/*' \
+                      -type d 2>/dev/null)
+        if [[ "$published" -gt 0 ]]; then
+            pass "APT: ${n_apt} target(s), ${published}/${suites} suite(s) published"
+        else
+            warning "APT: ${n_apt} target(s) configured but no suite published yet"
+            hint "Run the first sync: sudo ${base}/scripts/sync-apt-repos.sh"
+        fi
+    elif [[ -f "${base}/scripts/sync-apt-debmirror.sh" ]] || [[ -f /etc/apt/mirror.list ]]; then
+        note "APT: using a legacy mirroring tool (no native targets)"
+    else
+        warning "APT: no target configured, so no .deb is ever downloaded"
+        hint "This is silent by design - nothing errors because nothing was asked for."
+        hint "If Debian/Ubuntu clients should use this server, set:"
+        hint "  MIRRORET_APT_TARGETS=\"ubuntu:jammy debian:bookworm\""
+        hint "in /etc/mirroret/mirroret.conf, then: sudo ./install.sh --upgrade"
+    fi
+
+    # RPM
+    if [[ "$n_rpm" -gt 0 ]]; then
+        local repos
+        repos="$(find "${base}/redhat/mirror" -name repomd.xml 2>/dev/null | wc -l | tr -d ' ')"
+        if [[ "$repos" -gt 0 ]]; then
+            pass "RPM: ${n_rpm} target(s), ${repos} repo(s) with published metadata"
+        else
+            warning "RPM: ${n_rpm} target(s) configured but no repo published yet"
+            hint "Run the first sync: sudo ${base}/scripts/sync-rpm-repos.sh"
+        fi
+    elif [[ -f "${base}/scripts/sync-redhat-repos.sh" ]]; then
+        note "RPM: using the legacy reposync path (no native targets)"
+    else
+        warning "RPM: no target configured"
+        hint "Set MIRRORET_RPM_TARGETS=\"ol:9 rocky:9\" and re-run install.sh --upgrade"
+    fi
+
+    note "Full per-target detail: mirroretctl targets"
 }
 
 check_recent_sync_logs() {
@@ -528,6 +601,7 @@ main() {
     check_services
     check_nginx_config
     check_repo_files
+    check_targets
     check_docker_mode
     check_apt_signed_by
     check_cron

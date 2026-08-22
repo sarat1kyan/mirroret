@@ -162,11 +162,17 @@ teardown() {
 
 # -- pip -----------------------------------------------------------------------
 
-@test "pip client config: default does NOT contain trusted-host" {
+@test "pip client config: an http index ALWAYS sets trusted-host" {
+    # pip refuses to use a plain-HTTP index whose host is not trusted: it
+    # prints "not a trusted or secure host and is being ignored" and then
+    # finds no packages. Omitting trusted-host produced a pip.conf that
+    # looked correct and broke every client, so it is now unconditional for
+    # http:// indexes.
+    DRY_RUN=0
     MIRRORET_PIP_INSECURE=0
     generate_pip_client_config "${TMPDIR}/pip.conf"
-    run grep -c "trusted-host" "${TMPDIR}/pip.conf"
-    [ "$output" = "0" ]
+    grep -q '^index-url = http://' "${TMPDIR}/pip.conf"
+    grep -q "^trusted-host = ${MIRRORET_SERVER_IP}$" "${TMPDIR}/pip.conf"
 }
 
 @test "pip client config: insecure mode adds trusted-host" {

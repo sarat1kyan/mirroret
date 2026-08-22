@@ -86,6 +86,16 @@ retention_rpm_prune() {
 
     section "RPM retention (keep=${keep})"
 
+    # With MIRRORET_RPM_NEWEST_ONLY=1 (the default) the mirror only ever
+    # holds one build per package, so there is nothing for keep-versions to
+    # trim. Say so rather than leaving the operator wondering why retention
+    # reports zero every week.
+    if [[ "${MIRRORET_RPM_NEWEST_ONLY:-1}" == "1" ]]; then
+        info "MIRRORET_RPM_NEWEST_ONLY=1, so only one build per package is"
+        info "mirrored and keep-versions has nothing to trim. Disk is already"
+        info "bounded; this pass will normally report nothing."
+    fi
+
     if ! check_command repomanage; then
         warn "repomanage not found (install dnf-utils). Skipping RPM retention."
         return 0
@@ -351,6 +361,18 @@ run_retention() {
     info "pip keep-versions : ${MIRRORET_PIP_KEEP_VERSIONS}"
     info "npm keep-days : ${MIRRORET_NPM_KEEP_DAYS}"
     info "Docker GC : ${MIRRORET_DOCKER_GC}"
+
+    # The APT tree is deliberately NOT pruned here, and must not be.
+    #
+    # An apt archive is a closed set: every .deb in pool/ is referenced by a
+    # Packages index which is hashed by a signed Release. Deleting "old
+    # versions" out of the pool leaves the index pointing at files that are
+    # gone, and every client then fails mid-download - the same class of
+    # breakage this project spent a release fixing. Growth is controlled the
+    # correct way instead, by MIRRORET_APT_DELETE=1 (the default): the APT
+    # engine removes exactly what upstream stopped listing, so the mirror
+    # tracks upstream rather than accumulating.
+    info "APT tree : not pruned here (MIRRORET_APT_DELETE keeps it in step)"
 
     RETENTION_METADATA_BROKEN=0
     retention_rpm_prune || true

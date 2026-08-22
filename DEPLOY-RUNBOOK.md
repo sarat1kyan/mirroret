@@ -2,8 +2,11 @@
 
 For the admin deploying mirroret to the mirror server.
 
-Target: RHEL 9 host serving Oracle Linux 9 clients, behind an HTTP proxy
-that restricts which upstream hosts it will connect to.
+Target: RHEL 9 host serving Oracle Linux 9 **and** Ubuntu/Debian clients,
+behind an HTTP proxy that restricts which upstream hosts it will connect to.
+
+The mirror server running RHEL does not limit what it can mirror. What it
+serves is named in `MIRRORET_APT_TARGETS` / `MIRRORET_RPM_TARGETS` in Part 6.
 
 Work through the parts in order. Each part ends with a verification step.
 If a verification fails, stop and report it. Do not continue past a failed
@@ -91,7 +94,9 @@ running and reclaim the space.
 
 ```bash
 sudo pkill -f reposync
-sudo pkill -f sync-redhat-repos
+sudo pkill -f 'sync-redhat-repos|sync-rpm-repos|sync-apt-repos'
+sudo pkill -f 'mirroret_rpm.py|mirroret_apt.py'
+
 sudo pkill -f sync-all
 ```
 
@@ -161,6 +166,12 @@ Do not copy a private key from the proxy under any circumstances.
 for h in \
   yum.oracle.com \
   cdn.redhat.com \
+  dl.rockylinux.org \
+  repo.almalinux.org \
+  dl.fedoraproject.org \
+  archive.ubuntu.com \
+  security.ubuntu.com \
+  deb.debian.org \
   pypi.org \
   files.pythonhosted.org \
   registry.npmjs.org \
@@ -183,16 +194,34 @@ Interpretation:
 
 Send the proxy team the blocked hostnames and ask for CONNECT on port 443.
 
-`files.pythonhosted.org` is required in addition to `pypi.org`. Wheels are
-served from it; allowing only pypi.org fails every download.
+Two pairs are easy to get half-wrong:
+
+* `files.pythonhosted.org` is required in addition to `pypi.org`. Wheels are
+  served from it; allowing only pypi.org lets metadata through and fails
+  every download.
+* `security.ubuntu.com` is required in addition to `archive.ubuntu.com`.
+  Ubuntu serves the `-security` suite from a different host, so allowing
+  only the archive gets you a mirror with no security updates - which is
+  the worst possible outcome to discover late.
+
+The APT engine fetches over plain HTTP by default (the archives are
+GPG-signed, so the transport is not what protects them). If your proxy only
+permits CONNECT on 443, switch the scheme instead of asking for port 80:
+
+```bash
+echo 'MIRRORET_APT_SCHEME=https' | sudo tee -a /etc/mirroret/mirroret.conf
+sudo ./install.sh --upgrade
+```
 
 ### What you can do before the allow-list lands
 
 If `yum.oracle.com` is reachable, the RPM mirror is the bulk of the data
-and can sync now. Continue through the runbook, and at Part 9 run only:
+and can sync now. Continue through the runbook, and at Part 9 run only what
+is reachable:
 
 ```bash
-sudo ./mirroretctl sync rpm
+sudo ./mirroretctl sync rpm      # if yum.oracle.com is reachable
+sudo ./mirroretctl sync apt      # if archive.ubuntu.com is reachable
 ```
 
 Leave pip and npm until their hosts are unblocked. To stop them failing
@@ -234,7 +263,25 @@ sudo systemctl restart chronyd
 
 ---
 
-## Part 5. Fix the Oracle repo definitions
+## Part 5. Oracle repo definitions on this host (OPTIONAL now)
+
+**Skip this part unless you need this RHEL host to install Oracle packages
+for itself.** Mirroring no longer reads Oracle's URLs from this host's dnf
+configuration - mirroret's own catalog carries the literal hostnames, so
+there are no `$ociregion`/`$ocidomain` variables to expand and no Oracle
+release package to install.
+
+Verify that is true for your build before skipping:
+
+```bash
+grep -o 'https://[^"]*' /etc/mirroret/targets/rpm-ol-9.json
+```
+
+Every URL must be literal, with no `$` in it. If the file does not exist
+yet, that is fine - Part 7 creates it.
+
+<details>
+<summary>Only if this host must install Oracle packages itself</summary>
 
 The file Oracle ships uses dnf variables that only exist when the
 `oraclelinux-release-el9` package is installed. On a RHEL host they stay
@@ -258,46 +305,15 @@ baseurl=https://yum.oracle.com/repo/OracleLinux/OL9/appstream/x86_64/
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle
 gpgcheck=1
 enabled=1
-
-[ol9_UEKR8]
-name=Oracle Linux 9 UEK Release 8 (x86_64)
-baseurl=https://yum.oracle.com/repo/OracleLinux/OL9/UEKR8/x86_64/
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle
-gpgcheck=1
-enabled=1
-
-[ol9_developer_EPEL]
-name=Oracle Linux 9 EPEL Packages for Development (x86_64)
-baseurl=https://yum.oracle.com/repo/OracleLinux/OL9/developer/EPEL/x86_64/
-gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-oracle
-gpgcheck=1
-enabled=1
 EOF
+
+sudo curl -fsSL -o /etc/pki/rpm-gpg/RPM-GPG-KEY-oracle \
+    https://yum.oracle.com/RPM-GPG-KEY-oracle-ol9
+sudo dnf clean all && sudo dnf makecache
+grep baseurl /etc/yum.repos.d/oracle-linux-ol9.repo   # no $ may appear
 ```
 
-Import the Oracle signing key:
-
-```bash
-sudo curl -fsSL -o /etc/pki/rpm-gpg/RPM-GPG-KEY-oracle https://yum.oracle.com/RPM-GPG-KEY-oracle-ol9
-```
-
-Refresh:
-
-```bash
-sudo dnf clean all
-sudo dnf makecache
-```
-
-### VERIFY
-
-```bash
-grep baseurl /etc/yum.repos.d/oracle-linux-ol9.repo
-sudo dnf repolist | grep ol9_
-```
-
-No `$` may appear in any baseurl. All four ol9 repos must be listed.
-
-STOP if this fails.
+</details>
 
 ---
 
@@ -314,9 +330,17 @@ the CA path if yours differ.
 ```bash
 sudo tee -a /etc/mirroret/mirroret.conf >/dev/null <<'EOF'
 
-# Serve Oracle Linux 9 from this RHEL host.
-MIRRORET_RPM_FLAVOR=ol
-MIRRORET_RPM_REPOS="ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL"
+# WHAT THE CLIENTS RUN. Nothing here depends on this host being RHEL.
+# Trim or extend both lists to match your fleet.
+MIRRORET_RPM_TARGETS="ol:9"
+MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
+
+# Repos to take from each RPM target. Catalog ids, not dnf repo ids.
+MIRRORET_RPM_REPOS="baseos appstream uek epel"
+
+# Biggest disk lever on the APT side: universe and multiverse are most of
+# an Ubuntu mirror. Drop this line to mirror all four components.
+MIRRORET_APT_COMPONENTS="main restricted"
 
 # Sync safety. Source RPMs are 400-600 MB each and there are ~44000 of
 # them in appstream; leaving this at 0 is what keeps the disk sane.
@@ -339,8 +363,10 @@ no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,192.168.0.0/16
 # sync scripts.
 MIRRORET_CA_BUNDLE=/etc/pki/tls/cert.pem
 
-# npm: let the sync publish without a login.
-MIRRORET_NPM_ALLOW_ANON_PUBLISH=1
+# npm: pre-seeding needs no credentials any more (it warms Verdaccio's
+# cache by installing through it), so anonymous publish stays OFF. Set it
+# to 1 only if people will `npm publish` in-house packages here.
+MIRRORET_NPM_ALLOW_ANON_PUBLISH=0
 
 # Retention. Start in report mode, review, then switch to prune.
 MIRRORET_RETENTION_ENABLE=1
@@ -355,18 +381,13 @@ EOF
 ### VERIFY
 
 ```bash
-grep -E '^MIRRORET_RPM_FLAVOR|^MIRRORET_RPM_REPOS|^MIRRORET_CA_BUNDLE' /etc/mirroret/mirroret.conf
+grep -E '^MIRRORET_(APT|RPM)_TARGETS|^MIRRORET_RPM_REPOS|^MIRRORET_CA_BUNDLE' \
+    /etc/mirroret/mirroret.conf
 ```
 
 ---
 
 ## Part 7. Apply
-
-Force the RPM sync script to regenerate, so the new settings take effect:
-
-```bash
-sudo rm -f /srv/mirroret/scripts/sync-redhat-repos.sh
-```
 
 Preview first. Changes nothing:
 
@@ -384,34 +405,46 @@ Watch for a line reading `Verdaccio binary:` followed by a real path.
 If it says `/usr/bin/verdaccio`, that path does not exist and the service
 will fail; report it.
 
-### VERIFY the generated script picked up the settings
+### VERIFY the targets resolved
 
 ```bash
-grep -E '^FLAVOR=|^ARCH=|^NEWEST_ONLY=|^INCLUDE_SOURCE=|^REPOS=' /srv/mirroret/scripts/sync-redhat-repos.sh
+mirroretctl targets
 ```
 
-Expected:
+Every target you configured must be listed, each with an upstream URL and a
+repo/suite list. At this point each will say "not synced yet" - that is
+expected before the first sync.
 
-```
-FLAVOR="ol"
-ARCH="x86_64"
-NEWEST_ONLY="1"
-INCLUDE_SOURCE="0"
-REPOS=(ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL)
-```
+STOP if a target you configured is missing, or if install.sh printed
+"no target resolved".
 
-And confirm the guards are in place:
+### VERIFY the generated scripts picked up the settings
 
 ```bash
-grep -c 'flock -n 9'                  /srv/mirroret/scripts/sync-redhat-repos.sh
-grep -c '_check_disk'                 /srv/mirroret/scripts/sync-redhat-repos.sh
-grep -c '/etc/mirroret/mirroret.conf' /srv/mirroret/scripts/sync-redhat-repos.sh
-grep -c 'timeout -k 60'               /srv/mirroret/scripts/sync-redhat-repos.sh
+ls -l /srv/mirroret/scripts/sync-apt-repos.sh /srv/mirroret/scripts/sync-rpm-repos.sh
+grep -c -- '--spec'                   /srv/mirroret/scripts/sync-rpm-repos.sh
+grep -c 'flock -n 9'                  /srv/mirroret/scripts/sync-rpm-repos.sh
+grep -c '/etc/mirroret/mirroret.conf' /srv/mirroret/scripts/sync-rpm-repos.sh
+grep -c 'timeout -k 60'               /srv/mirroret/scripts/sync-rpm-repos.sh
+grep -c 'https_proxy'                 /srv/mirroret/scripts/sync-rpm-repos.sh
 ```
 
-All must be 1 or more.
+All counts must be 1 or more, for both scripts. The `https_proxy` line is
+what makes the nightly cron run work: cron does not read
+`/etc/environment` or shell rc files, so without it scheduled syncs fail
+while manual runs succeed.
 
-STOP if FLAVOR is not `ol` or INCLUDE_SOURCE is not `0`.
+### VERIFY the source-RPM guard
+
+```bash
+grep -E '"(newest_only|sources)"' /etc/mirroret/targets/rpm-ol-9.json
+```
+
+Expected `"newest_only": true` and `"sources": false`. Source RPMs are
+400-600 MB each and OL9 appstream carries roughly 44,000 of them.
+
+STOP if `sources` is true unless you have deliberately sized the volume for
+multiple terabytes.
 
 ---
 
@@ -447,27 +480,56 @@ contain the proxy URL.
 
 ## Part 9. First sync
 
-The RPM sync now estimates the download before starting and aborts if it
-would breach the disk floor.
+Both engines estimate the download before starting and abort if it would
+breach the disk floor, so a target that does not fit says so in seconds
+rather than at 04:00 with a full volume.
+
+Do RPM first: it is usually the bulk of the data.
 
 ```bash
 sudo ./mirroretctl sync rpm
 ```
 
-Read the first 30 lines. Expected:
+Read the first 20 lines. Expected, per repo:
 
 ```
-arch=x86_64  newest_only=1  source=0  delete=1
---- Estimating download size (metadata only)
-    ol9_baseos_latest: ~N GB
-    ...
-    total: ~N GB   free: N GB
+--- repo baseos <- https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/
+  upstream lists N packages; M selected (arches=noarch,x86_64 newest_only=True source=False)
+  packages: M selected, M to download (N GB), 0 already on disk
 ```
 
-The word `getPackageSource` must not appear. If it does, stop the sync
-and report it: source RPMs are being pulled.
+`source=False` is the important one. If it says `source=True`, stop the sync
+and fix `MIRRORET_RPM_SOURCE` - source RPMs are 400-600 MB each.
 
-This takes hours. Follow along in another session:
+Then APT:
+
+```bash
+sudo ./mirroretctl sync apt
+```
+
+Expected, per suite:
+
+```
+--- suite jammy <- http://archive.ubuntu.com/ubuntu
+  signature: NOT verified locally (no archive keyring found)
+             The upstream signature is mirrored verbatim, so clients still
+             verify it against their own archive keyring.
+  indices: N files, M packages listed
+  packages: M to download (N GB), 0 already on disk
+  ...
+  published: dists/jammy (N index files)
+```
+
+The `signature: NOT verified locally` line is expected on a RHEL host, which
+has no `ubuntu-archive-keyring`. It is not a security gap: the archive is
+mirrored byte-for-byte including its signature, and every client re-verifies
+it with its own keyring.
+
+`published:` appears only after every package that suite's indices list is on
+disk. If a sync is interrupted you will not see it, and clients keep using
+the previous state rather than hitting 404s.
+
+Both take hours. Follow along in another session:
 
 ```bash
 ./mirroretctl logs tail
@@ -480,14 +542,23 @@ sudo ./mirroretctl sync pip
 sudo ./mirroretctl sync npm
 ```
 
+The npm run should log `CACHED: <package> (+ deps: N)`. It no longer needs
+credentials - it warms Verdaccio's cache by installing through it, which also
+caches the whole dependency tree.
+
 ### VERIFY
 
 ```bash
+mirroretctl targets          # every target should now report "published"
 ./mirroretctl logs errors
 ./mirroretctl sync last
-sudo du -sh /srv/mirroret/redhat/mirror/ol/9/*
+sudo du -sh /srv/mirroret/redhat/mirror/*/*/* /srv/mirroret/apt/*
 df -h /srv/mirroret
 ```
+
+STOP if `mirroretctl targets` still says "not synced yet" for a target whose
+sync reported success - that means the data landed somewhere the client URLs
+do not point at.
 
 ---
 
@@ -538,28 +609,71 @@ rm -rf ~/mirroret-main.prev ~/mirroret.zip
 
 ## Part 13. Point a client at the mirror
 
-Run on each Oracle Linux client, only after the server sync has completed.
+Only after the server sync has completed. `mirroretctl client list` on the
+server prints the exact URL for every generated config.
+
+### Oracle Linux / Rocky / Alma / RHEL clients
 
 ```bash
-sudo curl -fsSL -o /etc/yum.repos.d/mirroret.repo http://192.168.30.110:8080/config/redhat-client.repo
+sudo curl -fsSL -o /etc/yum.repos.d/mirroret.repo \
+    http://192.168.30.110:8080/config/ol9.repo
 ```
 
 Disable the upstream repos, otherwise dnf keeps reaching the internet and
 bypasses the mirror:
 
 ```bash
-sudo dnf config-manager --disable ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL
+sudo dnf config-manager --set-disabled "*"
+sudo dnf config-manager --set-enabled "mirroret-*"
 sudo dnf clean all
 sudo dnf repolist
 ```
 
-Only `mirroret-*` entries should be enabled.
-
-Test:
+Only `mirroret-*` entries should be enabled. Test:
 
 ```bash
-sudo dnf update
+sudo dnf check-update
+sudo dnf install -y bash          # should download from 192.168.30.110
 ```
+
+No GPG key to import: mirrored RPMs keep their upstream signature, and the
+generated `.repo` points `gpgkey` at the vendor key already present in
+`/etc/pki/rpm-gpg/`.
+
+### Ubuntu / Debian clients
+
+```bash
+sudo curl -fsSL -o /etc/apt/sources.list.d/mirroret.list \
+    http://192.168.30.110:8080/config/ubuntu-jammy.list
+```
+
+Disable the upstream entries, or apt keeps going to the internet:
+
+```bash
+sudo mv /etc/apt/sources.list /etc/apt/sources.list.disabled-by-mirroret
+# On 24.04 and other deb822 hosts, also:
+sudo rm -f /etc/apt/sources.list.d/ubuntu.sources
+
+sudo apt-get update
+apt-cache policy bash | head -5   # must show 192.168.30.110
+sudo apt-get install -y --reinstall bash
+```
+
+Again no key to import: the mirrored `Release` files carry the upstream
+Ubuntu/Debian signature, and the client verifies them with the
+`ubuntu-archive-keyring` it already ships. A `.sources` (deb822) variant is
+generated alongside the `.list` if you prefer that format.
+
+### If a client reports 404 on Packages
+
+Run on the SERVER:
+
+```bash
+mirroretctl client verify
+```
+
+It flags any suite or repo that a generated config advertises but which has
+not been published yet, and tells you which sync to run.
 
 ---
 
@@ -633,8 +747,25 @@ If a STOP checkpoint fails, send:
 3. `sudo journalctl -u SERVICE -n 100 --no-pager` for any failing service
 4. `df -h /srv/mirroret`
 
-## Known limitation
+## Notes on scope
 
-The mirror server is RHEL and serves Oracle Linux 9 clients. Mirroret can
-mirror one distro family per host. To also serve RHEL or Debian clients
-you need a separate mirror host for each.
+One host serves every distro family you list in `MIRRORET_APT_TARGETS` and
+`MIRRORET_RPM_TARGETS`, regardless of what that host runs. This runbook's
+example configures Oracle Linux 9 plus Ubuntu 22.04/24.04 plus Debian 12
+from a single RHEL 9 server. Adding another family is a config line and a
+sync, not another host.
+
+What still needs care:
+
+* **Disk.** Each APT flavor is 300-600 GB for all four components.
+  `MIRRORET_APT_COMPONENTS="main restricted"` cuts that by roughly 90%.
+  Releases of the same flavor share one `pool/`, so a second Ubuntu release
+  is cheap; a second *flavor* is not.
+* **Mirroring RHEL itself** from `cdn.redhat.com` needs this host's
+  entitlement certificate. The engine picks up `/etc/pki/entitlement/*.pem`
+  automatically on a registered host, but the content set you can mirror is
+  whatever this host's subscription grants.
+* **repo_gpgcheck.** A filtered RPM mirror (an arch subset, or the default
+  newest-only) has locally rebuilt `repomd.xml`, so clients cannot use
+  `repo_gpgcheck=1` against it. Package signatures are untouched, so
+  `gpgcheck=1` still verifies the vendor's signature.

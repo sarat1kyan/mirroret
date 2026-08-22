@@ -3,6 +3,10 @@
 These are problems in **your infrastructure**, not bugs in the tool. Work
 through them in order. Each has a verification step.
 
+> **Several items here are now fixed in the tool itself** and are kept only
+> so you can recognise the symptom on an older install. See the
+> "FIXED IN THE TOOL" banners on items 2, 4, 7 and 10.
+
 Host referenced throughout: the mirror server (`3311-LinuxRepo`,
 `192.168.30.110`), RHEL 9.8, behind an HTTP proxy at `192.168.30.243:3128`
 that performs TLS inspection.
@@ -121,6 +125,17 @@ until the proxy is opened.
 
 ## BLOCKER 2 - Oracle repo file contains unexpanded variables
 
+> **FIXED IN THE TOOL.** mirroret no longer reads Oracle's repo URLs from
+> this host's dnf configuration. The upstream URL comes from mirroret's own
+> catalog with literal hostnames
+> (`https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/`), so
+> there is no `$ociregion`/`$ocidomain` to expand and nothing to install on
+> a RHEL host. Just set `MIRRORET_RPM_TARGETS="ol:9"` and run
+> `sudo ./install.sh --upgrade`.
+>
+> You still need the steps below if you want *this host* to install Oracle
+> packages for itself. For mirroring, you do not.
+
 ### Symptom
 
 ```
@@ -229,35 +244,42 @@ sudo systemctl restart chronyd
 
 ## HIGH 4 - Mirror server is RHEL but you want to serve Oracle Linux
 
+> **FIXED IN THE TOOL.** This is now two config lines, and it works for APT
+> too - which it previously did not at all.
+
 ### Situation
 
 The mirror host runs RHEL 9.8. Its own subscription grants
-`rhel-9-for-x86_64-*` repos. Your clients are Oracle Linux 9.
+`rhel-9-for-x86_64-*` repos. Your clients are Oracle Linux 9, and some are
+Ubuntu.
 
-Mirroret defaults to mirroring whatever the **host** distro is. To mirror
-OL9 from a RHEL host you must tell it explicitly.
+### What used to happen
+
+mirroret mirrored whatever the **host** ran. Worse, APT mirroring was gated
+on the host being Debian-based, so on this RHEL server the APT half never ran
+at all: no error, no log line, no `.deb` on disk. That is why "it does not
+download the Ubuntu packages" had no error message to chase.
 
 ### Fix
 
-```bash
-sudo mkdir -p /etc/mirroret
-sudo cp ~/mirroret-main/config/mirroret.conf.example /etc/mirroret/mirroret.conf
+What a server mirrors is now independent of what it runs:
 
+```bash
 sudo tee -a /etc/mirroret/mirroret.conf >/dev/null <<'EOF'
 
-# Serve Oracle Linux 9 to clients from this RHEL host.
-MIRRORET_RPM_FLAVOR=ol
-MIRRORET_RPM_REPOS="ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL"
+# What the CLIENTS run. Nothing to do with this host being RHEL.
+MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
+MIRRORET_RPM_TARGETS="ol:9"
 
-# Sync safety (see BLOCKER 5 below).
-MIRRORET_RPM_ARCH=x86_64
+# Sync safety.
+MIRRORET_RPM_ARCH="x86_64"
 MIRRORET_RPM_NEWEST_ONLY=1
 MIRRORET_RPM_SOURCE=0
 MIRRORET_RPM_DELETE=1
 MIRRORET_SYNC_MIN_FREE_GB=15
 
-# Quiet the npm publish failures.
-MIRRORET_NPM_ALLOW_ANON_PUBLISH=1
+# Disk lever: universe+multiverse are most of an Ubuntu mirror.
+MIRRORET_APT_COMPONENTS="main restricted"
 
 # Retention - start in report mode, review, then switch to prune.
 MIRRORET_RETENTION_ENABLE=1
@@ -266,31 +288,30 @@ MIRRORET_RPM_KEEP_VERSIONS=3
 MIRRORET_PIP_KEEP_VERSIONS=3
 MIRRORET_NPM_KEEP_DAYS=180
 EOF
-```
 
-Then force the sync script to regenerate and verify:
-
-```bash
-sudo rm -f /srv/mirroret/scripts/sync-redhat-repos.sh
 cd ~/mirroret-main
 sudo ./install.sh --upgrade
-grep -E '^FLAVOR=|^REPOS=|^ARCH=|^INCLUDE_SOURCE=' /srv/mirroret/scripts/sync-redhat-repos.sh
 ```
 
-Expected:
+Verify - this should list your Ubuntu, Debian and Oracle targets, and say
+whether each has synced:
 
+```bash
+mirroretctl targets
 ```
-FLAVOR="ol"
-ARCH="x86_64"
-INCLUDE_SOURCE="0"
-REPOS=(ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL)
+
+Then sync:
+
+```bash
+sudo mirroretctl sync rpm
+sudo mirroretctl sync apt
 ```
 
 ### Note
 
-The RHEL host's own `rhel-9-*` tree already synced (15,416 + 35,594
-packages under `/srv/mirroret/redhat/mirror/rhel/9/`). That is ~130 GB of
-your 117 GB remaining. Decide whether you still want it:
+The RHEL host's own `rhel-9-*` tree already synced (15,416 + 35,594 packages
+under `/srv/mirroret/redhat/mirror/rhel/9/`). That is ~130 GB of your 117 GB
+remaining. Decide whether you still want it:
 
 ```bash
 sudo du -sh /srv/mirroret/redhat/mirror/rhel/9/*
@@ -310,10 +331,20 @@ you caught it.
 
 ### Tool-side status
 
-**Fixed.** `reposync` now runs with `--arch x86_64 --arch noarch
---newest-only --delete`, and source RPMs are off by default
-(`MIRRORET_RPM_SOURCE=0`). A disk-floor guard aborts the sync when free
-space drops below `MIRRORET_SYNC_MIN_FREE_GB`.
+**Fixed, twice over.**
+
+`reposync` runs with `--arch x86_64 --arch noarch --newest-only --delete`,
+source RPMs are off by default (`MIRRORET_RPM_SOURCE=0`), and a disk-floor
+guard aborts the sync when free space drops below
+`MIRRORET_SYNC_MIN_FREE_GB`.
+
+The pre-sync **size estimate** now actually runs. It was dead code: the
+`REPOS` array was declared *after* the loop that iterated it, so the loop
+saw an empty array, every repo estimated 0 GB, and the guard never once
+fired. It is declared before the estimate now.
+
+The default native RPM engine estimates the download itself before writing
+anything, and refuses to start a sync that would breach the disk floor.
 
 ### Your cleanup
 
@@ -364,6 +395,20 @@ Send me the journalctl output if none of these match.
 ---
 
 ## MED 7 - npm publish `ENEEDAUTH`
+
+> **FIXED IN THE TOOL.** Pre-seeding no longer publishes into Verdaccio. It
+> installs each package *through* Verdaccio, which makes Verdaccio fetch from
+> its npmjs uplink and cache the tarball in its own storage. That needs no
+> credentials, and it caches the entire resolved dependency tree - the old
+> `npm pack` + `npm publish` only ever fetched the named package, so
+> pre-seeding `express` left its 65 dependencies missing.
+>
+> Just run `sudo ./install.sh --upgrade` and re-run the npm sync. You do NOT
+> need `MIRRORET_NPM_ALLOW_ANON_PUBLISH=1`, and on a registry listening on
+> 0.0.0.0 you should not want it: it lets anyone on the network publish.
+>
+> Verify: `sudo mirroretctl sync npm` should log
+> `CACHED: express (+ deps: 65)`.
 
 ### Symptom
 
@@ -454,6 +499,49 @@ sudo subscription-manager refresh
 
 ---
 
+## MED 10 - No Ubuntu packages are ever downloaded
+
+> **FIXED IN THE TOOL.**
+
+### Symptom
+
+`/srv/mirroret/debian/` (or `/srv/mirroret/apt/`) is empty. No error in any
+sync log. `find /srv/mirroret -name '*.deb' | wc -l` returns 0. Ubuntu
+clients pointed at the mirror get 404 for everything.
+
+### Cause
+
+APT setup was gated on the mirror server being Debian-based:
+
+```bash
+if [[ "${MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian" ]]; then
+    configure_apt_mirror "$backup_id"
+fi
+```
+
+On a RHEL host that condition is false, so no APT sync script was ever
+generated and the master sync had no APT step to run. Skipping was the
+designed behaviour, which is why nothing complained.
+
+### Fix
+
+Upgrade, then name the targets:
+
+```bash
+cd ~/mirroret-main
+git fetch origin && git reset --hard origin/main
+sudo ./install.sh --upgrade \
+    --apt-targets "ubuntu:jammy ubuntu:noble debian:bookworm"
+mirroretctl targets
+sudo mirroretctl sync apt
+```
+
+`mirroretctl targets` now reports "not synced yet" instead of silence when a
+target has never run, and `mirroret-collect.sh` raises a finding when APT is
+enabled with no target configured.
+
+---
+
 ## Ordered runbook
 
 ```bash
@@ -471,34 +559,41 @@ sudo chronyc makestep
 sudo cp corp-root-ca.crt /etc/pki/ca-trust/source/anchors/
 sudo update-ca-trust extract
 
-# 4. Oracle repo file (see BLOCKER 2 for the full heredoc)
+# 4. Mirroret config: name what your CLIENTS run (see HIGH 4)
+#    You no longer need to hand-write an Oracle .repo file - skip BLOCKER 2.
 
-# 5. Mirroret config (see HIGH 4 for the full heredoc)
-
-# 6. Regenerate + upgrade
+# 5. Upgrade
 cd ~/mirroret-main
 git fetch origin && git reset --hard origin/main
-sudo rm -f /srv/mirroret/scripts/sync-redhat-repos.sh
 sudo ./install.sh --upgrade
 
-# 7. Verify the guards are in the generated script
-grep -E '^ARCH=|^INCLUDE_SOURCE=|^NEWEST_ONLY=|_check_disk|flock' \
-    /srv/mirroret/scripts/sync-redhat-repos.sh
+# 6. Confirm what this server will mirror
+mirroretctl targets
+
+# 7. Verify the guards are in the generated scripts
+grep -E 'min-free-gb|flock -n 9|https_proxy' \
+    /srv/mirroret/scripts/sync-rpm-repos.sh \
+    /srv/mirroret/scripts/sync-apt-repos.sh
 
 # 8. Verdaccio
 sudo journalctl -u verdaccio -n 100 --no-pager
 
-# 9. First guarded sync
-sudo /srv/mirroret/scripts/sync-redhat-repos.sh
+# 9. First guarded syncs (RPM first: it is the bulk of the data)
+sudo mirroretctl sync rpm
+sudo mirroretctl sync apt
 
 # 10. Verify
+mirroretctl targets            # every target should report "published"
+mirroretctl client simulate    # resolve AND download as a client
 sudo ./scripts/mirroret-debug.sh
-sudo du -sh /srv/mirroret/redhat/mirror/ol/9/*
+sudo du -sh /srv/mirroret/redhat/mirror/ol/9/* /srv/mirroret/apt/*
 df -h /srv/mirroret
 ```
 
-Items 3 and 4 are the two that actually gate everything else. Without the
-CA (or a proxy allow-list) no upstream sync can succeed at all.
+Item 1 (the proxy allow-list) is the one that gates everything else: without
+outbound access to the upstream hosts, no sync can succeed. Item 3 (the
+corporate CA) only applies if your proxy actually re-signs TLS - see
+BLOCKER 1 for how to tell.
 
 ---
 

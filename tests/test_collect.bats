@@ -293,7 +293,7 @@ _mk_repo() {  # _mk_repo <name> <pkgsubdir> [--no-meta]
 # problems that do not exist on a server that is working correctly.
 
 @test "collect: cron absence is INFO not WARN when running non-root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     run_collect
     # "crontab -l" reads the invoking user's crontab; mirroret schedules under
     # root, so a non-root run always sees nothing.
@@ -382,6 +382,6 @@ _mk_repo() {  # _mk_repo <name> <pkgsubdir> [--no-meta]
 }
 
 @test "collect: unmanaged-port claim is INFO when non-root" {
-    [ "$(id -u)" -ne 0 ]
+    [ "$(id -u)" -ne 0 ] || skip "needs a non-root user; this run is root"
     grep -q 'could not confirm a managing systemd unit as a non-root user' "${COLLECT}"
 }

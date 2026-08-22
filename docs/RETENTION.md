@@ -1,5 +1,36 @@
 # Retention and Upgrades
 
+## What retention does and does not touch
+
+| Tree | Pruned by retention? | How growth is controlled |
+|---|---|---|
+| APT (`apt/<flavor>/`) | **No** | `MIRRORET_APT_DELETE=1` (default): the sync removes exactly what upstream stopped listing |
+| RPM (`redhat/mirror/`) | Yes, `MIRRORET_RPM_KEEP_VERSIONS` | plus `MIRRORET_RPM_NEWEST_ONLY=1` (default), which already keeps one build per package |
+| pip | Yes, `MIRRORET_PIP_KEEP_VERSIONS` | - |
+| npm | Yes, `MIRRORET_NPM_KEEP_DAYS` | - |
+| Docker | Optional, `MIRRORET_DOCKER_GC=1` | - |
+
+**The APT tree is deliberately excluded, and must stay excluded.** An apt
+archive is a closed set: every `.deb` in `pool/` is referenced by a
+`Packages` index that is hashed by a signed `Release`. Deleting "old
+versions" out of the pool leaves the index pointing at files that no longer
+exist, and every client then fails mid-download. Growth is controlled the
+correct way instead - the sync deletes what upstream deleted, so the mirror
+tracks upstream rather than accumulating.
+
+If an APT mirror is bigger than you want, the lever is scope, not deletion:
+
+```bash
+MIRRORET_APT_COMPONENTS="main restricted"   # ~90% smaller than all four
+MIRRORET_APT_TARGETS="ubuntu:noble"         # drop releases you do not serve
+```
+
+**RPM retention is normally a no-op.** With `MIRRORET_RPM_NEWEST_ONLY=1`
+(the default) only one build per package is ever mirrored, so
+keep-versions has nothing to trim. It becomes meaningful only if you set
+`MIRRORET_RPM_NEWEST_ONLY=0` to keep version history.
+
+
 Two operational concerns that live together: keeping mirror disk usage
 bounded (retention) and updating mirroret itself without breaking a
 live install (upgrade safety).

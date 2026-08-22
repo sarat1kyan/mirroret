@@ -117,8 +117,10 @@ _status_registry() {
 
 _check_commands() {
     local fail=0
-    local required=(nginx curl)
-    local optional=(apt-mirror createrepo reposync docker pypi-server verdaccio npm)
+    # python3 is required, not optional: both native mirroring engines are
+    # Python. apt-mirror/reposync are now only needed by the legacy paths.
+    local required=(nginx curl python3)
+    local optional=(apt-mirror createrepo_c reposync docker pypi-server verdaccio npm gpgv)
 
     for cmd in "${required[@]}"; do
         if check_command "$cmd"; then
@@ -174,6 +176,8 @@ _check_directories() {
     local fail=0
     local base_dir="${MIRRORET_BASE_DIR:-/srv/mirroret}"
     local expected_dirs=(
+        "apt"
+        "engines"
         "debian/mirror"
         "debian/approved"
         "redhat/mirror"
@@ -245,14 +249,31 @@ _check_repo_metadata() {
     local fail=0
     local base_dir="${MIRRORET_BASE_DIR:-/srv/mirroret}"
 
-    # Check for APT metadata.
-    local apt_approved="${base_dir}/debian/approved"
-    if [[ -d "$apt_approved" ]]; then
-        if find "$apt_approved" -name "Packages.gz" 2>/dev/null | grep -q .; then
-            success "APT metadata: found"
+    # APT metadata. The native engine publishes real archive roots under
+    # apt/<flavor>/dists/<suite>/, and a published suite is one that has a
+    # Release file - that is exactly what apt asks for first.
+    local apt_root="${base_dir}/apt"
+    if [[ -d "$apt_root" ]] && find "$apt_root" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .; then
+        local suites
+        suites="$(find "$apt_root" -path '*/dists/*' -maxdepth 3 \
+            \( -name Release -o -name InRelease \) 2>/dev/null | wc -l | tr -d ' ')"
+        if [[ "${suites}" -gt 0 ]]; then
+            success "APT metadata: ${suites} published suite(s) under ${apt_root}"
         else
-            warn "APT metadata: Packages.gz not found in ${apt_approved}"
-            warn " Run: dpkg-scanpackages ${apt_approved} | gzip > ${apt_approved}/Packages.gz"
+            warn "APT metadata: no published suite under ${apt_root}"
+            warn " The tree exists but no sync has completed. Run:"
+            warn "   sudo ${base_dir}/scripts/sync-apt-repos.sh"
+            (( fail += 1 )) || true
+        fi
+    fi
+
+    # Legacy apt-mirror/debmirror tree, if one is in use.
+    local apt_approved="${base_dir}/debian/approved"
+    if [[ -d "$apt_approved" ]] && find "$apt_approved" -mindepth 1 2>/dev/null | grep -q .; then
+        if find "$apt_approved" -name "Packages.gz" 2>/dev/null | grep -q .; then
+            success "APT metadata (legacy tree): found"
+        else
+            warn "APT metadata (legacy tree): Packages.gz not found in ${apt_approved}"
             (( fail += 1 )) || true
         fi
     fi
@@ -285,15 +306,32 @@ _check_client_configs() {
         return 1
     fi
 
-    local expected_configs=(
-        "debian-client.list"
-        "redhat-client.repo"
-        "pip.conf"
-        ".npmrc"
-        "docker-daemon.json"
-    )
+    # Per-target configs are named after the target (ubuntu-jammy.list,
+    # ol9.repo, ...), so count them rather than looking for two fixed names.
+    local n_apt n_rpm
+    n_apt="$(find "${config_dir}" -maxdepth 1 -name '*.list' 2>/dev/null | wc -l | tr -d ' ')"
+    n_rpm="$(find "${config_dir}" -maxdepth 1 -name '*.repo' 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "${MIRRORET_ENABLE_APT:-1}" == "1" ]]; then
+        if [[ "${n_apt}" -gt 0 ]]; then
+            success "client configs: ${n_apt} APT sources file(s)"
+        else
+            warn "client configs: no APT sources file in ${config_dir}"
+            warn " Set MIRRORET_APT_TARGETS and re-run install.sh --upgrade."
+            (( fail += 1 )) || true
+        fi
+    fi
+    if [[ "${MIRRORET_ENABLE_RPM:-1}" == "1" ]]; then
+        if [[ "${n_rpm}" -gt 0 ]]; then
+            success "client configs: ${n_rpm} RPM .repo file(s)"
+        else
+            warn "client configs: no .repo file in ${config_dir}"
+            warn " Set MIRRORET_RPM_TARGETS and re-run install.sh --upgrade."
+            (( fail += 1 )) || true
+        fi
+    fi
 
-    for cfg in "${expected_configs[@]}"; do
+    local cfg
+    for cfg in pip.conf .npmrc docker-daemon.json; do
         if [[ -f "${config_dir}/${cfg}" ]]; then
             success "client config: ${cfg}"
         else

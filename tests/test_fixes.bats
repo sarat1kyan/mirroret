@@ -531,17 +531,41 @@ EOF
     ! [[ "$section" == *'-d /etc/nginx/sites-available'*'conf_file='* ]]
 }
 
-@test "install: client-config gen is gated on DISTRO_TYPE (no cross-distro nonsense)" {
-    # Regression: install.sh used to call generate_apt_client_config even
-    # on RHEL, which then died in _apt_codename because OS_VER=9.8 has no
-    # matching Ubuntu codename. Same in reverse for RPM on Debian.
+@test "install: client configs follow the TARGETS, not the mirror server's distro" {
+    # This is the bug that made the whole tool fall short of being a central
+    # mirror: install.sh gated APT setup on DISTRO_TYPE == debian and RPM on
+    # == rhel. On a RHEL mirror server the APT half never ran, so it silently
+    # never downloaded a single Ubuntu package - and there was no error,
+    # because skipping was the designed behaviour.
+    #
+    # What a client runs has nothing to do with what the mirror server runs,
+    # so generation is driven by the configured targets instead.
     section="$(awk '/^generate_all_client_configs/,/^}/' "${SCRIPT_DIR}/install.sh")"
-    # APT client config must be gated on DISTRO_TYPE == debian
-    [[ "$section" == *'DISTRO_TYPE}" == "debian"'*'generate_apt_client_config'* ]] || \
-        [[ "$section" == *'generate_apt_client_config'*'DISTRO_TYPE'* ]]
-    # RPM client config must be gated on DISTRO_TYPE == rhel
-    [[ "$section" == *'DISTRO_TYPE}" == "rhel"'*'generate_rpm_client_config'* ]] || \
-        [[ "$section" == *'generate_rpm_client_config'*'DISTRO_TYPE'* ]]
+    [[ "$section" == *'generate_apt_client_configs'* ]]
+    [[ "$section" == *'generate_rpm_client_configs'* ]]
+    # ...and neither may be reachable only when DISTRO_TYPE matches. The
+    # multi-target generators must not sit behind a host-distro test.
+    ! [[ "$section" == *'DISTRO_TYPE}" == "debian" ]]; then'*'generate_apt_client_configs'* ]]
+}
+
+@test "install: APT and RPM mirror setup are not gated on the host distro" {
+    section="$(awk '/^main\(\)/,/^}/' "${SCRIPT_DIR}/install.sh")"
+    [[ "$section" == *'configure_apt_mirror'* ]]
+    [[ "$section" == *'configure_rpm_mirroring'* ]]
+    # The old gate was: ENABLE_APT == 1 && DISTRO_TYPE == debian
+    ! [[ "$section" == *'MIRRORET_ENABLE_APT}" == "1" ]] && [[ "${DISTRO_TYPE}" == "debian"'* ]]
+    ! [[ "$section" == *'MIRRORET_ENABLE_RPM}" == "1" ]] && [[ "${DISTRO_TYPE}" == "rhel"'* ]]
+}
+
+@test "install: the master sync script runs both apt and rpm steps" {
+    # Grep the file rather than an awk-extracted function: the generated
+    # script is a heredoc that itself defines _run_step(), whose closing
+    # brace sits in column 1 and would end an awk range early.
+    grep -q '_run_step "apt"' "${SCRIPT_DIR}/install.sh"
+    grep -q '_run_step "rpm"' "${SCRIPT_DIR}/install.sh"
+    # The APT step must not be chosen based on the mirror server's distro.
+    ! grep -q 'ENABLE_APT}" == "1" \]\] && \[\[ "${DISTRO_TYPE}" == "debian"' \
+        "${SCRIPT_DIR}/install.sh"
 }
 
 # -- Sync safety guards (runaway-download incident, 2026-07-22) ----------------
@@ -715,14 +739,29 @@ EOF
     grep -q -- '--no-cache-dir' "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
 }
 
-@test "npm: republish conflict is not counted as a failure" {
+@test "npm: seeding warms the Verdaccio cache instead of publishing" {
+    # Regression: seeding used `npm pack` from npmjs + `npm publish` into
+    # Verdaccio, which returns ENEEDAUTH for every package unless anonymous
+    # publish is enabled - and enabling that on a 0.0.0.0 listener lets
+    # anyone on the network publish into the registry. It also only ever
+    # fetched the named package, never its dependencies.
+    #
+    # Installing THROUGH Verdaccio makes it cache the whole resolved tree in
+    # its own storage, needs no credentials, and leaves the packages
+    # installable with no internet access.
     DRY_RUN=0
     MIRRORET_APPROVAL_ENABLED=0
-    MIRRORET_NPM_ALLOW_ANON_PUBLISH=1
-    MIRRORET_NPM_PORT=4873
+    mkdir -p "${MIRRORET_BASE_DIR}/scripts"
     _write_npm_sync_script "${MIRRORET_BASE_DIR}"
-    grep -q 'ALREADY PRESENT' "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
-    grep -q 'EPUBLISHCONFLICT' "${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+    local script="${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+    grep -q 'npm install --prefix' "$script"
+    grep -q -- '--registry "${VERDACCIO_URL}"' "$script"
+    # No publish, so no auth to fail on.
+    ! grep -q 'npm publish' "$script"
+    # An isolated npm cache, or npm serves the tree from root's own cache and
+    # those tarballs never reach the mirror.
+    grep -q -- '--cache' "$script"
+    bash -n "$script"
 }
 
 @test "npm: verdaccio unit sets a writable HOME" {

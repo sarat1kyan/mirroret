@@ -248,3 +248,23 @@ teardown() {
     [[ "$section" == *"cleanup_entry"* ]]
     [[ "$section" == *"MIRRORET_CLEANUP_DOW"* ]]
 }
+
+@test "retention: never prunes the APT tree" {
+    # An apt archive is a closed set: every .deb in pool/ is referenced by a
+    # Packages index hashed by a signed Release. Version-pruning the pool
+    # leaves the index pointing at files that are gone, and every client
+    # fails mid-download. Growth is controlled by the sync's --delete.
+    MIRRORET_RETENTION_ENABLE=1
+    MIRRORET_RETENTION_MODE=prune
+    mkdir -p "${MIRRORET_BASE_DIR}/apt/ubuntu/pool/main/h/hello"
+    local deb="${MIRRORET_BASE_DIR}/apt/ubuntu/pool/main/h/hello/hello_1.0_amd64.deb"
+    local old="${MIRRORET_BASE_DIR}/apt/ubuntu/pool/main/h/hello/hello_0.9_amd64.deb"
+    echo new > "$deb"
+    echo old > "$old"
+
+    run run_retention
+    # Both must survive - including the "old version".
+    [ -f "$deb" ]
+    [ -f "$old" ]
+    [[ "$output" == *"not pruned here"* ]]
+}

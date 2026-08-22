@@ -171,20 +171,38 @@ cmd_sync() {
     _need_root sync "$target"
     case "$target" in
         all)    _run_script "${SCRIPTS_DIR}/sync-all.sh" ;;
-        rpm)    _run_script "${SCRIPTS_DIR}/sync-redhat-repos.sh" ;;
         pip)    _run_script "${SCRIPTS_DIR}/sync-pip-packages.sh" ;;
         npm)    _run_script "${SCRIPTS_DIR}/sync-npm-packages.sh" ;;
         docker) _run_script "${SCRIPTS_DIR}/sync-docker-images.sh" ;;
-        apt)
-            if [[ -x "${SCRIPTS_DIR}/sync-apt-debmirror.sh" ]]; then
+        rpm|redhat)
+            # Native engine first; fall back to the reposync-based script for
+            # installs that pinned MIRRORET_RPM_ENGINE=reposync.
+            if [[ -x "${SCRIPTS_DIR}/sync-rpm-repos.sh" ]]; then
+                _run_script "${SCRIPTS_DIR}/sync-rpm-repos.sh"
+            elif [[ -x "${SCRIPTS_DIR}/sync-redhat-repos.sh" ]]; then
+                _run_script "${SCRIPTS_DIR}/sync-redhat-repos.sh"
+            else
+                _er "No RPM sync script found in ${SCRIPTS_DIR}."
+                _in "Set MIRRORET_RPM_TARGETS (e.g. \"ol:9 rocky:9\") and run:"
+                _in "  sudo mirroretctl upgrade"
+                return 1
+            fi
+            ;;
+        apt|debian|ubuntu)
+            if [[ -x "${SCRIPTS_DIR}/sync-apt-repos.sh" ]]; then
+                _run_script "${SCRIPTS_DIR}/sync-apt-repos.sh"
+            elif [[ -x "${SCRIPTS_DIR}/sync-apt-debmirror.sh" ]]; then
                 _run_script "${SCRIPTS_DIR}/sync-apt-debmirror.sh"
             else
-                _er "No APT sync script. APT mirroring is only set up on Debian/Ubuntu hosts."
+                _er "No APT sync script found in ${SCRIPTS_DIR}."
+                _in "APT mirroring works on ANY host, but it needs targets:"
+                _in "  MIRRORET_APT_TARGETS=\"ubuntu:jammy debian:bookworm\""
+                _in "in /etc/mirroret/mirroret.conf, then: sudo mirroretctl upgrade"
                 return 1
             fi
             ;;
         *) _er "Unknown sync target: ${target}"
-           _in "Valid: all rpm pip npm docker apt"
+           _in "Valid: all apt rpm pip npm docker"
            return 1 ;;
     esac
 }
@@ -192,7 +210,7 @@ cmd_sync() {
 cmd_sync_status() {
     _h "Sync locks"
     local lk lf
-    for lk in redhat pip npm; do
+    for lk in apt redhat pip npm; do
         lf="/var/lock/mirroret-sync-${lk}.lock"
         if [[ ! -e "$lf" ]]; then
             _in "${lk}: idle (no lock file)"
@@ -209,7 +227,8 @@ cmd_sync_status() {
     _h "Running sync processes"
     local found=0
     local pat
-    for pat in reposync debmirror 'sync-all.sh' 'sync-redhat' 'sync-pip' 'sync-npm' 'sync-docker'; do
+    for pat in mirroret_apt.py mirroret_rpm.py reposync debmirror 'sync-all.sh' \
+               'sync-apt' 'sync-redhat' 'sync-rpm' 'sync-pip' 'sync-npm' 'sync-docker'; do
         if pgrep -af "$pat" 2>/dev/null | grep -v mirroretctl | sed 's/^/      /'; then
             found=1
         fi
@@ -240,7 +259,9 @@ cmd_sync_stop() {
     _need_root sync-stop
     _h "Stopping sync processes"
     local pat killed=0
-    for pat in reposync debmirror 'sync-all.sh' 'sync-redhat-repos' 'sync-pip-packages' 'sync-npm-packages' 'sync-docker-images'; do
+    for pat in mirroret_apt.py mirroret_rpm.py reposync debmirror 'sync-all.sh' \
+               'sync-apt-repos' 'sync-apt-debmirror' 'sync-redhat-repos' 'sync-rpm-repos' \
+               'sync-pip-packages' 'sync-npm-packages' 'sync-docker-images'; do
         if pkill -f "$pat" 2>/dev/null; then
             _ok "signalled: ${pat}"
             killed=1
@@ -271,6 +292,126 @@ _run_script_or_install() {
         _er "install.sh not found next to mirroretctl."
         return 1
     fi
+}
+
+# ---------------------------------------------------------------- targets ----
+
+TARGETS_DIR="${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"
+
+# cmd_targets - what this server mirrors, and whether it has actually synced.
+#
+# The single most confusing thing about the old tool was that a RHEL server
+# silently mirrored no Ubuntu at all. This makes the answer to "what does
+# this box serve?" a one-line command.
+cmd_targets() {
+    local what="${1:-list}"
+    case "$what" in
+        list|status)
+            _h "Configured mirror targets"
+            if [[ ! -d "${TARGETS_DIR}" ]]; then
+                _wa "${TARGETS_DIR} does not exist - nothing is configured."
+                _in "Set MIRRORET_APT_TARGETS / MIRRORET_RPM_TARGETS in"
+                _in "/etc/mirroret/mirroret.conf, then: sudo mirroretctl upgrade"
+                return 0
+            fi
+            local found=0 spec
+            for spec in "${TARGETS_DIR}"/apt-*.json; do
+                [[ -f "$spec" ]] || continue
+                found=1
+                _targets_report_apt "$spec"
+            done
+            for spec in "${TARGETS_DIR}"/rpm-*.json; do
+                [[ -f "$spec" ]] || continue
+                found=1
+                _targets_report_rpm "$spec"
+            done
+            if [[ "$found" -eq 0 ]]; then
+                _wa "No target specs in ${TARGETS_DIR}."
+                _in "APT example: MIRRORET_APT_TARGETS=\"ubuntu:jammy debian:bookworm\""
+                _in "RPM example: MIRRORET_RPM_TARGETS=\"ol:9 rocky:9 epel:9\""
+            fi
+            ;;
+        show)
+            local spec="${TARGETS_DIR}/${2:-}"
+            [[ -f "$spec" ]] || { _er "No such target spec: ${spec}"; return 1; }
+            cat "$spec"
+            ;;
+        *)
+            _er "Usage: mirroretctl targets {list|show <file>}"
+            return 1 ;;
+    esac
+}
+
+_targets_report_apt() {
+    local spec="$1"
+    local id dir suites comps arches dest
+    id="$(mirroret_json_field "$spec" id)"
+    dir="$(mirroret_json_field "$spec" dir)"
+    dest="$(mirroret_json_field "$spec" dest)"
+    suites="$(mirroret_json_field "$spec" suites)"
+    comps="$(mirroret_json_field "$spec" components)"
+    arches="$(mirroret_json_field "$spec" arches)"
+
+    printf "\n  APT  %s\n" "${id}"
+    _in "url        http://$(_ctl_ip):${WEB_PORT}/${dir}"
+    _in "suites     ${suites}"
+    _in "components ${comps}"
+    _in "arches     ${arches}"
+
+    local suite ok=0 missing=""
+    for suite in ${suites}; do
+        if [[ -f "${dest}/dists/${suite}/Release" ]] || \
+           [[ -f "${dest}/dists/${suite}/InRelease" ]]; then
+            ok=$(( ok + 1 ))
+        else
+            missing+=" ${suite}"
+        fi
+    done
+    local debs=0
+    [[ -d "${dest}/pool" ]] && debs="$(find "${dest}/pool" -name '*.deb' 2>/dev/null | wc -l | tr -d ' ')"
+    if [[ -n "${missing}" ]]; then
+        _wa "not synced yet:${missing}"
+        _in "run: sudo mirroretctl sync apt"
+    else
+        _ok "${ok}/${ok} suites published, ${debs} .deb on disk"
+    fi
+}
+
+_targets_report_rpm() {
+    local spec="$1"
+    local id flavor major repos arches dest
+    id="$(mirroret_json_field "$spec" id)"
+    flavor="$(mirroret_json_field "$spec" flavor)"
+    major="$(mirroret_json_field "$spec" version)"
+    dest="$(mirroret_json_field "$spec" dest)"
+    repos="$(mirroret_json_field "$spec" repos)"
+    arches="$(mirroret_json_field "$spec" arches)"
+
+    printf "\n  RPM  %s\n" "${id}"
+    _in "url        http://$(_ctl_ip):${WEB_PORT}/redhat/${flavor}/${major}/<repo>"
+    _in "repos      ${repos}"
+    _in "arches     ${arches}"
+
+    local repo published=0 total=0 rpms=0 missing=""
+    for repo in ${repos}; do
+        total=$(( total + 1 ))
+        if [[ -f "${dest}/${repo}/repodata/repomd.xml" ]]; then
+            published=$(( published + 1 ))
+            rpms=$(( rpms + $(find "${dest}/${repo}" -name '*.rpm' 2>/dev/null | wc -l) ))
+        else
+            missing+=" ${repo}"
+        fi
+    done
+    if [[ -n "${missing}" ]]; then
+        _wa "not synced yet:${missing}"
+        _in "run: sudo mirroretctl sync rpm"
+    else
+        _ok "${published}/${total} repos published, ${rpms} rpm on disk"
+    fi
+}
+
+_ctl_ip() {
+    printf '%s' "${MIRRORET_SERVER_IP:-$(get_server_ip 2>/dev/null || echo '<server-ip>')}"
 }
 
 # --------------------------------------------------------------- install ----
@@ -460,11 +601,17 @@ cmd_client() {
             fi
             ls -1 "${CONFIG_DIR}" 2>/dev/null | sed 's/^/      /'
             _h "Serve URLs"
-            local ip="${MIRRORET_SERVER_IP:-$(get_server_ip 2>/dev/null || echo '<server-ip>')}"
-            _in "rpm  : http://${ip}:${WEB_PORT}/config/redhat-client.repo"
-            _in "apt  : http://${ip}:${WEB_PORT}/config/debian-client.list"
-            _in "pip  : http://${ip}:${WEB_PORT}/config/pip.conf"
-            _in "npm  : http://${ip}:${WEB_PORT}/config/.npmrc"
+            local ip
+            ip="$(_ctl_ip)"
+            local f
+            # One config per mirrored target, so list what is really there
+            # rather than two hardcoded legacy names.
+            for f in "${CONFIG_DIR}"/*.list "${CONFIG_DIR}"/*.sources \
+                     "${CONFIG_DIR}"/*.repo "${CONFIG_DIR}"/pip.conf \
+                     "${CONFIG_DIR}"/.npmrc "${CONFIG_DIR}"/docker-daemon.json; do
+                [[ -e "$f" ]] || continue
+                _in "http://${ip}:${WEB_PORT}/config/$(basename "$f")"
+            done
             ;;
         show)
             local f="${2:-}"
@@ -498,32 +645,36 @@ _cli_verify_client_configs() {
         else
             _ok "redhat-client.repo: gpgcheck/gpgkey consistent"
         fi
-        # baseurl paths must exist on disk or clients get 404.
-        local url path missing=0
-        while IFS= read -r url; do
-            path="${url#*://*/}"
-            path="${BASE_DIR}/${path#*/}"
-            [[ -d "$path" ]] || { _in "  baseurl not yet on disk: ${url}"; missing=1; }
-        done < <(grep -E '^baseurl=' "$repo" | sed 's/^baseurl=//')
-        if [[ "$missing" -eq 1 ]]; then
-            _wa "redhat-client.repo: some baseurl paths are empty. Run a sync first."
-        else
-            _ok "redhat-client.repo: all baseurl paths present"
-        fi
     else
-        _in "redhat-client.repo: not generated (RPM disabled or non-RHEL host)"
+        _in "redhat-client.repo: not generated (no RPM target configured)"
     fi
 
-    local list="${CONFIG_DIR}/debian-client.list"
-    if [[ -f "$list" ]]; then
-        if grep -q 'signed-by=.*mirroret.gpg' "$list" && [[ "${MIRRORET_APT_RESIGN:-0}" != "1" ]]; then
-            _er "debian-client.list: signed-by points at mirroret.gpg but MIRRORET_APT_RESIGN is not 1."
+    # Every generated .repo file, checked for actually-published metadata.
+    local rf
+    for rf in "${CONFIG_DIR}"/*.repo; do
+        [[ -f "$rf" ]] || continue
+        _cli_verify_rpm_repos "$rf" || rc=1
+    done
+
+    # Every generated APT sources file, not just the legacy single name.
+    local list base
+    for list in "${CONFIG_DIR}"/*.list; do
+        [[ -f "$list" ]] || continue
+        base="$(basename "$list")"
+        if grep -q 'signed-by=.*mirroret.gpg' "$list" && \
+           [[ "${MIRRORET_APT_RESIGN:-0}" != "1" ]]; then
+            _er "${base}: signed-by points at mirroret.gpg but MIRRORET_APT_RESIGN is not 1."
             _in "  Mirrored Release files carry the UPSTREAM signature. apt update will fail."
             rc=1
         else
-            _ok "debian-client.list: signed-by configuration consistent"
+            _ok "${base}: signed-by configuration consistent"
         fi
-    fi
+        # Every suite the file advertises must actually be published, or the
+        # client gets "Failed to fetch ... Packages 404" on apt update. A
+        # suite is published when its Release file is on disk; the engine
+        # writes that last, only after the suite is complete.
+        _cli_verify_apt_suites "$list" || rc=1
+    done
 
     local dj="${CONFIG_DIR}/docker-daemon.json"
     if [[ -f "$dj" ]]; then
@@ -538,6 +689,69 @@ _cli_verify_client_configs() {
         fi
     fi
 
+    return "$rc"
+}
+
+# _cli_verify_apt_suites <sources-file> - are all its suites published?
+_cli_verify_apt_suites() {
+    local list="$1" base
+    base="$(basename "$list")"
+    local rc=0 missing="" present=0
+    local url suite prefix dir
+    # Lines look like: deb [opts] http://ip:port/<prefix> <suite> <components>
+    while read -r url suite; do
+        [[ -z "$url" || -z "$suite" ]] && continue
+        prefix="${url##*/}"
+        dir="${BASE_DIR}/apt/${prefix}/dists/${suite}"
+        if [[ -f "${dir}/Release" ]] || [[ -f "${dir}/InRelease" ]]; then
+            present=$(( present + 1 ))
+        else
+            missing+=" ${suite}"
+        fi
+    done < <(awk '$1=="deb" {
+                      for (i=2; i<=NF; i++) {
+                          if ($i ~ /^http/) { print $i, $(i+1); break }
+                      }
+                  }' "$list")
+
+    if [[ -n "${missing}" ]]; then
+        _wa "${base}: advertises suite(s) that are not published yet:${missing}"
+        _in "  Clients will report 'Failed to fetch ... Packages 404' for those."
+        _in "  Run: sudo mirroretctl sync apt"
+        _in "  If a suite genuinely does not exist upstream, remove it from"
+        _in "  MIRRORET_APT_TARGETS and re-run: sudo mirroretctl upgrade"
+        rc=1
+    elif [[ "${present}" -gt 0 ]]; then
+        _ok "${base}: all ${present} advertised suite(s) are published"
+    fi
+    return "$rc"
+}
+
+# _cli_verify_rpm_repos <repo-file> - are all its baseurls published?
+_cli_verify_rpm_repos() {
+    local repo="$1" base
+    base="$(basename "$repo")"
+    local rc=0 missing="" present=0 url path
+    while IFS= read -r url; do
+        [[ -z "$url" ]] && continue
+        # baseurl is http://ip:port/redhat/<flavor>/<major>/<repo>; on disk
+        # that lives at <base>/redhat/mirror/<flavor>/<major>/<repo>.
+        path="${BASE_DIR}/redhat/mirror/${url##*/redhat/}"
+        if [[ -f "${path}/repodata/repomd.xml" ]]; then
+            present=$(( present + 1 ))
+        else
+            missing+=" ${url##*/}"
+        fi
+    done < <(grep -E '^baseurl=' "$repo" | sed 's/^baseurl=//')
+
+    if [[ -n "${missing}" ]]; then
+        _wa "${base}: repo(s) with no published metadata yet:${missing}"
+        _in "  Clients will report 'Cannot download repomd.xml' for those."
+        _in "  Run: sudo mirroretctl sync rpm"
+        rc=1
+    elif [[ "${present}" -gt 0 ]]; then
+        _ok "${base}: all ${present} repo(s) have published metadata"
+    fi
     return "$rc"
 }
 
@@ -714,6 +928,7 @@ cmd_menu() {
   15) check             validate installation
   16) report            write one shareable txt report
   17) client simulate   prove a client can install from this mirror
+  18) targets           what this server mirrors, and whether it synced
    q) quit
 MENU
         printf "select> "
@@ -737,6 +952,7 @@ MENU
             15) cmd_check ;;
             16) cmd_collect ;;
             17) cmd_client simulate ;;
+            18) cmd_targets list ;;
             q|Q|quit|exit) return 0 ;;
             "") ;;
             *)  _er "unknown selection: ${choice}" ;;
@@ -834,6 +1050,8 @@ Usage:
 
 Inspect (no root needed):
   status                    services, ports, disk, last sync, cron
+  targets                   which distributions this server mirrors, and
+                            whether each one has actually synced
   doctor [--net] [--bundle] full read-only diagnostic
   report [-o FILE]          write ONE txt file describing everything, for sharing
   sync status               which syncs are running, lock state
@@ -854,7 +1072,7 @@ Change state (root):
   upgrade                   re-apply config, regenerate managed scripts
   check                     validate the installation
   uninstall [args]          run the uninstaller (see uninstall.sh --help)
-  sync all|rpm|pip|npm|docker|apt
+  sync all|apt|rpm|pip|npm|docker
   sync stop                 stop running syncs
   approve all [pip|npm|rpm] promote staged packages (omit kind for all)
   approve pip|npm|rpm <n>   promote packages matching a name
@@ -867,6 +1085,8 @@ Change state (root):
 
 Examples:
   mirroretctl status
+  mirroretctl targets
+  sudo mirroretctl sync apt
   sudo mirroretctl sync rpm
   sudo mirroretctl clean report
   mirroretctl client verify
@@ -912,6 +1132,7 @@ main() {
         uninstall)           cmd_uninstall "$@" ;;
         service|svc)         cmd_service "$@" ;;
         client)              cmd_client "$@" ;;
+        targets|target)      cmd_targets "$@" ;;
         serve|endpoints)     cmd_serve ;;
         logs|log)            cmd_logs "$@" ;;
         config|conf)         cmd_config "$@" ;;

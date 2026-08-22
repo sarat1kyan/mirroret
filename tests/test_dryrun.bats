@@ -56,3 +56,35 @@ teardown() {
     # 1 = root check failed (expected), anything else is unexpected.
     [ "$result" -eq 1 ] || [ "$result" -eq 0 ]
 }
+
+@test "dry-run: a full install writes nothing under the base dir" {
+    # --dry-run's whole contract. generate_all_client_configs used to mkdir
+    # the config dir unconditionally, so a dry run always created part of the
+    # tree it claimed not to touch.
+    local base="${BATS_TEST_TMPDIR}/srv"
+    local targets="${BATS_TEST_TMPDIR}/targets"
+    run env MIRRORET_BASE_DIR="${base}" MIRRORET_TARGETS_DIR="${targets}" \
+        MIRRORET_APT_TARGETS="ubuntu:jammy" MIRRORET_RPM_TARGETS="rocky:9" \
+        MIRRORET_MIN_DISK_GB=0 \
+        bash "${SCRIPT_DIR}/install.sh" --dry-run --non-interactive \
+        --no-pip --no-npm --no-docker --no-firewall
+    [ "$status" -eq 0 ]
+    [ ! -e "${base}" ]
+    [ ! -e "${targets}" ]
+}
+
+@test "dry-run: still reports the targets it would configure" {
+    # A dry run that cannot name what it would do is not a useful preview.
+    # The specs are written to a scratch dir precisely so this stays accurate.
+    local base="${BATS_TEST_TMPDIR}/srv2"
+    run env MIRRORET_BASE_DIR="${base}" \
+        MIRRORET_TARGETS_DIR="${BATS_TEST_TMPDIR}/targets2" \
+        MIRRORET_APT_TARGETS="ubuntu:jammy debian:bookworm" \
+        MIRRORET_RPM_TARGETS="ol:9" MIRRORET_MIN_DISK_GB=0 \
+        bash "${SCRIPT_DIR}/install.sh" --dry-run --non-interactive \
+        --no-pip --no-npm --no-docker --no-firewall
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"APT targets: ubuntu-jammy debian-bookworm"* ]]
+    [[ "$output" == *"RPM targets: ol9"* ]]
+    [[ "$output" == *"target: ubuntu-jammy -> ${base}/apt/ubuntu"* ]]
+}
