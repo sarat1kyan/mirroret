@@ -257,11 +257,21 @@ def verify_release(tmpdir, suite, keyrings, require, flavor):
         )
         return False
 
+    # The spec always names the flavor's canonical keyring path so client
+    # configs can point signed-by= at it. On a non-Debian/Ubuntu mirror
+    # server that file does not exist, and passing it to gpgv fails hard
+    # with "keyblock resource ... No such file or directory". Filter to
+    # what is actually on THIS host, then fall back to the auto-detected
+    # defaults (which are also existence-filtered). If nothing survives,
+    # mirror-side verification is skipped with a warning - clients still
+    # verify the mirrored signature with their own keyring regardless.
+    if keyrings:
+        keyrings = [k for k in keyrings if os.path.exists(k)]
     if not keyrings:
         keyrings = _default_keyrings(flavor)
 
     if not keyrings or not _gpgv_available():
-        why = "no archive keyring found" if not keyrings else "gpgv not installed"
+        why = "no archive keyring found on this host" if not keyrings else "gpgv not installed"
         _skip_or_die(
             require, suite, why,
             "The upstream signature is mirrored verbatim, so clients still "

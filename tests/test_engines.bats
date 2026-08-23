@@ -671,3 +671,40 @@ PYEOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"actionable"* ]]
 }
+
+@test "apt engine: a nonexistent keyring path is filtered, not fatal" {
+    # Reported from a live RHEL mirror server: the spec always names
+    # /usr/share/keyrings/ubuntu-archive-keyring.gpg so the client's
+    # signed-by= can point at it - but that file does not exist on RHEL.
+    # gpgv then failed with "keyblock resource ... No such file or
+    # directory" and every suite was refused. Mirror-side verification is
+    # defence in depth anyway (the client re-verifies with its own
+    # keyring), so a missing keyring on the mirror host must degrade to a
+    # warning, not a hard stop.
+    _mk_apt_fixture "${TMPDIR_TEST}/up" --packages 2
+    local url
+    url="$(serve_fixture "${TMPDIR_TEST}/up")"
+
+    run python3 "$(apt_engine)" --dest "${TMPDIR_TEST}/mirror" --url "${url}" \
+        --suite testsuite --component main --arch amd64 --min-free-gb 0 \
+        --keyring /does/not/exist/anywhere.gpg --flavor ubuntu
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"NOT verified locally"* ]]
+    [ -f "${TMPDIR_TEST}/mirror/dists/testsuite/Release" ]
+}
+
+@test "apt engine: --require-signature still fails when no keyring exists" {
+    # The escape hatch stays honest: an operator who explicitly demands
+    # mirror-side verification must get a hard stop when no usable keyring
+    # is available.
+    _mk_apt_fixture "${TMPDIR_TEST}/up" --packages 1
+    local url
+    url="$(serve_fixture "${TMPDIR_TEST}/up")"
+
+    run python3 "$(apt_engine)" --dest "${TMPDIR_TEST}/mirror" --url "${url}" \
+        --suite testsuite --component main --arch amd64 --min-free-gb 0 \
+        --keyring /does/not/exist.gpg --flavor ubuntu --require-signature
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"require-signature"* ]]
+    [ ! -f "${TMPDIR_TEST}/mirror/dists/testsuite/Release" ]
+}
