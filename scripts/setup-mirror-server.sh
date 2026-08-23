@@ -46,6 +46,7 @@ SKIP_SYNC=0
 SKIP_FIREWALL=0
 START_PHASE=1
 APT_SCHEME=""
+HTTPS_WOULD_WORK=0
 EXTRA_INSTALL_ARGS=()
 
 CONF="/etc/mirroret/mirroret.conf"
@@ -186,11 +187,15 @@ ask() {
 # (deb.debian.org/debian-security), which a root probe cannot distinguish.
 # So probe what the sync will really ask for.
 upstream_probes() {
-    # Always probe over https, regardless of --apt-scheme: a proxy that
-    # permits CONNECT on 443 but blocks plain HTTP would otherwise look
-    # broken here when it is not, and https tells us whether the host is
-    # allowed at all.
-    local t flavor release proto="https"
+    # Probe with the scheme the SYNC will actually use.
+    #
+    # This forced https regardless of --apt-scheme, on the theory that https
+    # tells us whether the host is allowed at all. That was backwards: a
+    # proxy can permit CONNECT on 443 and still return 403 for plain HTTP,
+    # so the gate reported every URL reachable and the sync then failed with
+    # HTTP 403 on all six Ubuntu suites. A gate that passes when the real
+    # operation fails is worse than no gate.
+    local t flavor release proto="${APT_SCHEME:-http}"
 
     for t in ${APT_TARGETS}; do
         flavor="${t%%:*}"; release="${t#*:}"; release="${release%%:*}"
@@ -342,16 +347,45 @@ phase_preflight() {
             code="$(env ${PROXY:+https_proxy=$PROXY} ${PROXY:+http_proxy=$PROXY} \
                     curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
                     "$url" 2>"$err")" || rc=$?
-            if [[ "$rc" -eq 0 ]] && [[ -n "$code" ]] && [[ "$code" != "000" ]]; then
+            # Only 2xx/3xx counts. curl exits 0 for a 403 because it IS a
+            # valid HTTP response, so "rc == 0" alone reported the proxy's
+            # 403 block page as reachable - and the sync then failed on the
+            # very URL the gate had just approved. These probes hit the
+            # exact file the sync fetches, so anything but success is a
+            # failure.
+            if [[ "$rc" -eq 0 ]] && [[ "${code:0:1}" == "2" || "${code:0:1}" == "3" ]]; then
                 printf '        %s%-4s%s %s\n' "$C_OK" "${code}" "$C_OFF" "${url#https://}"
                 _log "probe OK ${code} ${url}"
             else
-                printf '        %sFAIL%s %s\n' "$C_ERR" "$C_OFF" "${url#https://}"
-                printf '             %s\n' "$(_curl_reason "$rc")"
+                printf '        %sFAIL%s %s\n' "$C_ERR" "$C_OFF" \
+                    "$(printf '%s' "$url" | sed 's|^https\?://||')"
+                if [[ -n "$code" && "$code" != "000" ]]; then
+                    printf '             HTTP %s from the upstream or the proxy\n' "$code"
+                else
+                    printf '             %s\n' "$(_curl_reason "$rc")"
+                fi
                 local detail
                 detail="$(head -1 "$err" 2>/dev/null | sed 's/^curl: //')"
                 [[ -n "$detail" ]] && printf '             %s\n' "$detail"
-                _log "probe FAIL rc=${rc} ${url}: ${detail}"
+                _log "probe FAIL rc=${rc} code=${code} ${url}: ${detail}"
+
+                # A plain-HTTP failure that succeeds over https is the single
+                # most common corporate-proxy shape, and the fix is one
+                # option. Check rather than sending them to the proxy team.
+                if [[ "$url" == http://* ]]; then
+                    local https_url https_code
+                    https_url="https://${url#http://}"
+                    https_code="$(env ${PROXY:+https_proxy=$PROXY} \
+                        curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+                        "$https_url" 2>/dev/null || true)"
+                    if [[ -n "$https_code" && "$https_code" != "000" ]] \
+                       && [[ "${https_code:0:1}" != "4" ]] \
+                       && [[ "${https_code:0:1}" != "5" ]]; then
+                        printf '             %sbut https works (HTTP %s)%s\n' \
+                            "$C_WARN" "$https_code" "$C_OFF"
+                        HTTPS_WOULD_WORK=1
+                    fi
+                fi
                 case " ${bad_targets} " in
                     *" ${target} "*) ;;
                     *) bad_targets+=" ${target}" ;;
@@ -364,17 +398,35 @@ phase_preflight() {
             say ""
             warn "These targets cannot sync yet:${bad_targets}"
             info ""
-            info "Nothing on this server can fix that - the upstream is not"
-            info "reachable from here. Ask the proxy team to permit CONNECT on"
-            info "443 to the hosts shown above."
-            info ""
-            info "Two things that are easy to get half-right:"
-            info "  * security.ubuntu.com is a DIFFERENT host from"
-            info "    archive.ubuntu.com. Allowing only the archive gives a"
-            info "    mirror with no security updates."
-            info "  * Debian security lives at deb.debian.org/debian-security,"
-            info "    a different path on the same host."
-            info ""
+
+            # Lead with the fix the operator can apply themselves. Telling
+            # someone to raise a proxy ticket for something they can solve
+            # with one option wastes days.
+            if [[ "${HTTPS_WOULD_WORK:-0}" == "1" ]]; then
+                warn "Those URLs DO work over https - the proxy is refusing"
+                warn "plain HTTP, not blocking the host."
+                info ""
+                info "You can fix this yourself. Re-run with:"
+                info "  --apt-scheme https"
+                info ""
+                info "APT archives are GPG-signed, so plain http is normally"
+                info "fine and is what stock sources.list uses; https costs"
+                info "nothing here and sidesteps the policy entirely."
+                info ""
+            else
+                info "Nothing on this server can fix that - the upstream is not"
+                info "reachable from here. Ask the proxy team to permit CONNECT"
+                info "on 443 to the hosts shown above."
+                info ""
+                info "Two things that are easy to get half-right:"
+                info "  * security.ubuntu.com is a DIFFERENT host from"
+                info "    archive.ubuntu.com. Allowing only the archive gives"
+                info "    a mirror with no security updates."
+                info "  * Debian security lives at"
+                info "    deb.debian.org/debian-security - a different path on"
+                info "    the same host."
+                info ""
+            fi
 
             # Being able to proceed with what IS reachable matters: the RPM
             # tree is usually the bulk of the data and there is no reason to

@@ -1019,3 +1019,47 @@ PYEOF
     [[ "$section" == *"--skip-sync"* ]]
     [[ "$section" == *"tmux new"* ]]
 }
+
+@test "setup server: probes with the scheme the SYNC will use, not always https" {
+    # Reported from the live server: the probe forced https and passed, then
+    # the sync used plain http (the catalog default) and got HTTP 403 on all
+    # six Ubuntu suites. A gate that passes when the real operation fails is
+    # worse than no gate.
+    run bash -c "
+        APT_TARGETS='ubuntu:jammy'; RPM_TARGETS=''; APT_SCHEME=''
+        $(sed -n '/^upstream_probes()/,/^}/p' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh")
+        upstream_probes"
+    [[ "$output" == *"http://archive.ubuntu.com"* ]]
+    ! [[ "$output" == *"https://archive.ubuntu.com"* ]]
+
+    run bash -c "
+        APT_TARGETS='ubuntu:jammy'; RPM_TARGETS=''; APT_SCHEME='https'
+        $(sed -n '/^upstream_probes()/,/^}/p' "${SCRIPT_DIR}/scripts/setup-mirror-server.sh")
+        upstream_probes"
+    [[ "$output" == *"https://archive.ubuntu.com"* ]]
+}
+
+@test "setup server: an HTTP 403 is a failure, not 'reachable'" {
+    # curl exits 0 for a 403 because it IS a valid HTTP response, so the
+    # old success test (rc == 0) reported the proxy's block page as
+    # reachable. These probes fetch the exact file the sync needs, so
+    # anything but 2xx/3xx is a failure.
+    grep -q 'code:0:1}" == "2" || "${code:0:1}" == "3"' \
+        "${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+}
+
+@test "setup server: an http-only block recommends --apt-scheme https" {
+    # The most common corporate-proxy shape: CONNECT on 443 permitted, plain
+    # HTTP refused. That is fixable by the operator in one option, so it must
+    # not be reported as "ask the proxy team".
+    local src="${SCRIPT_DIR}/scripts/setup-mirror-server.sh"
+    grep -q 'but https works' "$src"
+    grep -q 'HTTPS_WOULD_WORK' "$src"
+    grep -q 'You can fix this yourself' "$src"
+    # And the self-serve advice must come INSTEAD of the proxy-ticket advice.
+    local section
+    section="$(sed -n '/HTTPS_WOULD_WORK:-0}" == "1"/,/^            fi$/p' "$src")"
+    [[ "$section" == *"--apt-scheme https"* ]]
+    [[ "$section" == *"else"* ]]
+    [[ "$section" == *"Ask the proxy team"* ]]
+}
