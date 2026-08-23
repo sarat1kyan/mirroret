@@ -985,15 +985,23 @@ generate_all_client_configs() {
     # on a client machine can fetch it from the mirror itself rather than
     # having to copy the repository around:
     #   curl -fsSL -o /tmp/s.sh http://SERVER:8080/config/setup-mirror-client.sh
-    if [[ -f "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" ]]; then
-        if [[ "${DRY_RUN}" == "1" ]]; then
-            info "[DRY-RUN] would publish setup-mirror-client.sh to ${config_dir}/"
-        else
-            install -m 0755 "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" \
-                "${config_dir}/setup-mirror-client.sh"
-            info "  ${config_dir}/setup-mirror-client.sh (client bootstrap)"
+    # Publish every client-side bootstrap script under config/, so an admin
+    # on a client can fetch each one from the mirror itself with curl. The
+    # extras variant (enroll-apt-extra.sh) was missed the first time this
+    # was written - a client that ran `curl .../config/enroll-apt-extra.sh`
+    # got a 404, which is exactly what a reader of the docs then reported.
+    local client_script
+    for client_script in setup-mirror-client.sh enroll-apt-extra.sh; do
+        if [[ -f "${SCRIPT_DIR}/scripts/${client_script}" ]]; then
+            if [[ "${DRY_RUN}" == "1" ]]; then
+                info "[DRY-RUN] would publish ${client_script} to ${config_dir}/"
+            else
+                install -m 0755 "${SCRIPT_DIR}/scripts/${client_script}" \
+                    "${config_dir}/${client_script}"
+                info "  ${config_dir}/${client_script} (client bootstrap)"
+            fi
         fi
-    fi
+    done
 
     success "Client configs written to ${config_dir}/"
 }

@@ -257,11 +257,20 @@ else
     # historical version can be several hundred GB (Grafana today: ~177 GB).
     info "Estimating download size (dry run first)..."
     if [[ "$DRY_RUN" != "1" ]]; then
-        est_out="$(python3 "$ENGINE" "${args[@]}" --dry-run 2>&1 | tee -a "$LOG_FILE" | tail -15 || true)"
-        printf '%s\n' "$est_out" | grep -E 'packages:|ABORT' | sed 's/^/        /'
+        # `tail -15` closes the pipe early; without `|| true` the tee gets
+        # SIGPIPE and pipefail + set -e kill the script silently.
+        est_out="$(python3 "$ENGINE" "${args[@]}" --dry-run 2>&1 \
+                   | tee -a "$LOG_FILE" | tail -15 || true)"
+        # The grep+sed pipeline exits 1 when nothing matched - which under
+        # `set -eo pipefail` returned the operator to a bare shell with no
+        # explanation. `|| true` keeps us in control regardless. Same trap
+        # a user reported live: "just went back to prompt after Estimating".
+        printf '%s\n' "$est_out" | grep -E 'packages:|ABORT' \
+                                  | sed 's/^/        /' || true
         if printf '%s' "$est_out" | grep -q '^ABORT'; then
             die "Disk floor would be breached by this sync." \
-                "Free space or lower --min-free-gb, then re-run."
+                "Free space or lower --min-free-gb, then re-run." \
+                "Full estimate log: ${LOG_FILE}"
         fi
         confirm "Start the real sync now?" || {
             warn "Sync skipped at your request."
@@ -345,6 +354,16 @@ NGINX
     if [[ -f "${KEY_PATH}" ]]; then
         install -m 0644 "${KEY_PATH}" "${BASE_DIR}/config/extra-${NAME}.gpg"
         ok "wrote ${BASE_DIR}/config/extra-${NAME}.gpg"
+    fi
+
+    # And the enrolment script itself, so the client instructions this
+    # script prints are actually satisfiable. install.sh --upgrade does
+    # the same, but this catches an operator who runs mirror-apt-extra.sh
+    # on a tree that has not been upgraded yet.
+    enrol="${SCRIPT_DIR}/enroll-apt-extra.sh"
+    if [[ -f "${enrol}" ]] && [[ ! -f "${BASE_DIR}/config/enroll-apt-extra.sh" ]]; then
+        install -m 0755 "${enrol}" "${BASE_DIR}/config/enroll-apt-extra.sh"
+        ok "wrote ${BASE_DIR}/config/enroll-apt-extra.sh"
     fi
 fi
 

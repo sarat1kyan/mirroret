@@ -1170,3 +1170,31 @@ PYEOF
     grep -qF 'IFS=,; printf' "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
     grep -qF 'ARCHES[*]' "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
 }
+
+@test "install: publishes BOTH client bootstrap scripts, not just one" {
+    # Regression: only setup-mirror-client.sh was published, so a client
+    # that followed the mirror-apt-extra.sh printout and ran
+    #   curl http://SERVER:8080/config/enroll-apt-extra.sh
+    # got HTTP 404. Both scripts must be published.
+    section="$(awk '/^generate_all_client_configs/,/^}/' "${SCRIPT_DIR}/install.sh")"
+    [[ "$section" == *"setup-mirror-client.sh"* ]]
+    [[ "$section" == *"enroll-apt-extra.sh"* ]]
+}
+
+@test "extras: mirror-apt-extra.sh also drops in enroll-apt-extra.sh" {
+    # Belt-and-braces so an operator who runs mirror-apt-extra.sh before
+    # install.sh --upgrade still ends up with a fetchable enrolment script.
+    grep -qF 'enroll-apt-extra.sh"' "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
+    grep -qF 'config/enroll-apt-extra.sh' "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
+}
+
+@test "extras: estimation output pipeline can never die silently" {
+    # Under `set -eo pipefail`, `printf | grep | sed` with no match exits 1
+    # and takes the whole script down with it, dropping the user back at
+    # their shell with nothing on screen. Reported live from a mirror
+    # server after running mirror-apt-extra.sh --yes for Grafana.
+    grep -qF "grep -E 'packages:|ABORT'" \
+        "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
+    grep -A2 "grep -E 'packages:|ABORT'" \
+        "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh" | grep -qF '|| true'
+}
