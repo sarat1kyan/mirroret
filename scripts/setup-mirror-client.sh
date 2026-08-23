@@ -292,7 +292,7 @@ fetch_or_die() {
     # fails later with a bare "connection refused" that looks like a network
     # fault rather than a server misconfiguration.
     local advertised
-    advertised="$(grep -oE 'https?://[^ /]+' "$dest.tmp" | sort -u | head -3 | tr '\n' ' ')"
+    advertised="$(grep -oE 'https?://[^ /]+' "$dest.tmp" | sort -u | head -3 | tr '\n' ' ' || true)"
     if ! grep -qE "https?://${SERVER}:${WEB_PORT}([/ ]|$)" "$dest.tmp"; then
         rm -f "$dest.tmp"
         die "${name} does not point at ${SERVER}:${WEB_PORT}." \
@@ -472,9 +472,13 @@ setup_apt() {
         # by bare name fetches apt's *candidate*, which on a machine with any
         # other source is often not the mirror's copy - so the test would
         # pass or fail for reasons unrelated to the mirror.
+        # awk exits after the first (Package, Version) pair; printf keeps
+        # feeding and gets SIGPIPE, and under `set -eo pipefail` that kills
+        # the whole script. On a big index (Grafana: 2478 records) this
+        # fires every run.
         pkg="$(printf '%s\n' "${content:-}" | awk '
             /^Package: / { p = $2 }
-            /^Version: / { if (p != "") { print p "=" $2; exit } }')"
+            /^Version: / { if (p != "") { print p "=" $2; exit } }' || true)"
     fi
 
     if [[ -z "$pkg" ]]; then
@@ -490,7 +494,7 @@ setup_apt() {
     rm -rf "$dl"; mkdir -p "$dl"
     if (cd "$dl" && apt-get download "$pkg" >/dev/null 2>&1); then
         local deb
-        deb="$(find "$dl" -name '*.deb' | head -1)"
+        deb="$(find "$dl" -name '*.deb' | head -1 || true)"
         if [[ -n "$deb" ]]; then
             ok "downloaded ${pkg} from the mirror ($(stat -c%s "$deb") bytes)"
         else
@@ -616,7 +620,7 @@ setup_rpm() {
     fi
 
     local repos
-    repos="$(dnf repolist --enabled 2>/dev/null | awk 'NR>1 {print $1}' | tr '\n' ' ')"
+    repos="$(dnf repolist --enabled 2>/dev/null | awk 'NR>1 {print $1}' | tr '\n' ' ' || true)"
     info "enabled repos: ${repos}"
     if [[ "$KEEP_UPSTREAM" != "1" ]] && printf '%s' "$repos" | grep -qvE '^(mirroret-[^ ]+ )*$'; then
         : # informational only; the list is printed above

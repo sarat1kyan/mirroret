@@ -1063,3 +1063,71 @@ PYEOF
     [[ "$section" == *"else"* ]]
     [[ "$section" == *"Ask the proxy team"* ]]
 }
+
+# -- third-party mirror scripts ------------------------------------------------
+
+@test "extras: server and client scripts exist, parse, and lint clean" {
+    for s in mirror-apt-extra.sh enroll-apt-extra.sh; do
+        [ -x "${SCRIPT_DIR}/scripts/${s}" ]
+        bash -n "${SCRIPT_DIR}/scripts/${s}"
+    done
+}
+
+@test "extras: --help works and does not leak set -e into the text" {
+    for s in mirror-apt-extra.sh enroll-apt-extra.sh; do
+        run bash "${SCRIPT_DIR}/scripts/${s}" --help
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"Options:"* ]]
+        ! [[ "$output" == *"set -Eeuo pipefail"* ]]
+    done
+}
+
+@test "extras: server refuses without --name, --url, or a key" {
+    run bash "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh" --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--name is required"* ]]
+    run bash "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh" --name x --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--url is required"* ]]
+    run bash "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh" \
+        --name x --url http://example.invalid/ --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Give --key-url or --key-path"* ]]
+}
+
+@test "extras: --name is validated as a safe path fragment" {
+    run bash "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh" \
+        --name '../etc' --url http://x/ --key-path /nope --dry-run --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"lowercase"* ]]
+}
+
+@test "extras: client refuses without --server or --name" {
+    run bash "${SCRIPT_DIR}/scripts/enroll-apt-extra.sh" --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--name is required"* ]]
+    run bash "${SCRIPT_DIR}/scripts/enroll-apt-extra.sh" --name grafana --yes
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"--server is required"* ]]
+}
+
+@test "extras: pipefail SIGPIPE traps are guarded" {
+    # Every `printf | awk ... exit`, `find | head`, and `... | tail` inside a
+    # $() capture is a pipefail trap: the consumer exits early, the producer
+    # SIGPIPEs, and under `set -eo pipefail` the whole script dies. Two of
+    # these fired live before this guard was added, exiting the script mid-
+    # verification with no message. Every such pipeline must end with `|| true`.
+    local src bad=0
+    for src in "${SCRIPT_DIR}/scripts/enroll-apt-extra.sh" \
+               "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" \
+               "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"; do
+        # A capture where a pipe feeds head/awk/tail/grep -m and the closing
+        # `)"` is not preceded by `|| true`.
+        while IFS= read -r line; do
+            printf '  UNGUARDED: %s: %s\n' "$(basename "$src")" "$line"
+            bad=$(( bad + 1 ))
+        done < <(grep -nE '\$\([^()]*\|[^()]*(head|awk|tail|grep -m)[^()]*\)"' "$src" \
+                 | grep -v '|| true')
+    done
+    [ "$bad" -eq 0 ]
+}
