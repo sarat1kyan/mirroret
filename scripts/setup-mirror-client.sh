@@ -410,19 +410,34 @@ setup_apt() {
             "To undo the change on this machine now:" \
             "  sudo $0 --rollback"
     fi
+    # A 404 on the mirror is fatal EXCEPT for optional metadata that apt itself
+    # tolerates: cnf/Commands-* (the command-not-found "did you mean...?"
+    # index). Grep for 404s and filter those out; if anything remains, stop.
     if grep -qE '^(E|W): .*(404|File not found)' /tmp/mirroret-aptupdate.$$; then
-        rm -f /tmp/mirroret-aptupdate.$$
-        die "apt reached the mirror but some indices are missing (404)." \
-            "The server advertises a suite it has not published yet." \
-            "On the SERVER, run:" \
-            "  mirroretctl client verify     # names the unpublished suites" \
-            "  sudo mirroretctl sync apt" \
-            "" \
-            "To undo the change on this machine now:" \
-            "  sudo $0 --rollback"
+        fatal_404=$(grep -E '^(E|W): .*(404|File not found)' /tmp/mirroret-aptupdate.$$ \
+            | grep -vE '/cnf/Commands-' || true)
+        if [[ -n "$fatal_404" ]]; then
+            rm -f /tmp/mirroret-aptupdate.$$
+            die "apt reached the mirror but some indices are missing (404)." \
+                "The server advertises a suite it has not published yet." \
+                "On the SERVER, run:" \
+                "  mirroretctl client verify     # names the unpublished suites" \
+                "  sudo mirroretctl sync apt" \
+                "" \
+                "To undo the change on this machine now:" \
+                "  sudo $0 --rollback"
+        fi
+        # cnf-only 404s: warn, don't die. Package install still works.
+        warn "mirror does not publish cnf/Commands-* (optional command-not-found index)."
+        warn "package install/upgrade still works; the 'did you mean...?' feature will not."
+        warn "server admin: run 'sudo mirroretctl upgrade && sudo mirroretctl sync apt' to add it."
     fi
-    if grep -qE '^E: ' /tmp/mirroret-aptupdate.$$; then
-        grep -E '^E: ' /tmp/mirroret-aptupdate.$$ | head -5 | sed 's/^/        /'
+    # Any other E: line (that isn't a cnf-only failure and its follow-on
+    # "Some index files failed to download" umbrella message) is fatal.
+    other_err=$(grep -E '^E: ' /tmp/mirroret-aptupdate.$$ \
+        | grep -vE '/cnf/Commands-|Some index files failed to download' || true)
+    if [[ -n "$other_err" ]]; then
+        printf '%s\n' "$other_err" | head -5 | sed 's/^/        /'
         rm -f /tmp/mirroret-aptupdate.$$
         die "apt-get update failed. The errors are above." \
             "To undo the change on this machine now:  sudo $0 --rollback"

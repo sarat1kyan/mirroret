@@ -733,6 +733,25 @@ PYEOF
     [[ "$section" == *'setup-mirror-client.sh'* ]]
 }
 
+@test "setup client: cnf/Commands-* 404s are tolerated, not fatal" {
+    # apt itself treats these as "ignored, old ones used instead" and the
+    # client can still install packages, so the setup script must not stop
+    # with a die() the way it did for other 404s.
+    grep -qE "/cnf/Commands-" "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    # And the fatal-error follow-up must also filter these out, otherwise the
+    # second grep still trips on the same E: line.
+    grep -qE '/cnf/Commands-\|Some index files failed to download' \
+        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+}
+
+@test "setup client: a non-cnf 404 still stops with a real diagnosis" {
+    # A cnf-only failure must warn, but the moment any *other* index 404s the
+    # script has to die: silently pretending an incomplete Packages index is
+    # fine would ship a broken mirror to a client.
+    grep -q "server advertises a suite it has not published" \
+        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+}
+
 @test "setup scripts: a failed curl probe is never '|| echo 000'" {
     # `|| echo 000` APPENDS to the value curl already printed via -w, so a
     # failed request yields "000\n000" - which is not equal to "000". Every

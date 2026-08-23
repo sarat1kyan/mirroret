@@ -250,6 +250,58 @@ PY
     [ ! -d "${TMPDIR_TEST}/mirror/dists" ]
 }
 
+@test "apt engine: cnf/Commands-* is in the index allowlist" {
+    # Without this the mirror serves a signed Release that references
+    # cnf/Commands-amd64.xz, but the file itself never lands on disk, so
+    # clients get 404s on every apt-get update.
+    run python3 - <<'PY'
+import sys, argparse
+sys.path.insert(0, "engines")
+from mirroret_apt import AptMirror
+
+class R(object):
+    components = ["main", "restricted"]
+    architectures = ["amd64", "arm64"]
+
+ns = argparse.Namespace(min_free_gb=0, sources=False, all_index_compressions=False)
+spec = {"components": ["main", "restricted"], "arches": ["amd64", "arm64"], "dest": "/tmp/x"}
+m = AptMirror.__new__(AptMirror)
+m.spec, m.args, m.dest = spec, ns, "/tmp/x"
+m.arches, m.components = spec["arches"], spec["components"]
+bases = m._index_bases(R())
+want = {"main/cnf/Commands-amd64", "main/cnf/Commands-arm64",
+        "restricted/cnf/Commands-amd64", "restricted/cnf/Commands-arm64"}
+missing = want - set(bases)
+if missing:
+    print("MISSING:", sorted(missing)); sys.exit(1)
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
+}
+
+@test "apt engine: cnf can be turned off per target for footprint" {
+    run python3 - <<'PY'
+import sys, argparse
+sys.path.insert(0, "engines")
+from mirroret_apt import AptMirror
+class R(object):
+    components = ["main"]
+    architectures = ["amd64"]
+ns = argparse.Namespace(min_free_gb=0, sources=False, all_index_compressions=False)
+spec = {"components": ["main"], "arches": ["amd64"], "cnf": False, "dest": "/tmp/x"}
+m = AptMirror.__new__(AptMirror)
+m.spec, m.args, m.dest = spec, ns, "/tmp/x"
+m.arches, m.components = spec["arches"], spec["components"]
+bases = m._index_bases(R())
+if any("/cnf/" in b for b in bases):
+    print("SHOULD BE ABSENT:", [b for b in bases if "/cnf/" in b]); sys.exit(1)
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
+}
+
 @test "apt engine: leaves no temp files behind" {
     _mk_apt_fixture "${TMPDIR_TEST}/up" --packages 2
     local url

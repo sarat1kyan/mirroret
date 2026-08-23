@@ -351,6 +351,12 @@ class AptMirror(object):
                 for arch in self.arches:
                     bases.append("%s/dep11/Components-%s.yml" % (comp, arch))
                 bases.append("%s/dep11/icons-64x64.tar" % comp)
+            if self.spec.get("cnf", True):
+                # command-not-found ("did you mean X? install pkg Y") index.
+                # Optional in Release, but if the upstream lists it and we
+                # skip it, apt logs 404s against our mirror.
+                for arch in self.arches:
+                    bases.append("%s/cnf/Commands-%s" % (comp, arch))
         if self.spec.get("contents"):
             for arch in self.arches:
                 bases.append("Contents-%s" % arch)
