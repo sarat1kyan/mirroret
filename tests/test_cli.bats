@@ -14,6 +14,13 @@ setup() {
     # mirroretctl reads MIRRORET_BASE_DIR from the environment (or the conf
     # file, which we do not create here).
     export MIRRORET_BASE_DIR="${FAKE_BASE}"
+    # Isolate MIRRORET_TARGETS_DIR and MIRRORET_CONF from anything a
+    # neighbouring test (or a real install on this box) may have written to
+    # /etc/mirroret. Without this, one leftover target spec makes an
+    # otherwise green test flip flavour.
+    export MIRRORET_TARGETS_DIR="${TMPDIR}/targets"
+    export MIRRORET_CONF="${TMPDIR}/mirroret.conf"
+    mkdir -p "${MIRRORET_TARGETS_DIR}"
     CTL="${SCRIPT_DIR}/mirroretctl"
 }
 

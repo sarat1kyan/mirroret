@@ -329,9 +329,12 @@ NGINX
         printf '# which the enrolment script downloads from\n'
         printf '#   %s/config/extra-%s.gpg\n' "${url%/apt/*}" "$NAME"
         printf '\n'
+        # Pin arch= so a client with add-architecture i386/arm64 does not
+        # ask this mirror for arches we never published.
+        arch_csv="$(IFS=,; printf '%s' "${ARCHES[*]}")"
         for s in "${SUITES[@]}"; do
-            printf 'deb [signed-by=/usr/share/keyrings/mirroret-%s.gpg] %s %s %s\n' \
-                "$NAME" "$url" "$s" "${COMPONENTS[*]}"
+            printf 'deb [signed-by=/usr/share/keyrings/mirroret-%s.gpg arch=%s] %s %s %s\n' \
+                "$NAME" "$arch_csv" "$url" "$s" "${COMPONENTS[*]}"
         done
     } > "${CLIENT_LIST}"
     chmod 0644 "${CLIENT_LIST}"

@@ -823,24 +823,34 @@ generate_apt_client_configs() {
     local first=1
 
     for sp in "${real_specs[@]}"; do
-        local dir code comps keyring suites
+        local dir code comps keyring suites arches
         dir="$(_apt_spec_field "${sp}" dir)"
         code="$(_apt_spec_field "${sp}" codename)"
         comps="$(mirroret_json_field "${sp}" components)"
         keyring="$(mirroret_json_field "${sp}" keyrings)"
         keyring="${keyring%% *}"
         suites="$(mirroret_json_field "${sp}" suites)"
+        # Pin the client to the arches this mirror actually published. Without
+        # this, a client that has `dpkg --add-architecture i386` set (Steam,
+        # Wine, 32-bit tooling) tries to fetch i386 indices from this mirror
+        # and gets 404s - because we only mirrored amd64. Same story on ARM
+        # hosts. Comma-separate for apt's arch= list syntax.
+        arches="$(mirroret_json_field "${sp}" arches)"
+        arches="${arches// /,}"
 
         local url="http://${server_ip}:${web_port}/${dir}"
         local list_file="${config_dir}/${dir}-${code}.list"
         local src_file="${config_dir}/${dir}-${code}.sources"
 
-        local opts=""
+        local opts_body=""
         if [[ "${insecure}" == "1" ]]; then
-            opts="[trusted=yes] "
+            opts_body="trusted=yes"
         elif [[ -n "${keyring}" ]]; then
-            opts="[signed-by=${keyring}] "
+            opts_body="signed-by=${keyring}"
         fi
+        [[ -n "${arches}" ]] && opts_body="${opts_body:+${opts_body} }arch=${arches}"
+        local opts=""
+        [[ -n "${opts_body}" ]] && opts="[${opts_body}] "
 
         {
             printf '# mirroret APT client config - %s %s\n' "${dir}" "${code}"
@@ -874,6 +884,7 @@ generate_apt_client_configs() {
             elif [[ -n "${keyring}" ]]; then
                 printf 'Signed-By: %s\n' "${keyring}"
             fi
+            [[ -n "${arches}" ]] && printf 'Architectures: %s\n' "${arches//,/ }"
         } > "${src_file}"
 
         info "  ${list_file}"

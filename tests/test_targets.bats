@@ -1131,3 +1131,42 @@ PYEOF
     done
     [ "$bad" -eq 0 ]
 }
+
+@test "arch pin: client .list restricts to the arches the mirror published" {
+    # Without this, a client that does `dpkg --add-architecture i386` (Steam,
+    # Wine, 32-bit tooling) tries to fetch i386 indices from an amd64-only
+    # mirror and gets 404s on every apt-get update. The generated .list must
+    # pin apt to what the server actually mirrored.
+    MIRRORET_APT_TARGETS="ubuntu:jammy:amd64,i386"
+    generate_target_specs
+    generate_apt_client_configs "${MIRRORET_BASE_DIR}/config"
+    local list="${MIRRORET_BASE_DIR}/config/ubuntu-jammy.list"
+    grep -q 'arch=amd64,i386' "$list"
+    ! grep -qE '^deb \[[^]]*\] [^[]* [^[]* [^[]*$' "$list" | grep -v 'arch='
+}
+
+@test "arch pin: client .sources has Architectures matching the spec" {
+    MIRRORET_APT_TARGETS="ubuntu:jammy:amd64,arm64"
+    generate_target_specs
+    generate_apt_client_configs "${MIRRORET_BASE_DIR}/config"
+    local src="${MIRRORET_BASE_DIR}/config/ubuntu-jammy.sources"
+    grep -q '^Architectures: amd64 arm64$' "$src"
+}
+
+@test "arch pin: amd64-only target still gets an explicit arch=amd64" {
+    # Belt and braces: even the default case names the arch. That way an
+    # operator who later adds i386 to a client machine cannot accidentally
+    # break apt against a mirror that stayed amd64-only.
+    MIRRORET_APT_TARGETS="ubuntu:jammy"
+    generate_target_specs
+    generate_apt_client_configs "${MIRRORET_BASE_DIR}/config"
+    grep -q 'arch=amd64' "${MIRRORET_BASE_DIR}/config/ubuntu-jammy.list"
+}
+
+@test "arch pin: extras (third-party) .list also carries arch=" {
+    grep -q 'arch=%s' "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
+    # And the .list template must reference ARCHES so it changes when the
+    # operator asks for multiple arches on the command line.
+    grep -qF 'IFS=,; printf' "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
+    grep -qF 'ARCHES[*]' "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
+}
