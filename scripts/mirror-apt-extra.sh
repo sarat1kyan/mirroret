@@ -250,7 +250,15 @@ else
     for s in "${SUITES[@]}";     do args+=(--suite     "$s"); done
     for c in "${COMPONENTS[@]}"; do args+=(--component "$c"); done
     for a in "${ARCHES[@]}";     do args+=(--arch      "$a"); done
-    [[ -n "$PROXY" ]] && args=(env "https_proxy=${PROXY}" "http_proxy=${PROXY}" "${args[@]}")
+    # Set the proxy for the engine via the environment, not as extra args.
+    # The engine's ProxyHandler picks up http_proxy/https_proxy from the
+    # environment automatically; passing them positionally would make
+    # argparse reject them as "unrecognized arguments" - which happened
+    # live and produced a very confusing failure right after the signature
+    # check passed.
+    if [[ -n "$PROXY" ]]; then
+        export https_proxy="$PROXY" http_proxy="$PROXY"
+    fi
     [[ "$DRY_RUN" == "1" ]] && args+=(--dry-run)
 
     # Show the estimated size first: a third-party repo that keeps every

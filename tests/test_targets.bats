@@ -1198,3 +1198,15 @@ PYEOF
     grep -A2 "grep -E 'packages:|ABORT'" \
         "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh" | grep -qF '|| true'
 }
+
+@test "extras: --proxy is exported, not passed as engine arguments" {
+    # Reported live: `mirror-apt-extra.sh --proxy http://...` produced
+    # "mirroret_apt.py: error: unrecognized arguments: env https_proxy=..."
+    # because the script prepended `env foo=bar` into the args array and
+    # then ran `python3 engine "${args[@]}"` - so python got "env foo=bar"
+    # as script arguments. The engine already reads the proxy from the
+    # environment; export instead.
+    ! grep -q 'args=(env' "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
+    grep -qE '^\s*export https_proxy="\$PROXY"' \
+        "${SCRIPT_DIR}/scripts/mirror-apt-extra.sh"
+}
