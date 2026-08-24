@@ -204,6 +204,21 @@ PY
     done
 }
 
+@test "targets: apt spec defaults dep11=true (Ubuntu Release lists it)" {
+    # A spec dep11=false makes the engine skip dep11/Components-*.yml, then
+    # apt on every client 404s on it. The engine's own default is true;
+    # the shell template must not clobber it back to false.
+    MIRRORET_APT_TARGETS="ubuntu:noble"
+    generate_target_specs
+    grep -q '"dep11": true' "${MIRRORET_TARGETS_DIR}/apt-ubuntu-noble.json"
+}
+
+@test "targets: apt spec dep11 can still be turned off explicitly" {
+    MIRRORET_APT_TARGETS="ubuntu:noble"
+    MIRRORET_APT_DEP11=0 generate_target_specs
+    grep -q '"dep11": false' "${MIRRORET_TARGETS_DIR}/apt-ubuntu-noble.json"
+}
+
 @test "targets: a removed target stops being synced" {
     MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble"
     generate_target_specs

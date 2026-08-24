@@ -480,7 +480,7 @@ write_apt_target_spec() {
   "require_signature": ${MIRRORET_APT_REQUIRE_SIGNATURE:-false},
   "sources": $([[ "${MIRRORET_APT_SOURCE:-0}" == "1" ]] && echo true || echo false),
   "translations": $([[ "${MIRRORET_APT_TRANSLATIONS:-1}" == "1" ]] && echo true || echo false),
-  "dep11": $([[ "${MIRRORET_APT_DEP11:-0}" == "1" ]] && echo true || echo false),
+  "dep11": $([[ "${MIRRORET_APT_DEP11:-1}" == "1" ]] && echo true || echo false),
   "contents": $([[ "${MIRRORET_APT_CONTENTS:-0}" == "1" ]] && echo true || echo false),
   "delete": $([[ "${MIRRORET_APT_DELETE:-1}" == "1" ]] && echo true || echo false),
   "min_free_gb": ${MIRRORET_SYNC_MIN_FREE_GB:-10},
