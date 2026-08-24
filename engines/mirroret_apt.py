@@ -347,10 +347,15 @@ class AptMirror(object):
             if self.spec.get("translations", True):
                 for lang in self.spec.get("languages") or ["en"]:
                     bases.append("%s/i18n/Translation-%s" % (comp, lang))
-            if self.spec.get("dep11"):
+            if self.spec.get("dep11", True):
+                # AppStream metadata (software-centre listings, screenshots
+                # index, MIME associations). Ubuntu's Release lists these,
+                # so a mirror that omits them makes apt 404 on every
+                # 'Components-<arch>.yml'. Icons are heavier — keep opt-in.
                 for arch in self.arches:
                     bases.append("%s/dep11/Components-%s.yml" % (comp, arch))
-                bases.append("%s/dep11/icons-64x64.tar" % comp)
+                if self.spec.get("dep11_icons"):
+                    bases.append("%s/dep11/icons-64x64.tar" % comp)
             if self.spec.get("cnf", True):
                 # command-not-found ("did you mean X? install pkg Y") index.
                 # Optional in Release, but if the upstream lists it and we

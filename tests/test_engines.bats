@@ -280,6 +280,37 @@ PY
     [[ "$output" == *"ok"* ]]
 }
 
+@test "apt engine: dep11/Components-*.yml is in the index allowlist" {
+    # Ubuntu's Release lists dep11 for every component/arch. Skipping it here
+    # made apt-get update 404 on 'noble/main/dep11/Components-amd64.yml'
+    # even though our cnf fix was already in place.
+    run python3 - <<'PY'
+import sys, argparse
+sys.path.insert(0, "engines")
+from mirroret_apt import AptMirror
+class R(object):
+    components = ["main", "universe"]
+    architectures = ["amd64", "arm64"]
+ns = argparse.Namespace(min_free_gb=0, sources=False, all_index_compressions=False)
+spec = {"components": ["main", "universe"], "arches": ["amd64", "arm64"], "dest": "/tmp/x"}
+m = AptMirror.__new__(AptMirror)
+m.spec, m.args, m.dest = spec, ns, "/tmp/x"
+m.arches, m.components = spec["arches"], spec["components"]
+bases = m._index_bases(R())
+want = {"main/dep11/Components-amd64.yml", "main/dep11/Components-arm64.yml",
+        "universe/dep11/Components-amd64.yml", "universe/dep11/Components-arm64.yml"}
+missing = want - set(bases)
+if missing:
+    print("MISSING:", sorted(missing)); sys.exit(1)
+# Icons stay opt-in so a lean target does not eat tens of MB of PNGs.
+if any(b.endswith("icons-64x64.tar") for b in bases):
+    print("icons should NOT be in bases by default"); sys.exit(1)
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
+}
+
 @test "apt engine: cnf can be turned off per target for footprint" {
     run python3 - <<'PY'
 import sys, argparse

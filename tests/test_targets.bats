@@ -738,10 +738,17 @@ PYEOF
     # client can still install packages, so the setup script must not stop
     # with a die() the way it did for other 404s.
     grep -qE "/cnf/Commands-" "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
-    # And the fatal-error follow-up must also filter these out, otherwise the
-    # second grep still trips on the same E: line.
-    grep -qE '/cnf/Commands-\|Some index files failed to download' \
-        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+}
+
+@test "setup client: dep11/Components 404s are tolerated the same way as cnf" {
+    # Ubuntu's Release also lists dep11 (AppStream). If a mirror admin runs
+    # with dep11 opt-out, the client must warn about missing GUI-store
+    # metadata, not refuse to enrol.
+    grep -qE '/dep11/' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    # The same allowlist has to be honoured by BOTH grep passes — the second
+    # one (any E:) previously tripped on the same lines the first pass let
+    # through.
+    grep -q 'optional_404_re' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
 }
 
 @test "setup client: a non-cnf 404 still stops with a real diagnosis" {

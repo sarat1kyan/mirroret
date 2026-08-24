@@ -411,11 +411,13 @@ setup_apt() {
             "  sudo $0 --rollback"
     fi
     # A 404 on the mirror is fatal EXCEPT for optional metadata that apt itself
-    # tolerates: cnf/Commands-* (the command-not-found "did you mean...?"
-    # index). Grep for 404s and filter those out; if anything remains, stop.
+    # tolerates: cnf/Commands-* (command-not-found "did you mean...?" index)
+    # and dep11/*/icons-* (AppStream screenshot icons for GUI stores). Package
+    # install works even without these; the client should warn, not die.
+    optional_404_re='/cnf/Commands-|/dep11/(icons-|Components-.*\.yml)'
     if grep -qE '^(E|W): .*(404|File not found)' /tmp/mirroret-aptupdate.$$; then
         fatal_404=$(grep -E '^(E|W): .*(404|File not found)' /tmp/mirroret-aptupdate.$$ \
-            | grep -vE '/cnf/Commands-' || true)
+            | grep -vE "$optional_404_re" || true)
         if [[ -n "$fatal_404" ]]; then
             rm -f /tmp/mirroret-aptupdate.$$
             die "apt reached the mirror but some indices are missing (404)." \
@@ -427,15 +429,15 @@ setup_apt() {
                 "To undo the change on this machine now:" \
                 "  sudo $0 --rollback"
         fi
-        # cnf-only 404s: warn, don't die. Package install still works.
-        warn "mirror does not publish cnf/Commands-* (optional command-not-found index)."
-        warn "package install/upgrade still works; the 'did you mean...?' feature will not."
+        # Optional-only 404s: warn, don't die. Package install still works.
+        warn "mirror is missing optional metadata (cnf/Commands-* or dep11/*)."
+        warn "package install/upgrade still works; some 'software centre' features may not."
         warn "server admin: run 'sudo mirroretctl upgrade && sudo mirroretctl sync apt' to add it."
     fi
-    # Any other E: line (that isn't a cnf-only failure and its follow-on
-    # "Some index files failed to download" umbrella message) is fatal.
+    # Any other E: line (that isn't a tolerated-optional failure and its
+    # follow-on "Some index files failed to download" umbrella) is fatal.
     other_err=$(grep -E '^E: ' /tmp/mirroret-aptupdate.$$ \
-        | grep -vE '/cnf/Commands-|Some index files failed to download' || true)
+        | grep -vE "${optional_404_re}|Some index files failed to download" || true)
     if [[ -n "$other_err" ]]; then
         printf '%s\n' "$other_err" | head -5 | sed 's/^/        /'
         rm -f /tmp/mirroret-aptupdate.$$
