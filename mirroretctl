@@ -883,6 +883,19 @@ cmd_doctor() {
     fi
 }
 
+# cmd_verify - walk every published Release and confirm every file it lists
+# is on disk with the right size. This is what a client's apt-get update
+# actually needs, so the check catches the "server publishes a Release
+# that names files it never mirrored" class of bug from the server side.
+cmd_verify() {
+    local script="${SCRIPT_DIR}/scripts/verify-mirror.sh"
+    if [[ ! -x "$script" ]]; then
+        _er "scripts/verify-mirror.sh not found"
+        return 1
+    fi
+    "$script" --base-dir "${MIRRORET_BASE_DIR}" "$@"
+}
+
 # ----------------------------------------------------------------- collect ----
 
 cmd_collect() {
@@ -1324,6 +1337,7 @@ main() {
         logs|log)            cmd_logs "$@" ;;
         config|conf)         cmd_config "$@" ;;
         menu)                cmd_menu ;;
+        verify)              cmd_verify "$@" ;;
         help|-h|--help)      cmd_help ;;
         *)
             _er "Unknown command: ${cmd}"

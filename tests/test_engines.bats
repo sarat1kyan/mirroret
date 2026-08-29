@@ -250,87 +250,136 @@ PY
     [ ! -d "${TMPDIR_TEST}/mirror/dists" ]
 }
 
-@test "apt engine: cnf/Commands-* is in the index allowlist" {
-    # Without this the mirror serves a signed Release that references
-    # cnf/Commands-amd64.xz, but the file itself never lands on disk, so
-    # clients get 404s on every apt-get update.
-    run python3 - <<'PY'
-import sys, argparse
+_apt_selector_case() {
+    # Runs a self-contained Python test of the new Release-entry selector.
+    #   $1 = spec as JSON (components/arches/flags)
+    #   $2 = list of "path SIZE" entries to stuff into a fake ReleaseIndex,
+    #        one per line
+    #   $3 = list of paths that MUST appear in the picked entries
+    #   $4 = list of paths that MUST NOT appear
+    run python3 - "$1" "$2" "$3" "$4" <<'PY'
+import argparse, json, sys
 sys.path.insert(0, "engines")
 from mirroret_apt import AptMirror
 
-class R(object):
-    components = ["main", "restricted"]
-    architectures = ["amd64", "arm64"]
+spec = json.loads(sys.argv[1])
+entries = {}
+for line in sys.argv[2].strip().splitlines():
+    p, s = line.split()
+    entries[p] = ("sha256", "0" * 64, int(s))
+must = set(sys.argv[3].strip().split())
+must_not = set(sys.argv[4].strip().split())
 
+class R:
+    components = spec["components"]
+    architectures = spec["arches"]
+
+R.entries = entries
 ns = argparse.Namespace(min_free_gb=0, sources=False, all_index_compressions=False)
-spec = {"components": ["main", "restricted"], "arches": ["amd64", "arm64"], "dest": "/tmp/x"}
 m = AptMirror.__new__(AptMirror)
 m.spec, m.args, m.dest = spec, ns, "/tmp/x"
 m.arches, m.components = spec["arches"], spec["components"]
-bases = m._index_bases(R())
-want = {"main/cnf/Commands-amd64", "main/cnf/Commands-arm64",
-        "restricted/cnf/Commands-amd64", "restricted/cnf/Commands-arm64"}
-missing = want - set(bases)
-if missing:
-    print("MISSING:", sorted(missing)); sys.exit(1)
+picked = {p for p, *_ in m._select_release_entries(R)}
+missing = must - picked
+extra = must_not & picked
+if missing or extra:
+    print("MISSING:", sorted(missing))
+    print("EXTRA:", sorted(extra))
+    sys.exit(1)
 print("ok")
 PY
     [ "$status" -eq 0 ]
     [[ "$output" == *"ok"* ]]
 }
 
-@test "apt engine: dep11/Components-*.yml is in the index allowlist" {
-    # Ubuntu's Release lists dep11 for every component/arch. Skipping it here
-    # made apt-get update 404 on 'noble/main/dep11/Components-amd64.yml'
-    # even though our cnf fix was already in place.
-    run python3 - <<'PY'
-import sys, argparse
-sys.path.insert(0, "engines")
-from mirroret_apt import AptMirror
-class R(object):
-    components = ["main", "universe"]
-    architectures = ["amd64", "arm64"]
-ns = argparse.Namespace(min_free_gb=0, sources=False, all_index_compressions=False)
-spec = {"components": ["main", "universe"], "arches": ["amd64", "arm64"], "dest": "/tmp/x"}
-m = AptMirror.__new__(AptMirror)
-m.spec, m.args, m.dest = spec, ns, "/tmp/x"
-m.arches, m.components = spec["arches"], spec["components"]
-bases = m._index_bases(R())
-want = {"main/dep11/Components-amd64.yml", "main/dep11/Components-arm64.yml",
-        "universe/dep11/Components-amd64.yml", "universe/dep11/Components-arm64.yml"}
-missing = want - set(bases)
-if missing:
-    print("MISSING:", sorted(missing)); sys.exit(1)
-# Icons stay opt-in so a lean target does not eat tens of MB of PNGs.
-if any(b.endswith("icons-64x64.tar") for b in bases):
-    print("icons should NOT be in bases by default"); sys.exit(1)
-print("ok")
-PY
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"ok"* ]]
+@test "apt engine: cnf/Commands-* is mirrored when Release lists it" {
+    _apt_selector_case \
+        '{"components":["main","restricted"],"arches":["amd64"],"dest":"/tmp/x"}' \
+"main/binary-amd64/Packages.xz 100
+main/cnf/Commands-amd64.xz 20
+restricted/binary-amd64/Packages.xz 40
+restricted/cnf/Commands-amd64.xz 5" \
+"main/cnf/Commands-amd64.xz restricted/cnf/Commands-amd64.xz" \
+""
 }
 
-@test "apt engine: cnf can be turned off per target for footprint" {
-    run python3 - <<'PY'
-import sys, argparse
-sys.path.insert(0, "engines")
-from mirroret_apt import AptMirror
-class R(object):
-    components = ["main"]
-    architectures = ["amd64"]
-ns = argparse.Namespace(min_free_gb=0, sources=False, all_index_compressions=False)
-spec = {"components": ["main"], "arches": ["amd64"], "cnf": False, "dest": "/tmp/x"}
-m = AptMirror.__new__(AptMirror)
-m.spec, m.args, m.dest = spec, ns, "/tmp/x"
-m.arches, m.components = spec["arches"], spec["components"]
-bases = m._index_bases(R())
-if any("/cnf/" in b for b in bases):
-    print("SHOULD BE ABSENT:", [b for b in bases if "/cnf/" in b]); sys.exit(1)
-print("ok")
-PY
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"ok"* ]]
+@test "apt engine: dep11/Components-*.yml is mirrored when Release lists it" {
+    # This is the "cnf part 2" bug we chased. The selector must not need
+    # code changes when Release grows a new metadata directory.
+    _apt_selector_case \
+        '{"components":["main","universe"],"arches":["amd64","arm64"],"dest":"/tmp/x"}' \
+"main/binary-amd64/Packages.xz 100
+main/binary-arm64/Packages.xz 100
+main/dep11/Components-amd64.yml.xz 30
+main/dep11/Components-arm64.yml.xz 30
+universe/dep11/Components-amd64.yml.xz 30
+universe/dep11/icons-64x64.tar.gz 800" \
+"main/dep11/Components-amd64.yml.xz main/dep11/Components-arm64.yml.xz universe/dep11/Components-amd64.yml.xz" \
+"universe/dep11/icons-64x64.tar.gz"
+}
+
+@test "apt engine: unknown future metadata dirs are mirrored by default" {
+    # Whatever Ubuntu adds next lands here; the mirror should just carry it,
+    # not require another patch.
+    _apt_selector_case \
+        '{"components":["main"],"arches":["amd64"],"dest":"/tmp/x"}' \
+"main/binary-amd64/Packages.xz 100
+main/wildcard/Future-index-amd64.dat.xz 42" \
+"main/wildcard/Future-index-amd64.dat.xz" \
+""
+}
+
+@test "apt engine: entries for other arches are dropped" {
+    # Client asks for amd64. Release lists arm64 Packages too. We must not
+    # download tens of MB of binaries for an arch we never serve.
+    _apt_selector_case \
+        '{"components":["main"],"arches":["amd64"],"dest":"/tmp/x"}' \
+"main/binary-amd64/Packages.xz 100
+main/binary-arm64/Packages.xz 100
+main/cnf/Commands-arm64.xz 20
+main/dep11/Components-arm64.yml.xz 30" \
+"main/binary-amd64/Packages.xz" \
+"main/binary-arm64/Packages.xz main/cnf/Commands-arm64.xz main/dep11/Components-arm64.yml.xz"
+}
+
+@test "apt engine: other components are dropped" {
+    _apt_selector_case \
+        '{"components":["main"],"arches":["amd64"],"dest":"/tmp/x"}' \
+"main/binary-amd64/Packages.xz 100
+universe/binary-amd64/Packages.xz 100
+multiverse/binary-amd64/Packages.xz 100" \
+"main/binary-amd64/Packages.xz" \
+"universe/binary-amd64/Packages.xz multiverse/binary-amd64/Packages.xz"
+}
+
+@test "apt engine: compression variants collapse to the smallest one" {
+    # If Release lists Packages, Packages.gz and Packages.xz we mirror only
+    # .xz. This alone saves ~2x disk on Ubuntu universe.
+    _apt_selector_case \
+        '{"components":["main"],"arches":["amd64"],"dest":"/tmp/x"}' \
+"main/binary-amd64/Packages 999
+main/binary-amd64/Packages.gz 400
+main/binary-amd64/Packages.xz 130" \
+"main/binary-amd64/Packages.xz" \
+"main/binary-amd64/Packages main/binary-amd64/Packages.gz"
+}
+
+@test "apt engine: source Sources index is skipped unless spec asks for it" {
+    _apt_selector_case \
+        '{"components":["main"],"arches":["amd64"],"dest":"/tmp/x"}' \
+"main/binary-amd64/Packages.xz 100
+main/source/Sources.xz 200" \
+"main/binary-amd64/Packages.xz" \
+"main/source/Sources.xz"
+}
+
+@test "apt engine: Contents-* top-level entries stay opt-in" {
+    _apt_selector_case \
+        '{"components":["main"],"arches":["amd64"],"dest":"/tmp/x"}' \
+"main/binary-amd64/Packages.xz 100
+Contents-amd64.gz 500" \
+"main/binary-amd64/Packages.xz" \
+"Contents-amd64.gz"
 }
 
 @test "apt engine: leaves no temp files behind" {

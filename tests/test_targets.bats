@@ -748,29 +748,26 @@ PYEOF
     [[ "$section" == *'setup-mirror-client.sh'* ]]
 }
 
-@test "setup client: cnf/Commands-* 404s are tolerated, not fatal" {
-    # apt itself treats these as "ignored, old ones used instead" and the
-    # client can still install packages, so the setup script must not stop
-    # with a die() the way it did for other 404s.
-    grep -qE "/cnf/Commands-" "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+@test "setup client: any 404 is a warning, not a fatal error" {
+    # apt itself treats 404s on optional indices as ignored, and the mirror
+    # engine now covers every non-optional index automatically, so a 404
+    # should never break enrolment. The definitive gate is the pinned-
+    # version download further down (which actually pulls a .deb from the
+    # mirror) - not a fragile regex over apt-get update's output.
+    grep -q "apt itself ignores these" \
+        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    # No fatal die() on 404 anywhere.
+    ! grep -A1 'die.*"apt reached the mirror but some indices are missing' \
+        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh" >/dev/null 2>&1
 }
 
-@test "setup client: dep11/Components 404s are tolerated the same way as cnf" {
-    # Ubuntu's Release also lists dep11 (AppStream). If a mirror admin runs
-    # with dep11 opt-out, the client must warn about missing GUI-store
-    # metadata, not refuse to enrol.
-    grep -qE '/dep11/' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
-    # The same allowlist has to be honoured by BOTH grep passes — the second
-    # one (any E:) previously tripped on the same lines the first pass let
-    # through.
-    grep -q 'optional_404_re' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
-}
-
-@test "setup client: a non-cnf 404 still stops with a real diagnosis" {
-    # A cnf-only failure must warn, but the moment any *other* index 404s the
-    # script has to die: silently pretending an incomplete Packages index is
-    # fine would ship a broken mirror to a client.
-    grep -q "server advertises a suite it has not published" \
+@test "setup client: real errors (not 404) still stop enrolment" {
+    # Connection refused, TLS failure, or a corrupted signed Release will
+    # produce E: lines that are NOT 404s. Those must still kill the setup:
+    # the client machine's apt is genuinely broken until they are fixed.
+    grep -q 'apt-get update failed' \
+        "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    grep -qE 'grep -vE .404|File not found' \
         "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
 }
 

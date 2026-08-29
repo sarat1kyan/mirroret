@@ -64,6 +64,8 @@ source "${SCRIPT_DIR}/lib/tls.sh"
 source "${SCRIPT_DIR}/lib/gpg.sh"
 # shellcheck source=lib/approval.sh
 source "${SCRIPT_DIR}/lib/approval.sh"
+# shellcheck source=lib/wizard.sh
+source "${SCRIPT_DIR}/lib/wizard.sh"
 # shellcheck source=lib/uninstall.sh
 source "${SCRIPT_DIR}/lib/uninstall.sh"
 # shellcheck source=lib/retention.sh
@@ -581,6 +583,20 @@ install_mirror_engines() {
         info "Engine interpreter: $(python3 -V 2>&1)"
     fi
     success "Mirror engines installed: ${dst}/"
+
+    # Auxiliary scripts the sync flow / operator commands invoke by path
+    # under BASE_DIR/scripts/. Copying them next to the generated sync
+    # scripts means a --upgrade run picks up whatever the source tree has
+    # (verify-mirror in particular is called at the end of every sync).
+    local aux_scripts=(verify-mirror.sh mirror-apt-extra.sh)
+    local aux
+    for aux in "${aux_scripts[@]}"; do
+        if [[ -f "${SCRIPT_DIR}/scripts/${aux}" ]]; then
+            install -m 0755 "${SCRIPT_DIR}/scripts/${aux}" \
+                "${MIRRORET_BASE_DIR}/scripts/${aux}"
+            debug "installed helper: ${aux}"
+        fi
+    done
 }
 
 # -- Cron setup ----------------------------------------------------------------
@@ -1185,9 +1201,19 @@ main() {
         install_system_packages
     fi
 
+    # First-run interactive wizard: on a fresh box with nothing preconfigured
+    # and a real TTY, walk the operator through the picks and write the
+    # answers straight to /etc/mirroret/mirroret.conf. Anything set via env
+    # vars, --yes, or an existing conf skips the wizard.
+    if should_run_first_run_wizard; then
+        run_first_run_wizard
+    fi
+
     # Seed /etc/mirroret/mirroret.conf from the shipped example on first
     # install. Without this every knob (MIRRORET_RPM_SOURCE,
-    # MIRRORET_SYNC_MIN_FREE_GB, retention...) is undiscoverable.
+    # MIRRORET_SYNC_MIN_FREE_GB, retention...) is undiscoverable. The wizard
+    # writes its own conf, so this branch only fires on non-interactive
+    # installs that also skipped the wizard.
     if [[ "${DRY_RUN}" != "1" ]] && [[ ! -f /etc/mirroret/mirroret.conf ]] \
        && [[ -f "${SCRIPT_DIR}/config/mirroret.conf.example" ]]; then
         mkdir -p /etc/mirroret

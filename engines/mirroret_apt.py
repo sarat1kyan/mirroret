@@ -67,6 +67,19 @@ from mirroret_fetch import (  # noqa: E402
 # .xz first: Ubuntu's universe Packages.xz is roughly a third of the .gz.
 COMPRESSION_PREFERENCE = (".xz", ".gz", ".bz2", "")
 
+# Same order expressed as (suffix -> priority), lowest = best. Used by the
+# selector that groups all compression variants of one index and mirrors
+# the smallest one Release actually lists.
+_COMPRESSION_PRIORITY = {".xz": 0, ".gz": 1, ".bz2": 2, "": 3}
+
+
+def _split_compression(path):
+    """Strip a known compression suffix. Returns (base, priority)."""
+    for suffix in (".xz", ".gz", ".bz2"):
+        if path.endswith(suffix):
+            return path[:-len(suffix)], _COMPRESSION_PRIORITY[suffix]
+    return path, _COMPRESSION_PRIORITY[""]
+
 # Keyrings shipped by the distros themselves. Present on a Debian/Ubuntu
 # mirror server; absent on RHEL, which is handled explicitly (see
 # _verify_release).
@@ -330,42 +343,146 @@ class AptMirror(object):
 
     # -- indices ------------------------------------------------------------
 
-    def _index_bases(self, release):
-        """Index files to mirror, as uncompressed names relative to the suite."""
-        bases = []
-        for comp in self.components:
-            if release.components and comp not in release.components:
-                log("  WARN: component '%s' is not in this suite's Release "
-                    "(has: %s)" % (comp, " ".join(release.components) or "-"))
+    # -- what to mirror -----------------------------------------------------
+    #
+    # For years this method returned a hand-built allowlist of "known" index
+    # names (Packages, Translation-en, dep11/Components-<arch>.yml, ...). Every
+    # time Ubuntu added a new metadata bucket to Release (cnf, dep11,
+    # CID-Index, ...) the allowlist missed it, and every client got 404s
+    # against the mirror on the next apt-get update.
+    #
+    # The correct model is "mirror what upstream signed" — iterate the Release
+    # checksum table itself, keep everything that matches our (component,
+    # arch, feature-flag) filter, drop everything else. New Ubuntu metadata
+    # types appear in Release and are mirrored without any code change here.
+
+    def _entry_matches_filters(self, path):
+        """True if this Release entry belongs in our mirror."""
+        parts = path.split("/")
+
+        # Top-level entries: Contents-<arch>*, Contents-udeb-<arch>*, by-hash.
+        # Contents is genuinely optional (huge, and apt doesn't fetch it by
+        # default), so it stays behind spec.contents.
+        if len(parts) == 1:
+            name = parts[0]
+            m = re.match(r"^Contents(?:-udeb)?-([^.]+?)(?:\.(?:gz|xz|bz2))?$", name)
+            if m:
+                arch = m.group(1)
+                return bool(self.spec.get("contents")) and arch in self.arches
+            return False  # top-level cruft (README, by-hash symlinks, ...)
+
+        comp = parts[0]
+        if comp not in self.components:
+            return False
+        if len(parts) < 2:
+            return False
+        sub = parts[1]
+
+        # <comp>/source/*  - sources are big, opt-in.
+        if sub == "source":
+            return bool(self.spec.get("sources") or self.args.sources)
+
+        # <comp>/binary-<arch>/*  - the core Packages index and its metadata.
+        if sub.startswith("binary-"):
+            arch = sub[len("binary-"):]
+            return arch in self.arches
+
+        # <comp>/debian-installer/binary-<arch>/*  - the netboot installer's
+        # own package index. Only useful for building installer images.
+        if sub == "debian-installer":
+            if len(parts) >= 3 and parts[2].startswith("binary-"):
+                arch = parts[2][len("binary-"):]
+                return bool(self.spec.get("debian_installer")) and arch in self.arches
+            return False
+
+        # <comp>/i18n/Translation-<lang>*
+        if sub == "i18n":
+            if not self.spec.get("translations", True):
+                return False
+            langs = self.spec.get("languages") or ["en"]
+            name = parts[2] if len(parts) >= 3 else ""
+            m = re.match(r"^Translation-([^.]+)", name)
+            if m:
+                return m.group(1) in langs
+            # Index / other i18n metadata — mirror alongside translations.
+            return True
+
+        # <comp>/dep11/{Components,CID-Index}-<arch>.*, dep11/icons-*.tar.*
+        if sub == "dep11":
+            if not self.spec.get("dep11", True):
+                return False
+            name = parts[2] if len(parts) >= 3 else ""
+            if name.startswith("icons-"):
+                return bool(self.spec.get("dep11_icons"))
+            m = re.match(r"^(?:Components|CID-Index)-([^.]+)", name)
+            if m:
+                return m.group(1) in self.arches
+            return True  # any other future dep11 file
+
+        # <comp>/cnf/Commands-<arch>.*
+        if sub == "cnf":
+            if not self.spec.get("cnf", True):
+                return False
+            name = parts[2] if len(parts) >= 3 else ""
+            m = re.match(r"^Commands-([^.]+)", name)
+            if m:
+                return m.group(1) in self.arches
+            return True
+
+        # Any unknown subdirectory under a valid component is mirrored by
+        # default. This is the future-proofing: whatever Ubuntu adds next,
+        # apt will find it here without a code change.
+        return True
+
+    def _select_release_entries(self, release, all_variants=False):
+        """Every entry from Release we mean to mirror, best compression only.
+
+        Returns [(path, algo, digest, size, base)]. `base` is the compression-
+        stripped path, used to group multi-compression variants of one index
+        so we only mirror the smallest one Release lists.
+        """
+        # Missing-component sanity check kept from the old code path.
+        if release.components:
+            for comp in self.components:
+                if comp not in release.components:
+                    log("  WARN: component '%s' is not in this suite's Release "
+                        "(has: %s)" % (comp, " ".join(release.components)))
+
+        groups = {}  # base -> [(priority, path, algo, digest, size)]
+        for path, (algo, digest, size) in release.entries.items():
+            if not self._entry_matches_filters(path):
                 continue
+            base, prio = _split_compression(path)
+            groups.setdefault(base, []).append((prio, path, algo, digest, size))
+
+        picked = []
+        for base, variants in groups.items():
+            variants.sort()  # lowest priority first
+            if all_variants:
+                for _, path, algo, digest, size in variants:
+                    picked.append((path, algo, digest, size, base))
+            else:
+                _, path, algo, digest, size = variants[0]
+                picked.append((path, algo, digest, size, base))
+        return picked
+
+    def _packages_check(self, picked):
+        """Warn (loudly) if any (component, arch) has no Packages index.
+
+        A missing Packages index is the only class of "missing metadata" that
+        actually breaks package install for clients, so we still call it out
+        even though the new selector no longer builds a hand-typed allowlist.
+        """
+        seen = set()
+        for path, _algo, _digest, _size, _base in picked:
+            m = re.match(r"^([^/]+)/binary-([^/]+)/Packages", path)
+            if m:
+                seen.add((m.group(1), m.group(2)))
+        for comp in self.components:
             for arch in self.arches:
-                bases.append("%s/binary-%s/Packages" % (comp, arch))
-                bases.append("%s/binary-%s/Release" % (comp, arch))
-            if self.spec.get("sources") or self.args.sources:
-                bases.append("%s/source/Sources" % comp)
-                bases.append("%s/source/Release" % comp)
-            if self.spec.get("translations", True):
-                for lang in self.spec.get("languages") or ["en"]:
-                    bases.append("%s/i18n/Translation-%s" % (comp, lang))
-            if self.spec.get("dep11", True):
-                # AppStream metadata (software-centre listings, screenshots
-                # index, MIME associations). Ubuntu's Release lists these,
-                # so a mirror that omits them makes apt 404 on every
-                # 'Components-<arch>.yml'. Icons are heavier — keep opt-in.
-                for arch in self.arches:
-                    bases.append("%s/dep11/Components-%s.yml" % (comp, arch))
-                if self.spec.get("dep11_icons"):
-                    bases.append("%s/dep11/icons-64x64.tar" % comp)
-            if self.spec.get("cnf", True):
-                # command-not-found ("did you mean X? install pkg Y") index.
-                # Optional in Release, but if the upstream lists it and we
-                # skip it, apt logs 404s against our mirror.
-                for arch in self.arches:
-                    bases.append("%s/cnf/Commands-%s" % (comp, arch))
-        if self.spec.get("contents"):
-            for arch in self.arches:
-                bases.append("Contents-%s" % arch)
-        return bases
+                if (comp, arch) not in seen:
+                    log("  WARN: %s/binary-%s/Packages is not listed in this "
+                        "suite's Release" % (comp, arch))
 
     def _fetch_suite_indices(self, suite, base_url, staging):
         """Download+verify one suite's Release and indices into `staging`.
@@ -429,33 +546,31 @@ class AptMirror(object):
 
         all_variants = self.args.all_index_compressions or self.spec.get(
             "all_index_compressions", False)
-        for base in self._index_bases(release):
-            picked = release.pick(base, all_variants)
-            if not picked:
-                # Release/Translation/dep11 entries are genuinely optional in
-                # some archives; a missing Packages index is not.
-                if base.endswith("/Packages"):
-                    log("  WARN: %s not listed in Release for %s" % (base, suite))
-                continue
-            first = True
-            for path, algo, digest, size in picked:
-                target = os.path.join(staging, path)
-                try:
-                    self.fetcher.download(
-                        join_url(dists, path), target,
-                        checksum=digest, algo=algo, size=size,
-                    )
-                except (FetchError, VerifyError) as exc:
-                    raise SystemExit(
-                        "ERROR: %s: index %s failed: %s\n"
-                        "       Aborting this suite rather than publishing a "
-                        "Release that references indices we do not have."
-                        % (suite, path, exc)
-                    )
-                staged.append((path, target))
-                if first and os.path.basename(base) == "Packages":
-                    packages_indices.append(target)
-                first = False
+        picked = self._select_release_entries(release, all_variants)
+        self._packages_check(picked)
+
+        # Group by base so we can flag the *first* variant of each Packages
+        # index for the pool-collection step, exactly like the old code did
+        # with pick()'s ordered return.
+        seen_base = set()
+        for path, algo, digest, size, base in picked:
+            target = os.path.join(staging, path)
+            try:
+                self.fetcher.download(
+                    join_url(dists, path), target,
+                    checksum=digest, algo=algo, size=size,
+                )
+            except (FetchError, VerifyError) as exc:
+                raise SystemExit(
+                    "ERROR: %s: index %s failed: %s\n"
+                    "       Aborting this suite rather than publishing a "
+                    "Release that references indices we do not have."
+                    % (suite, path, exc)
+                )
+            staged.append((path, target))
+            if base not in seen_base and os.path.basename(base) == "Packages":
+                packages_indices.append(target)
+                seen_base.add(base)
 
         return release, staged, packages_indices
 

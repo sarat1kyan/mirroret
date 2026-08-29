@@ -779,6 +779,22 @@ timeout -k 60 "\${MIRRORET_SYNC_TIMEOUT:-12h}" \\
     --min-free-gb "\${MIRRORET_SYNC_MIN_FREE_GB:-10}" \\
     "\${ARGS[@]}" || rc=\$?
 
+# Post-sync self-test: walk every published Release, confirm every file it
+# lists is on disk with the right size. Cheap (megabytes of metadata, not
+# gigabytes of packages), and it catches the "server publishes a suite it
+# never fully mirrored" class of bug before a client does.
+if [[ "\$rc" -eq 0 && -x "${base_dir}/scripts/verify-mirror.sh" ]]; then
+    echo
+    echo "=== integrity check ==="
+    if ! "${base_dir}/scripts/verify-mirror.sh" --base-dir "${base_dir}"; then
+        echo
+        echo "WARN: integrity check failed on at least one suite (see above)."
+        echo "      The sync itself succeeded; a client still hits 404 on the"
+        echo "      files marked missing. Rerun the sync after root-causing."
+        rc=4
+    fi
+fi
+
 echo "APT sync finished: \$(date) (exit \${rc})"
 exit "\${rc}"
 APT_SYNC
