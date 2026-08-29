@@ -896,6 +896,113 @@ cmd_verify() {
     "$script" --base-dir "${MIRRORET_BASE_DIR}" "$@"
 }
 
+# ------------------------------------------------------------------- cache ----
+
+# cmd_cache - inspect the on-demand cache: whether it is running, what it
+# routes, how well it is working, and how much disk it is holding.
+cmd_cache() {
+    local what="${1:-status}"
+    local port="${MIRRORET_CACHE_PORT:-8082}"
+    local conf="${MIRRORET_CACHE_CONFIG:-/etc/mirroret/cache.json}"
+
+    case "$what" in
+        status)
+            _h "Cache mode"
+            _in "MIRRORET_APT_MODE = ${MIRRORET_APT_MODE:-mirror}"
+            case "${MIRRORET_APT_MODE:-mirror}" in
+                mirror)
+                    _in "Every package is mirrored ahead of time; the cache is not used."
+                    return 0
+                    ;;
+                hybrid)
+                    _in "Indices are mirrored; packages are fetched on demand." ;;
+                cache)
+                    _in "Indices and packages are both fetched on demand." ;;
+            esac
+
+            _h "Daemon"
+            if ! curl -fsS --max-time 5 --noproxy '*' \
+                    "http://127.0.0.1:${port}/__mirroret_cache/status" \
+                    -o /tmp/mirroret-cache-status.$$ 2>/dev/null; then
+                _er "not responding on 127.0.0.1:${port}"
+                _in "Check it with:  systemctl status mirroret-cache"
+                _in "Recent logs:    journalctl -u mirroret-cache -n 50"
+                rm -f /tmp/mirroret-cache-status.$$
+                return 1
+            fi
+            python3 - /tmp/mirroret-cache-status.$$ <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as fh:
+    d = json.load(fh)
+s = d["stats"]
+served = s["hits"] + s["misses"] + s["coalesced"]
+print("      routes        : %s" % ", ".join(d["routes"]))
+print("      cache dir     : %s (%.1f GB free)" % (d["cache_dir"], d["free_gb"]))
+print("      offline       : %s" % ("yes" if d["offline"] else "no"))
+print("      uptime        : %d min" % (s["uptime_seconds"] // 60))
+print("      requests      : %d" % served)
+if served:
+    # Hit rate is the number that says whether on-demand is paying off: it
+    # is the share of client requests that never left this machine.
+    local_ = s["hits"] + s["coalesced"]
+    print("      served local  : %d (%.1f%%)" % (local_, 100.0 * local_ / served))
+print("      upstream fetch: %d (%.2f GB pulled)"
+      % (s["misses"], s["bytes_from_upstream"] / 1024.0 ** 3))
+print("      coalesced     : %d  (duplicate concurrent requests merged)"
+      % s["coalesced"])
+print("      revalidated   : %d  (index freshness checks)" % s["revalidated"])
+print("      stale served  : %d  (upstream was unreachable)" % s["stale_served"])
+print("      errors        : %d" % s["errors"])
+PY
+            rm -f /tmp/mirroret-cache-status.$$
+            ;;
+        routes)
+            _h "Route table (${conf})"
+            if [[ ! -f "$conf" ]]; then
+                _er "${conf} does not exist"
+                _in "Generate it: sudo mirroretctl upgrade"
+                return 1
+            fi
+            python3 - "$conf" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1]) as fh:
+    doc = json.load(fh)
+for name, spec in sorted(doc.get("routes", {}).items()):
+    ups = spec.get("upstreams") or [spec.get("upstream", "?")]
+    print("      /%s/" % name)
+    for i, u in enumerate(ups):
+        print("          %s %s" % ("primary  " if i == 0 else "fallback ", u))
+PY
+            ;;
+        size|du)
+            _h "Cache size"
+            local apt_dir="${MIRRORET_BASE_DIR}/apt"
+            if [[ ! -d "$apt_dir" ]]; then
+                _wa "${apt_dir} does not exist yet"
+                return 0
+            fi
+            du -sh "$apt_dir"/* 2>/dev/null | sort -h | sed 's/^/      /' || true
+            _h "Free space"
+            df -h "$apt_dir" | tail -1 | sed 's/^/      /'
+            ;;
+        gc)
+            _need_root "cache gc"
+            _h "Evicting least-recently-used packages"
+            _in "Eviction runs automatically inside the daemon; this restarts"
+            _in "it so a changed MIRRORET_CACHE_MAX_SIZE_GB takes effect now."
+            systemctl restart mirroret-cache && _ok "mirroret-cache restarted"
+            ;;
+        *)
+            _er "Usage: mirroretctl cache {status|routes|size|gc}"
+            return 1
+            ;;
+    esac
+}
+
 # ----------------------------------------------------------------- collect ----
 
 cmd_collect() {
@@ -1338,6 +1445,7 @@ main() {
         config|conf)         cmd_config "$@" ;;
         menu)                cmd_menu ;;
         verify)              cmd_verify "$@" ;;
+        cache)               cmd_cache "$@" ;;
         help|-h|--help)      cmd_help ;;
         *)
             _er "Unknown command: ${cmd}"

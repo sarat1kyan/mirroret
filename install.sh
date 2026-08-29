@@ -64,6 +64,8 @@ source "${SCRIPT_DIR}/lib/tls.sh"
 source "${SCRIPT_DIR}/lib/gpg.sh"
 # shellcheck source=lib/approval.sh
 source "${SCRIPT_DIR}/lib/approval.sh"
+# shellcheck source=lib/cache.sh
+source "${SCRIPT_DIR}/lib/cache.sh"
 # shellcheck source=lib/wizard.sh
 source "${SCRIPT_DIR}/lib/wizard.sh"
 # shellcheck source=lib/uninstall.sh
@@ -1270,6 +1272,12 @@ main() {
     [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && setup_pip_repository "$backup_id"
     [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && setup_docker_registry "$backup_id"
     [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && setup_npm_registry "$backup_id"
+
+    # On-demand cache. Must run before nginx so that in hybrid/cache mode the
+    # generated server block routes misses to a daemon that already exists.
+    if [[ "${MIRRORET_ENABLE_APT}" == "1" ]]; then
+        configure_cache
+    fi
 
     # Configure SELinux contexts on RHEL.
     if [[ "${DISTRO_TYPE}" == "rhel" ]]; then

@@ -346,6 +346,7 @@ make dry-run # run install.sh --dry-run
 |----------|---------|
 | [docs/GETTING-STARTED.md](docs/GETTING-STARTED.md) | **Start here** - install, configure targets, first sync, point clients at it, day-to-day commands. Every step has a check. |
 | [docs/MULTI-DISTRO.md](docs/MULTI-DISTRO.md) | **Mirroring several distributions from one server** - target syntax, upstream catalog, client URLs, disk sizing, what the engines guarantee |
+| [docs/CACHE.md](docs/CACHE.md) | **Storage modes** - full mirror vs on-demand caching. How to serve Ubuntu from a couple of GB instead of 850, and why that does not weaken package signature verification. |
 | [docs/NETWORK_ACCESS.md](docs/NETWORK_ACCESS.md) | **Firewall rules** - inbound ports for clients, outbound ports for sync, firewall commands for ufw/firewalld/iptables |
 | [docs/PROXY_AND_CA.md](docs/PROXY_AND_CA.md) | HTTP/HTTPS proxy setup and corporate TLS-inspection CA trust (sudo, apt/dnf, pip, npm, docker, podman, systemd, cron) |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Full variable reference: TLS, GPG, approval, Docker mode, APT tool |

@@ -185,12 +185,48 @@ _nginx_apt_locations() {
             "${legacy_path}"
         return 0
     fi
+    # In hybrid/cache mode a path that is not on disk is a cache miss, not a
+    # 404: try_files hands it to the daemon, which fetches it once and stores
+    # it so every later request is served here off disk instead.
+    local on_demand=0
+    if declare -F cache_mode_enabled >/dev/null 2>&1 && cache_mode_enabled; then
+        on_demand=1
+    fi
+
     for dir in "${dirs[@]}"; do
         printf '    location /%s/ {\n' "${dir}"
-        printf '        alias %s/apt/%s/;\n' "${base_dir}" "${dir}"
+        if [[ "${on_demand}" == "1" ]]; then
+            # `root` rather than `alias`: try_files resolves against the
+            # location's root, and with alias it would look for the URI
+            # appended to the alias path a second time.
+            printf '        root %s/apt/;\n' "${base_dir}"
+            printf '        try_files $uri @mirroret_cache;\n'
+        else
+            printf '        alias %s/apt/%s/;\n' "${base_dir}" "${dir}"
+        fi
         printf '        autoindex on;\n'
         printf '    }\n'
     done
+
+    if [[ "${on_demand}" == "1" ]]; then
+        printf '\n    # Cache miss handler (MIRRORET_APT_MODE=%s).\n' \
+            "${MIRRORET_APT_MODE:-mirror}"
+        printf '    location @mirroret_cache {\n'
+        printf '        proxy_pass http://127.0.0.1:%s;\n' \
+            "${MIRRORET_CACHE_PORT:-8082}"
+        printf '        proxy_set_header Host $host;\n'
+        # A cold package can be hundreds of megabytes through a slow
+        # corporate proxy and the client is already waiting on it, so nginx
+        # must not time out before the daemon finishes.
+        printf '        proxy_connect_timeout 30s;\n'
+        printf '        proxy_read_timeout 1800s;\n'
+        printf '        proxy_send_timeout 1800s;\n'
+        # Stream through as bytes arrive instead of spooling whole packages
+        # into nginx temp space first.
+        printf '        proxy_buffering off;\n'
+        printf '        proxy_request_buffering off;\n'
+        printf '    }\n'
+    fi
     # Browsable index of every APT tree at once.
     printf '    location /apt/ {\n        alias %s/apt/;\n        autoindex on;\n    }\n' \
         "${base_dir}"

@@ -94,6 +94,19 @@ _wz_write_conf() {
 MIRRORET_APT_TARGETS="${MIRRORET_APT_TARGETS}"
 MIRRORET_RPM_TARGETS="${MIRRORET_RPM_TARGETS}"
 
+# --- which ecosystems to serve ---------------------------------------------
+MIRRORET_ENABLE_APT="${MIRRORET_ENABLE_APT:-1}"
+MIRRORET_ENABLE_RPM="${MIRRORET_ENABLE_RPM:-1}"
+MIRRORET_ENABLE_PIP="${MIRRORET_ENABLE_PIP:-1}"
+MIRRORET_ENABLE_NPM="${MIRRORET_ENABLE_NPM:-1}"
+MIRRORET_ENABLE_DOCKER="${MIRRORET_ENABLE_DOCKER:-1}"
+
+# --- how to mirror ---------------------------------------------------------
+# mirror = everything up front | hybrid = indices up front, packages on
+# demand | cache = everything on demand. See docs/CACHE.md.
+MIRRORET_APT_MODE="${MIRRORET_APT_MODE:-mirror}"
+MIRRORET_CACHE_MAX_SIZE_GB="${MIRRORET_CACHE_MAX_SIZE_GB:-0}"
+
 # --- upstream network ------------------------------------------------------
 ${_wz_proxy_line}
 ${_wz_apt_scheme_line}
@@ -129,6 +142,40 @@ run_first_run_wizard() {
     # Prune the "none" sentinel if it was chosen.
     if [[ " $apt_targets " == *" none "* ]]; then
         apt_targets=""
+    fi
+
+    # 1b. Mirroring strategy ------------------------------------------------
+    # Asked before architectures because it changes the disk answer by two
+    # orders of magnitude, which is usually the deciding constraint.
+    export MIRRORET_APT_MODE="mirror"
+    export MIRRORET_CACHE_MAX_SIZE_GB="0"
+    if [[ -n "$apt_targets" ]]; then
+        local free_gb="unknown"
+        if command -v df >/dev/null 2>&1; then
+            free_gb="$(df -BG --output=avail /srv 2>/dev/null | tail -1 \
+                       | tr -dc '0-9')" || free_gb=""
+            [[ -z "$free_gb" ]] && free_gb="unknown"
+        fi
+        printf '\n  %sDisk available under /srv: %s GB%s\n' \
+            "${_WZ_DIM}" "${free_gb}" "${_WZ_END}"
+        printf '  %sA full Ubuntu mirror (one release, amd64) is roughly 400 GB.%s\n' \
+            "${_WZ_DIM}" "${_WZ_END}"
+        _wz_multichoice "How should packages be stored?" "2" \
+            "mirror|Full mirror   - every package up front. Fully offline. Hundreds of GB." \
+            "hybrid|Hybrid (recommended) - indices up front (~2 GB), packages fetched on first use and kept." \
+            "cache|Pure cache   - nothing up front; indices and packages both on demand. Smallest."
+        local mode="${REPLY%% *}"     # multichoice returns a list; take the first
+        case "$mode" in
+            mirror|hybrid|cache) export MIRRORET_APT_MODE="$mode" ;;
+            *)                   export MIRRORET_APT_MODE="hybrid" ;;
+        esac
+
+        if [[ "${MIRRORET_APT_MODE}" != "mirror" ]]; then
+            _wz_prompt \
+                "Cap the package cache at how many GB? (0 = no cap, keep everything)" \
+                "0"
+            export MIRRORET_CACHE_MAX_SIZE_GB="$REPLY"
+        fi
     fi
 
     local apt_arches=""
@@ -167,7 +214,40 @@ run_first_run_wizard() {
         rpm_targets=""
     fi
 
-    # 3. Proxy -------------------------------------------------------------
+    # 3. Other ecosystems ---------------------------------------------------
+    # These used to install unconditionally, so answering "None" to both APT
+    # and RPM still stood up pypiserver, Verdaccio and a registry that nobody
+    # asked for.
+    _wz_multichoice \
+        "Which other package ecosystems should this server provide?" \
+        "" \
+        "pip|Python packages (pypiserver on :8081)" \
+        "npm|Node packages (Verdaccio on :4873)" \
+        "docker|Container images (registry on :5000, pull-through cache)"
+    local extras="$REPLY"
+    _wz_want() { if [[ " $extras " == *" $1 "* ]]; then echo 1; else echo 0; fi; }
+    local want_pip want_npm want_docker
+    want_pip="$(_wz_want pip)"
+    want_npm="$(_wz_want npm)"
+    want_docker="$(_wz_want docker)"
+    export MIRRORET_ENABLE_PIP="$want_pip"
+    export MIRRORET_ENABLE_NPM="$want_npm"
+    export MIRRORET_ENABLE_DOCKER="$want_docker"
+
+    # Picking "None" for a distro family must actually disable that family,
+    # not just leave it with an empty target list to warn about later.
+    if [[ -n "$apt_targets" ]]; then
+        export MIRRORET_ENABLE_APT=1
+    else
+        export MIRRORET_ENABLE_APT=0
+    fi
+    if [[ -n "$rpm_targets" ]]; then
+        export MIRRORET_ENABLE_RPM=1
+    else
+        export MIRRORET_ENABLE_RPM=0
+    fi
+
+    # 4. Proxy -------------------------------------------------------------
     export MIRRORET_APT_TARGETS="$apt_targets"
     export MIRRORET_RPM_TARGETS="$rpm_targets"
     _wz_proxy_line=""
@@ -189,17 +269,30 @@ run_first_run_wizard() {
         fi
     fi
 
-    # 4. Disk floor --------------------------------------------------------
+    # 5. Disk floor --------------------------------------------------------
     _wz_prompt "Refuse to start a sync when free disk would drop below (GB)" "15"
     export MIRRORET_SYNC_MIN_FREE_GB="$REPLY"
 
-    # 5. Confirmation & write -----------------------------------------------
+    # 6. Confirmation & write -----------------------------------------------
+    local enabled=""
+    [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && enabled="${enabled} pip"
+    [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && enabled="${enabled} npm"
+    [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && enabled="${enabled} docker"
+
     _wz_header "Summary"
-    printf '    APT: %s%s%s\n' "${_WZ_GRN}" "${apt_targets:-<none>}" "${_WZ_END}"
-    printf '    RPM: %s%s%s\n' "${_WZ_GRN}" "${rpm_targets:-<none>}" "${_WZ_END}"
-    printf '    proxy: %s%s%s\n' "${_WZ_GRN}" "${MIRRORET_PROXY:-<none>}" "${_WZ_END}"
-    printf '    APT scheme: %s%s%s\n' "${_WZ_GRN}" "${MIRRORET_APT_SCHEME:-http}" "${_WZ_END}"
-    printf '    disk floor: %s%s%s GB\n' \
+    printf '    APT targets : %s%s%s\n' "${_WZ_GRN}" "${apt_targets:-<none>}" "${_WZ_END}"
+    printf '    RPM targets : %s%s%s\n' "${_WZ_GRN}" "${rpm_targets:-<none>}" "${_WZ_END}"
+    printf '    storage mode: %s%s%s\n' "${_WZ_GRN}" "${MIRRORET_APT_MODE}" "${_WZ_END}"
+    if [[ "${MIRRORET_APT_MODE}" != "mirror" ]]; then
+        printf '    cache cap   : %s%s%s\n' "${_WZ_GRN}" \
+            "$([[ "${MIRRORET_CACHE_MAX_SIZE_GB}" == "0" ]] \
+               && echo "no cap" || echo "${MIRRORET_CACHE_MAX_SIZE_GB} GB")" \
+            "${_WZ_END}"
+    fi
+    printf '    also serving: %s%s%s\n' "${_WZ_GRN}" "${enabled:- <none>}" "${_WZ_END}"
+    printf '    proxy       : %s%s%s\n' "${_WZ_GRN}" "${MIRRORET_PROXY:-<none>}" "${_WZ_END}"
+    printf '    APT scheme  : %s%s%s\n' "${_WZ_GRN}" "${MIRRORET_APT_SCHEME:-http}" "${_WZ_END}"
+    printf '    disk floor  : %s%s%s GB\n' \
         "${_WZ_GRN}" "${MIRRORET_SYNC_MIN_FREE_GB}" "${_WZ_END}"
     printf '\n'
     if ! _wz_yesno "Write this to /etc/mirroret/mirroret.conf and continue?" "y"; then

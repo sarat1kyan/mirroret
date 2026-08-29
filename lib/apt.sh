@@ -758,6 +758,12 @@ if [[ ! -f "\$ENGINE" ]]; then
 fi
 
 ARGS=()
+# hybrid mode publishes the full signed index tree but no packages; the pool
+# is fetched per package on first use by mirroret-cache. Anything else that
+# is not plain 'mirror' also skips the bulk download.
+case "\${MIRRORET_APT_MODE:-mirror}" in
+    hybrid|cache) ARGS+=(--metadata-only) ;;
+esac
 [[ "\${MIRRORET_APT_DELETE:-1}" == "1" ]] && ARGS+=(--delete)
 [[ "\${MIRRORET_APT_REQUIRE_SIGNATURE:-0}" == "1" ]] && ARGS+=(--require-signature)
 [[ "\${MIRRORET_SYNC_ESTIMATE:-1}" == "0" ]] && ARGS+=(--no-estimate)
