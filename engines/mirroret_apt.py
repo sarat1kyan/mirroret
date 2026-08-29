@@ -333,6 +333,12 @@ class AptMirror(object):
         self.arches = list(spec.get("arches") or ["amd64"])
         self.components = list(spec.get("components") or ["main"])
         self.floor = DiskFloor(self.dest, spec.get("min_free_gb", args.min_free_gb))
+        # Mirror the signed index tree but no packages. Either the operator
+        # asked for it on the command line, or the target is configured for
+        # hybrid/cache mode where the pool is fetched on demand instead.
+        self.metadata_only = bool(
+            getattr(args, "metadata_only", False) or spec.get("metadata_only")
+        )
         self.wanted = {}  # relative pool path -> (size, algo, digest, url)
         self.suite_failures = 0
         self.downloaded = 0
@@ -802,7 +808,19 @@ class AptMirror(object):
                 log("RESULT: no suite could be prepared - nothing published.")
                 return EXIT_UPSTREAM
 
-            ok = self._download_all(self._needed())
+            # Metadata-only: publish the full signed index tree but download
+            # no packages. Paired with the pull-through cache this is the
+            # sweet spot for a mirror that cannot hold a full archive -
+            # clients get instant, offline-capable `apt-get update` from a
+            # couple of GB of indices, and the pool is fetched per-package on
+            # first use instead of 850 GB up front.
+            if self.metadata_only:
+                log("  metadata-only: skipping %d package(s); pool is served "
+                    "on demand by the cache" % len(self.wanted))
+                self.wanted = {}
+                ok = True
+            else:
+                ok = self._download_all(self._needed())
 
             if self.args.dry_run:
                 log("RESULT: dry run - nothing written, nothing published.")
@@ -818,7 +836,12 @@ class AptMirror(object):
             for suite, staged in pending:
                 self._publish(suite, staged)
 
-            if (self.args.delete or self.spec.get("delete")) and not self.suite_failures:
+            if self.metadata_only:
+                # self.wanted was deliberately emptied above, so pruning
+                # against it would delete every package already on disk -
+                # exactly the cache we want to keep.
+                log("  prune skipped: metadata-only run has no package list.")
+            elif (self.args.delete or self.spec.get("delete")) and not self.suite_failures:
                 self.prune()
             elif self.suite_failures:
                 log("  prune skipped: %d suite(s) failed, so the package list is "
@@ -868,6 +891,9 @@ def main(argv=None):
     ap.add_argument("--component", action="append", help="component (repeatable)")
     ap.add_argument("--arch", action="append", help="architecture (repeatable)")
     ap.add_argument("--sources", action="store_true", help="also mirror source packages")
+    ap.add_argument("--metadata-only", action="store_true",
+                    help="mirror the signed index tree but download no "
+                         "packages; the pool is served on demand by the cache")
     ap.add_argument("--all-index-compressions", action="store_true",
                     help="mirror every compression of each index, not just the best")
     ap.add_argument("--delete", action="store_true",

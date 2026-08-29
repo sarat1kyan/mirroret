@@ -90,18 +90,30 @@ cleanup_mock() {
 # substitution subshell - so a variable assignment (even an exported one)
 # never reaches the caller, teardown finds nothing to kill, and every test
 # leaks a server process for the rest of the run.
-serve_fixture() {
-    local dir="$1"
-    local port
-    # Ask the kernel for a free port rather than guessing, so parallel test
-    # runs cannot collide.
-    port="$(python3 -c 'import socket
+# _free_port - ask the kernel for an unused port rather than guessing, so
+# parallel test runs cannot collide.
+_free_port() {
+    python3 -c 'import socket
 s = socket.socket()
 s.bind(("127.0.0.1", 0))
 print(s.getsockname()[1])
-s.close()')"
+s.close()'
+}
+
+# serve_fixture <dir> [access-log] - the optional second argument captures the
+# server access log, which is how a test can assert how many times upstream
+# was actually hit (the whole point of request coalescing).
+serve_fixture() {
+    local dir="$1"
+    local access_log="${2:-/dev/null}"
+    local port
+    port="$(_free_port)"
     python3 -m http.server "${port}" --bind 127.0.0.1 --directory "${dir}" \
-        >/dev/null 2>&1 &
+        >"${access_log}" 2>&1 &
+    # Recorded twice: once for teardown alongside everything else, and once
+    # in an upstream-only list so a test can kill just the upstream and watch
+    # how the cache behaves when the archive goes away.
+    printf '%s\n' "$!" >> "$(_upstream_pidfile)"
     printf '%s\n' "$!" >> "$(_fixture_pidfile)"
     local i
     for i in $(seq 1 50); do
@@ -119,8 +131,28 @@ _fixture_pidfile() {
     printf '%s' "${BATS_TEST_TMPDIR:-${TMPDIR:-/tmp}}/mirroret-fixture-pids.$$"
 }
 
+_upstream_pidfile() {
+    printf '%s' "${BATS_TEST_TMPDIR:-${TMPDIR:-/tmp}}/mirroret-upstream-pids.$$"
+}
+
+# stop_upstreams - kill only the fixture HTTP servers, leaving any cache
+# daemon running. Used to simulate "the archive (or the proxy to it) went
+# away" while the mirror itself stays up.
+stop_upstreams() {
+    local pidfile pid
+    pidfile="$(_upstream_pidfile)"
+    [[ -f "${pidfile}" ]] || return 0
+    while read -r pid; do
+        [[ -n "${pid}" ]] || continue
+        kill "${pid}" 2>/dev/null || true
+        wait "${pid}" 2>/dev/null || true
+    done < "${pidfile}"
+    rm -f "${pidfile}"
+}
+
 stop_fixture() {
     local pidfile pid
+    rm -f "$(_upstream_pidfile)"
     pidfile="$(_fixture_pidfile)"
     [[ -f "${pidfile}" ]] || return 0
     while read -r pid; do
@@ -140,3 +172,32 @@ no_proxy_env() {
 
 apt_engine() { echo "${SCRIPT_DIR}/engines/mirroret_apt.py"; }
 rpm_engine() { echo "${SCRIPT_DIR}/engines/mirroret_rpm.py"; }
+cache_engine() { echo "${SCRIPT_DIR}/engines/mirroret_cache.py"; }
+
+# start_cache <config.json> <cache-dir> [extra engine args...] - run the
+# pull-through cache on a free port, register it for teardown the same way
+# serve_fixture does, and echo its base URL once it answers.
+start_cache() {
+    local config="$1" cache_dir="$2"
+    shift 2
+    local port
+    port="$(_free_port)"
+    python3 "$(cache_engine)" --config "${config}" --cache-dir "${cache_dir}" \
+        --listen "127.0.0.1:${port}" "$@" >/dev/null 2>&1 &
+    printf '%s\n' "$!" >> "$(_fixture_pidfile)"
+    local i
+    for i in $(seq 1 50); do
+        if curl -fsS -o /dev/null --max-time 1 \
+             "http://127.0.0.1:${port}/__mirroret_cache/status" 2>/dev/null; then
+            break
+        fi
+        sleep 0.1
+    done
+    echo "http://127.0.0.1:${port}"
+}
+
+# cache_stat <base-url> <field> - read one counter out of the status endpoint.
+cache_stat() {
+    curl -fsS --noproxy '*' --max-time 5 "$1/__mirroret_cache/status" \
+        | python3 -c "import json,sys; print(json.load(sys.stdin)['stats']['$2'])"
+}
