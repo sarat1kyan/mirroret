@@ -672,7 +672,10 @@ EOF
 
 @test "nginx: alias locations use matching trailing slashes" {
     grep -q 'location /redhat/ {' "${SCRIPT_DIR}/lib/nginx.sh"
-    grep -q 'location /ubuntu/ {' "${SCRIPT_DIR}/lib/nginx.sh"
+    # The legacy APT location now follows the flavor prefix; both forms end
+    # in a slash so alias resolution never doubles or drops one.
+    grep -q "location %s/ {" "${SCRIPT_DIR}/lib/nginx.sh"
+    grep -q "location /%s/ {" "${SCRIPT_DIR}/lib/nginx.sh"
 }
 
 @test "common: script preamble sources conf and exports proxy" {

@@ -16,10 +16,19 @@ configure_firewall() {
     info "Ports to open: ${ports[*]}"
     [[ -n "$source_cidr" ]] && info "Restricting to source: ${source_cidr}"
 
-    if check_command ufw; then
+    # Pick the firewall that is actually RUNNING, not merely installed. A
+    # RHEL box with firewalld installed but stopped makes `firewall-cmd
+    # --permanent` exit 252 ("FirewallD is not running"), which under set -e
+    # killed the install at its very last step with everything else already
+    # configured.
+    if check_command ufw && ufw status 2>/dev/null | grep -qi '^Status: active'; then
         _configure_ufw "$source_cidr" "${ports[@]}"
-    elif check_command firewall-cmd; then
+    elif check_command firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
         _configure_firewalld "$source_cidr" "${ports[@]}"
+    elif check_command ufw || check_command firewall-cmd; then
+        warn "A firewall is installed but not running; no rules were added."
+        warn "If you enable it later, allow TCP ports: ${ports[*]}"
+        return 0
     elif check_command iptables; then
         _configure_iptables "$source_cidr" "${ports[@]}"
     else

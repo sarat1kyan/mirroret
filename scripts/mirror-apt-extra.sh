@@ -27,6 +27,14 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Read the operator config first so BASE_DIR, MIRRORET_SERVER_IP and
+# MIRRORET_WEB_PORT match the running install rather than the defaults.
+MIRRORET_CONF="${MIRRORET_CONF:-/etc/mirroret/mirroret.conf}"
+if [[ -f "${MIRRORET_CONF}" ]]; then
+    # shellcheck disable=SC1090,SC1091
+    . "${MIRRORET_CONF}"
+fi
 BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
 
 # -- Options -------------------------------------------------------------------
@@ -34,7 +42,7 @@ BASE_DIR="${MIRRORET_BASE_DIR:-/srv/mirroret}"
 NAME=""
 URL=""
 SUITES=()
-COMPONENTS=("main")
+COMPONENTS=()
 ARCHES=()
 KEY_URL=""
 KEY_PATH=""              # override where the keyring is stored
@@ -75,8 +83,8 @@ while [[ $# -gt 0 ]]; do
         --name)         shift; NAME="${1:-}" ;;
         --url)          shift; URL="${1:-}" ;;
         --suite)        shift; SUITES+=("${1:-}") ;;
-        --component)    shift; COMPONENTS=("${1:-}") ;;
-        --components)   shift; read -r -a COMPONENTS <<< "${1:-}" ;;
+        --component)    shift; COMPONENTS+=("${1:-}") ;;
+        --components)   shift; read -r -a _c <<< "${1:-}"; COMPONENTS+=("${_c[@]}") ;;
         --arch)         shift; ARCHES+=("${1:-}") ;;
         --key-url)      shift; KEY_URL="${1:-}" ;;
         --key-path)     shift; KEY_PATH="${1:-}" ;;
@@ -92,6 +100,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ ${#SUITES[@]} -eq 0 ]] && SUITES=(stable)
+[[ ${#COMPONENTS[@]} -eq 0 ]] && COMPONENTS=(main)
 [[ ${#ARCHES[@]} -eq 0 ]] && ARCHES=(amd64)
 
 if [[ -t 1 ]]; then
@@ -144,7 +153,9 @@ DEST="${BASE_DIR}/apt/${NAME}"
 KEY_DIR="/etc/mirroret/keys"
 [[ -z "$KEY_PATH" ]] && KEY_PATH="${KEY_DIR}/${NAME}.gpg"
 CLIENT_LIST="${BASE_DIR}/config/extra-${NAME}.list"
-NGINX_SNIPPET="/etc/nginx/conf.d/mirroret-extra-${NAME}.conf"
+# Reference only, never loaded by nginx - so it must NOT live in conf.d,
+# where a later `*.conf` glob or a curious operator could activate it.
+NGINX_SNIPPET="${BASE_DIR}/config/nginx-extra-${NAME}.conf"
 LOG_DIR="${BASE_DIR}/logs"
 LOCK_FILE="/var/lock/mirroret-extra-${NAME}.lock"
 LOG_FILE="${LOG_DIR}/sync-extra-${NAME}-$(date +%Y%m%d-%H%M%S).log"
@@ -152,6 +163,7 @@ LOG_FILE="${LOG_DIR}/sync-extra-${NAME}-$(date +%Y%m%d-%H%M%S).log"
 printf '%smirroret third-party APT mirror: %s%s\n' "$C_HEAD" "$NAME" "$C_OFF"
 info "upstream : ${URL}"
 info "suites   : ${SUITES[*]}"
+info "comps    : ${COMPONENTS[*]}"
 info "arches   : ${ARCHES[*]}"
 info "dest     : ${DEST}"
 
@@ -168,7 +180,8 @@ if [[ -n "${KEY_URL}" ]] && [[ ! -f "${KEY_PATH}" || -n "${MIRRORET_EXTRA_FORCE_
         rm -f "${local_tmp}"
     else
         run mkdir -p "${KEY_DIR}"
-        if ! curl -fsSL --max-time 60 -o "${local_tmp}" "${KEY_URL}"; then
+        if ! env https_proxy="${PROXY}" http_proxy="${PROXY}" \
+                curl -fsSL --max-time 60 -o "${local_tmp}" "${KEY_URL}"; then
             rm -f "${local_tmp}"
             die "Could not download ${KEY_URL}." \
                 "Check the URL and the proxy."
@@ -228,15 +241,42 @@ fi
 # -- Sync ----------------------------------------------------------------------
 
 step "Sync"
-run mkdir -p "${DEST}" "${LOG_DIR}"
+
+args=(--dest "${DEST}" --url "${URL}" --min-free-gb "${MIN_FREE_GB}"
+      --keyring "${KEY_PATH}" --require-signature
+      --id "extra-${NAME}" --flavor "${NAME}" --delete)
+for s in "${SUITES[@]}";     do args+=(--suite     "$s"); done
+for c in "${COMPONENTS[@]}"; do args+=(--component "$c"); done
+for a in "${ARCHES[@]}";     do args+=(--arch      "$a"); done
+
+# Dry run ends here: show the exact engine invocation and what would be
+# published, then stop. No lock, no log file, no engine process - the
+# engine's own --dry-run still writes a log, which is not "nothing changed".
+if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would create ${DEST} and ${LOG_DIR}"
+    if [[ "$SKIP_SYNC" == "1" ]]; then
+        info "[dry-run] --skip-sync: would not run the engine"
+    else
+        info "[dry-run] would run:"
+        printf '          python3 %q' "$ENGINE"
+        printf ' %q' "${args[@]}"
+        printf '\n'
+        [[ -n "$PROXY" ]] && info "[dry-run] with https_proxy=http_proxy=${PROXY}"
+    fi
+    info "[dry-run] would write ${NGINX_SNIPPET}.example (reference only)"
+    info "[dry-run] would write ${CLIENT_LIST}"
+    info "[dry-run] would write ${BASE_DIR}/config/extra-${NAME}.gpg"
+    printf '\n%s== Dry run: nothing changed%s\n' "$C_OK" "$C_OFF"
+    exit 0
+fi
+
+mkdir -p "${DEST}" "${LOG_DIR}"
 
 # Single-instance lock so a cron run cannot collide with a manual one.
-if [[ "$DRY_RUN" != "1" ]]; then
-    exec 9>"${LOCK_FILE}"
-    if ! flock -n 9; then
-        die "Another sync of ${NAME} is already running (${LOCK_FILE})." \
-            "Watch it: tail -f ${LOG_DIR}/sync-extra-${NAME}-*.log"
-    fi
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+    die "Another sync of ${NAME} is already running (${LOCK_FILE})." \
+        "Watch it: tail -f ${LOG_DIR}/sync-extra-${NAME}-*.log"
 fi
 
 if [[ "$SKIP_SYNC" == "1" ]]; then
@@ -244,12 +284,6 @@ if [[ "$SKIP_SYNC" == "1" ]]; then
     info "  sudo $0 --name ${NAME} --url ${URL} \\"
     info "      --key-path ${KEY_PATH} --yes"
 else
-    args=(--dest "${DEST}" --url "${URL}" --min-free-gb "${MIN_FREE_GB}"
-          --keyring "${KEY_PATH}" --require-signature
-          --id "extra-${NAME}" --flavor "${NAME}" --delete)
-    for s in "${SUITES[@]}";     do args+=(--suite     "$s"); done
-    for c in "${COMPONENTS[@]}"; do args+=(--component "$c"); done
-    for a in "${ARCHES[@]}";     do args+=(--arch      "$a"); done
     # Set the proxy for the engine via the environment, not as extra args.
     # The engine's ProxyHandler picks up http_proxy/https_proxy from the
     # environment automatically; passing them positionally would make
@@ -259,34 +293,31 @@ else
     if [[ -n "$PROXY" ]]; then
         export https_proxy="$PROXY" http_proxy="$PROXY"
     fi
-    [[ "$DRY_RUN" == "1" ]] && args+=(--dry-run)
 
     # Show the estimated size first: a third-party repo that keeps every
     # historical version can be several hundred GB (Grafana today: ~177 GB).
     info "Estimating download size (dry run first)..."
-    if [[ "$DRY_RUN" != "1" ]]; then
-        # `tail -15` closes the pipe early; without `|| true` the tee gets
-        # SIGPIPE and pipefail + set -e kill the script silently.
-        est_out="$(python3 "$ENGINE" "${args[@]}" --dry-run 2>&1 \
-                   | tee -a "$LOG_FILE" | tail -15 || true)"
-        # The grep+sed pipeline exits 1 when nothing matched - which under
-        # `set -eo pipefail` returned the operator to a bare shell with no
-        # explanation. `|| true` keeps us in control regardless. Same trap
-        # a user reported live: "just went back to prompt after Estimating".
-        printf '%s\n' "$est_out" | grep -E 'packages:|ABORT' \
-                                  | sed 's/^/        /' || true
-        if printf '%s' "$est_out" | grep -q '^ABORT'; then
-            die "Disk floor would be breached by this sync." \
-                "Free space or lower --min-free-gb, then re-run." \
-                "Full estimate log: ${LOG_FILE}"
-        fi
-        confirm "Start the real sync now?" || {
-            warn "Sync skipped at your request."
-            info "The mirror is CONFIGURED but empty. Run later:"
-            info "  sudo $0 --name ${NAME} --url ${URL} --key-path ${KEY_PATH} --yes"
-            SKIP_SYNC=1
-        }
+    # `tail -15` closes the pipe early; without `|| true` the tee gets
+    # SIGPIPE and pipefail + set -e kill the script silently.
+    est_out="$(python3 "$ENGINE" "${args[@]}" --dry-run 2>&1 \
+               | tee -a "$LOG_FILE" | tail -15 || true)"
+    # The grep+sed pipeline exits 1 when nothing matched - which under
+    # `set -eo pipefail` returned the operator to a bare shell with no
+    # explanation. `|| true` keeps us in control regardless. Same trap
+    # a user reported live: "just went back to prompt after Estimating".
+    printf '%s\n' "$est_out" | grep -E 'packages:|ABORT' \
+                              | sed 's/^/        /' || true
+    if printf '%s' "$est_out" | grep -q '^ABORT'; then
+        die "Disk floor would be breached by this sync." \
+            "Free space or lower --min-free-gb, then re-run." \
+            "Full estimate log: ${LOG_FILE}"
     fi
+    confirm "Start the real sync now?" || {
+        warn "Sync skipped at your request."
+        info "The mirror is CONFIGURED but empty. Run later:"
+        info "  sudo $0 --name ${NAME} --url ${URL} --key-path ${KEY_PATH} --yes"
+        SKIP_SYNC=1
+    }
 
     if [[ "$SKIP_SYNC" != "1" ]]; then
         if ! python3 "$ENGINE" "${args[@]}" >>"$LOG_FILE" 2>&1; then
@@ -305,17 +336,12 @@ step "Publishing"
 
 # nginx location. mirroret's main nginx template does not know about extras,
 # so drop in a tiny snippet that adds one alias per extra mirror.
-if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would write ${NGINX_SNIPPET}"
-    info "[dry-run] would write ${CLIENT_LIST}"
-else
-    # A conf.d snippet is loaded INSIDE mirroret's server{} block via
-    # nginx's own conf.d include - except our unified vhost lives in
-    # sites-enabled or has its own conf.d file, so we cannot just drop a
-    # `location` directive here (that requires a server context). Use a
-    # sourceable stub the operator can add manually if wanted, and rely on
-    # /apt/ being a browsable index that already covers this tree.
-    run mkdir -p "${BASE_DIR}/config" "$(dirname "${NGINX_SNIPPET}")"
+{
+    # A `location` directive needs a server{} context, so this cannot be a
+    # live conf.d include: mirroret's unified vhost lives elsewhere. Write a
+    # reference stub the operator can paste in if wanted, and rely on /apt/
+    # being a browsable index that already covers this tree.
+    mkdir -p "${BASE_DIR}/config"
 
     # Reference doc, not a live nginx include - see above.
     cat > "${NGINX_SNIPPET}.example" <<NGINX
@@ -373,7 +399,7 @@ NGINX
         install -m 0755 "${enrol}" "${BASE_DIR}/config/enroll-apt-extra.sh"
         ok "wrote ${BASE_DIR}/config/enroll-apt-extra.sh"
     fi
-fi
+}
 
 # -- Done ----------------------------------------------------------------------
 

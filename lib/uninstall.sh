@@ -278,19 +278,29 @@ _docker_container_exists() {
 uninst_remove_service() {
     # Stop + disable + delete a systemd unit and reset its failed state.
     local svc="$1"
-    if ! _has_unit "$svc"; then
+    if _has_unit "$svc"; then
+        uninst_do "stop ${svc}.service" systemctl stop "${svc}.service" || true
+        uninst_try "disable ${svc}.service" systemctl disable "${svc}.service"
+        # reset-failed is hygiene: it returns non-zero on many systemd builds
+        # when the unit ISN'T in a failed state (i.e. there's nothing to reset).
+        # That is not a failure - treat it as best-effort.
+        uninst_try "reset-failed ${svc}" systemctl reset-failed "${svc}.service"
+        local unit_file="/etc/systemd/system/${svc}.service"
+        if [[ -f "${unit_file}" ]]; then
+            uninst_do "rm ${unit_file}" rm -f "${unit_file}"
+        fi
+    else
         uninst_skip "service ${svc} (not installed)"
-        return 0
     fi
-    uninst_do "stop ${svc}.service" systemctl stop "${svc}.service" || true
-    uninst_try "disable ${svc}.service" systemctl disable "${svc}.service"
-    # reset-failed is hygiene: it returns non-zero on many systemd builds
-    # when the unit ISN'T in a failed state (i.e. there's nothing to reset).
-    # That is not a failure - treat it as best-effort.
-    uninst_try "reset-failed ${svc}" systemctl reset-failed "${svc}.service"
-    local unit_file="/etc/systemd/system/${svc}.service"
-    if [[ -f "${unit_file}" ]]; then
-        uninst_do "rm ${unit_file}" rm -f "${unit_file}"
+    # Proxy / CA drop-in written by lib/docker_registry.sh for the registry
+    # services. Checked even when the unit is gone: an OS package removal
+    # leaves our drop-in behind otherwise.
+    local dropin_dir="/etc/systemd/system/${svc}.service.d"
+    if [[ -f "${dropin_dir}/proxy.conf" ]]; then
+        uninst_remove_file "${dropin_dir}/proxy.conf"
+    fi
+    if [[ -d "${dropin_dir}" ]] && [[ -z "$(ls -A "${dropin_dir}" 2>/dev/null)" ]]; then
+        uninst_remove_dir "${dropin_dir}"
     fi
 }
 
@@ -338,7 +348,13 @@ uninstall_pip() {
     section "Removing pip / pypiserver"
     uninst_remove_service "pypiserver"
     uninst_remove_user "${MIRRORET_PYPI_USER}"
-    uninst_remove_file "/usr/local/bin/pypi-server"
+    # lib/pip.sh installs a SYMLINK into the venv. A regular file there is a
+    # distro package's or the operator's own binary - leave it alone.
+    if [[ -L /usr/local/bin/pypi-server ]]; then
+        uninst_remove_file "/usr/local/bin/pypi-server"
+    else
+        uninst_skip "/usr/local/bin/pypi-server (not a mirroret symlink)"
+    fi
     uninst_remove_dir "/opt/mirroret-pypiserver"
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
     # Mirror data under pip/ is removed by --purge; not touched otherwise.
@@ -384,9 +400,11 @@ uninstall_docker() {
         fi
     fi
 
-    # Config files.
-    uninst_remove_dir "/etc/docker/registry"
-    uninst_remove_dir "/etc/docker-distribution/registry"
+    # Config files. Remove only the config.yml mirroret wrote - the parent
+    # directories are OS package conffile dirs (docker-registry on Debian,
+    # docker-distribution on RHEL) and belong to the package manager.
+    uninst_remove_file "/etc/docker/registry/config.yml"
+    uninst_remove_file "/etc/docker-distribution/registry/config.yml"
 
     # Generated sync script (hosted mode only) + cache-mode-disabled stub.
     uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
@@ -415,6 +433,12 @@ uninstall_apt() {
         uninst_remove_file "/usr/local/bin/apt-mirror2"
     fi
     uninst_remove_dir "/opt/mirroret-apt-mirror2"
+
+    # On-demand APT cache (MIRRORET_APT_MODE=cache) created by lib/cache.sh:
+    # systemd unit (stopped + disabled first), launcher, and its config.
+    uninst_remove_service "mirroret-cache"
+    uninst_remove_file "${MIRRORET_BASE_DIR}/scripts/run-cache.sh"
+    uninst_remove_file "${MIRRORET_CACHE_CONFIG:-/etc/mirroret/cache.json}"
 
     # We do not auto-uninstall the apt-mirror / debmirror OS packages -
     # operators may want to keep them.
@@ -574,6 +598,8 @@ uninstall_selinux_restore() {
         # semanage fcontext -d returns non-zero if the rule isn't in the
         # local policy store - that's not a failure, it just means there's
         # nothing to delete.
+        uninst_try "semanage fcontext -d ${MIRRORET_BASE_DIR}/docker/registry(/.*)?" \
+            semanage fcontext -d "${MIRRORET_BASE_DIR}/docker/registry(/.*)?"
         uninst_try "semanage fcontext -d ${MIRRORET_BASE_DIR}(/.*)?" \
             semanage fcontext -d "${MIRRORET_BASE_DIR}(/.*)?"
         uninst_do "restorecon -Rv ${MIRRORET_BASE_DIR}" \
@@ -603,6 +629,8 @@ uninstall_master_sync() {
     uninst_remove_file "/var/lock/mirroret-sync-redhat.lock"
     uninst_remove_file "/var/lock/mirroret-sync-pip.lock"
     uninst_remove_file "/var/lock/mirroret-sync-npm.lock"
+    uninst_remove_file "/var/lock/mirroret-sync-docker.lock"
+    uninst_remove_file "/var/lock/mirroret-sync-all.lock"
 }
 
 uninstall_purge_data() {
@@ -656,7 +684,7 @@ uninstall_build_plan() {
     if [[ "${UNINST_T_PIP}" == "1" ]]; then uninst_step "remove pypiserver (service, user, venv, sync script)"; fi
     if [[ "${UNINST_T_NPM}" == "1" ]]; then uninst_step "remove Verdaccio (service, user, /etc/verdaccio, sync script)"; fi
     if [[ "${UNINST_T_DOCKER}" == "1" ]]; then uninst_step "remove Docker registry (services, container, configs, sync script)"; fi
-    if [[ "${UNINST_T_APT}" == "1" ]]; then uninst_step "remove APT mirror config (/etc/apt/mirror.list, apt-mirror2 venv)"; fi
+    if [[ "${UNINST_T_APT}" == "1" ]]; then uninst_step "remove APT mirror config (/etc/apt/mirror.list, apt-mirror2 venv, mirroret-cache service + cache.json)"; fi
     if [[ "${UNINST_T_RPM}" == "1" ]]; then uninst_step "remove RPM mirror config (sync script)"; fi
     if [[ "${UNINST_T_COMMON}" == "1" ]]; then
         uninst_step "remove nginx vhost (sites-available/enabled, conf.d, reload nginx)"
@@ -703,7 +731,7 @@ uninstall_execute() {
     [[ "${UNINST_T_PIP}" == "1" ]] && { uninstall_pip; need_daemon_reload=1; }
     [[ "${UNINST_T_NPM}" == "1" ]] && { uninstall_npm; need_daemon_reload=1; }
     [[ "${UNINST_T_DOCKER}" == "1" ]] && { uninstall_docker; need_daemon_reload=1; }
-    [[ "${UNINST_T_APT}" == "1" ]] && uninstall_apt
+    [[ "${UNINST_T_APT}" == "1" ]] && { uninstall_apt; need_daemon_reload=1; }
     [[ "${UNINST_T_RPM}" == "1" ]] && uninstall_rpm
     [[ "${UNINST_T_COMMON}" == "1" ]] && uninstall_common
 

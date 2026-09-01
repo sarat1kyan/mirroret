@@ -10,14 +10,18 @@ run_validation() {
 
     local failures=0 rc=0
 
-    _check_commands; rc=$?; failures=$(( failures + rc ))
-    _check_distro; rc=$?; failures=$(( failures + rc ))
-    _check_disk_space_validation; rc=$?; failures=$(( failures + rc ))
-    _check_directories; rc=$?; failures=$(( failures + rc ))
-    _check_nginx_config; rc=$?; failures=$(( failures + rc ))
-    _check_services; rc=$?; failures=$(( failures + rc ))
-    _check_repo_metadata; rc=$?; failures=$(( failures + rc ))
-    _check_client_configs; rc=$?; failures=$(( failures + rc ))
+    # `_check_x; rc=$?` looks like it captures the status, but under set -e a
+    # bare failing command exits the script before the assignment runs - the
+    # report stopped at the first failing check and the ERR trap printed
+    # "Installation failed". `|| rc=$?` keeps going and counts.
+    rc=0; _check_commands || rc=$?; failures=$(( failures + rc ))
+    rc=0; _check_distro || rc=$?; failures=$(( failures + rc ))
+    rc=0; _check_disk_space_validation || rc=$?; failures=$(( failures + rc ))
+    rc=0; _check_directories || rc=$?; failures=$(( failures + rc ))
+    rc=0; _check_nginx_config || rc=$?; failures=$(( failures + rc ))
+    rc=0; _check_services || rc=$?; failures=$(( failures + rc ))
+    rc=0; _check_repo_metadata || rc=$?; failures=$(( failures + rc ))
+    rc=0; _check_client_configs || rc=$?; failures=$(( failures + rc ))
 
     echo ""
     if [[ "$failures" -eq 0 ]]; then

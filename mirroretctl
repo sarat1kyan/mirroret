@@ -12,7 +12,9 @@
 
 set -Eeuo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# readlink -f so `source lib/...` still works when this file is reached
+# through the /usr/local/bin/mirroretctl symlink install.sh creates.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # shellcheck source=lib/logging.sh
 source "${SCRIPT_DIR}/lib/logging.sh"
@@ -62,12 +64,16 @@ _wa() { printf "${C_WARN}warn${C_OFF}  %s\n" "$*"; }
 _er() { printf "${C_ERR}fail${C_OFF}  %s\n" "$*"; }
 _in() { printf "      %s\n" "$*"; }
 
+# Returns 1 rather than exiting: from the interactive menu a non-root
+# operator picking a root-only action must land back in the menu, not lose
+# the whole CLI. Every caller does `_need_root ... || return 1`.
 _need_root() {
     if [[ "$(id -u)" -ne 0 ]]; then
         _er "This subcommand changes state and needs root."
         _in "Re-run: sudo $0 $*"
-        exit 1
+        return 1
     fi
+    return 0
 }
 
 _have_install_tree() {
@@ -176,7 +182,7 @@ _cli_diagnose_execstart() {
 
 cmd_sync() {
     local target="${1:-all}"
-    _need_root sync "$target"
+    _need_root sync "$target" || return 1
     case "$target" in
         all)    _run_script "${SCRIPTS_DIR}/sync-all.sh" ;;
         pip)    _run_script "${SCRIPTS_DIR}/sync-pip-packages.sh" ;;
@@ -218,7 +224,7 @@ cmd_sync() {
 cmd_sync_status() {
     _h "Sync locks"
     local lk lf
-    for lk in apt redhat pip npm; do
+    for lk in apt redhat pip npm docker; do
         lf="/var/lock/mirroret-sync-${lk}.lock"
         if [[ ! -e "$lf" ]]; then
             _in "${lk}: idle (no lock file)"
@@ -264,7 +270,7 @@ cmd_sync_last() {
 }
 
 cmd_sync_stop() {
-    _need_root sync-stop
+    _need_root sync-stop || return 1
     _h "Stopping sync processes"
     local pat killed=0
     for pat in mirroret_apt.py mirroret_rpm.py reposync debmirror 'sync-all.sh' \
@@ -283,10 +289,10 @@ cmd_sync_stop() {
 
 cmd_clean() {
     local mode="${1:-report}"
-    _need_root clean "$mode"
     case "$mode" in
         report) _run_script_or_install --cleanup-report ;;
-        prune)  _run_script_or_install --cleanup ;;
+        prune)  _need_root clean prune || return 1
+                _run_script_or_install --cleanup ;;
         *) _er "Unknown clean mode: ${mode}"
            _in "Valid: report (dry run, default) | prune (delete)"
            return 1 ;;
@@ -445,22 +451,22 @@ _ctl_ip() {
 # --------------------------------------------------------------- install ----
 
 cmd_install() {
-    _need_root install "$@"
+    _need_root install "$@" || return 1
     _run_script_or_install "$@"
 }
 
 cmd_upgrade() {
-    _need_root upgrade
+    _need_root upgrade || return 1
     _run_script_or_install --upgrade
 }
 
 cmd_check() {
-    _need_root check
+    _need_root check || return 1
     _run_script_or_install --check
 }
 
 cmd_uninstall() {
-    _need_root uninstall "$@"
+    _need_root uninstall "$@" || return 1
     if [[ ! -x "${SCRIPT_DIR}/uninstall.sh" ]]; then
         _er "uninstall.sh not found next to mirroretctl."
         return 1
@@ -484,7 +490,7 @@ cmd_service() {
             done
             ;;
         restart|start|stop)
-            _need_root service "$action" "$svc"
+            _need_root service "$action" "$svc" || return 1
             [[ -z "$svc" ]] && { _er "Usage: mirroretctl service ${action} <unit>"; return 1; }
             systemctl "$action" "$svc" && _ok "${action} ${svc}" || { _er "${action} ${svc} failed"; return 1; }
             ;;
@@ -592,7 +598,8 @@ cmd_client_simulate() {
             rc=1
             continue
         fi
-        code="$(curl -sS -o /dev/null -m 20 -w '%{http_code}' "$loc" 2>/dev/null)"
+        code="$(curl -s -o /dev/null -m 20 -w '%{http_code}' --noproxy '*' "$loc" 2>/dev/null || true)"
+        code="${code:-000}"
         if [[ "$code" == "200" ]]; then
             _ok "${pkg}: ${out} (downloadable)"
         else
@@ -807,21 +814,27 @@ cmd_serve() {
     _h "Blocked paths (must NOT be served)"
     local code
     for p in logs scripts; do
-        code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
-            "http://127.0.0.1:${WEB_PORT}/${p}/" 2>/dev/null || echo 000)"
-        if [[ "$code" == "403" || "$code" == "404" ]]; then
-            _ok "/${p}/ blocked (HTTP ${code})"
-        else
-            _er "/${p}/ is reachable (HTTP ${code}). It should be denied."
-            rc=1
-        fi
+        # `|| echo 000` after -w would print "000000" on a failed request
+        # (curl writes 000 itself, then echo adds another). Fall back on an
+        # EMPTY value instead so a dead endpoint stays 000.
+        code="$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time 5 \
+            "http://127.0.0.1:${WEB_PORT}/${p}/" 2>/dev/null || true)"
+        code="${code:-000}"
+        case "$code" in
+            403|404) _ok "/${p}/ blocked (HTTP ${code})" ;;
+            000)     _wa "/${p}/: no response - nginx is down, cannot check the deny rule"
+                     rc=1 ;;
+            *)       _er "/${p}/ is reachable (HTTP ${code}). It should be denied."
+                     rc=1 ;;
+        esac
     done
     return "$rc"
 }
 
 _cli_probe() {
     local label="$1" url="$2" code
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo 000)"
+    code="$(curl -s -o /dev/null -w '%{http_code}' --noproxy '*' --max-time 5 "$url" 2>/dev/null || true)"
+    code="${code:-000}"
     case "$code" in
         000) _er "${label}: no response (${url})"; return 1 ;;
         200|301|302|401|403) _ok "${label}: HTTP ${code}" ;;
@@ -863,8 +876,10 @@ cmd_logs() {
                 [[ -z "$f" ]] && continue
                 if grep -nE '^(FAIL|ERROR|ABORT)|FAILED:|PULL FAILED|PUBLISH FAILED' "$f" >/dev/null 2>&1; then
                     printf "\n      %s\n" "$(basename "$f")"
-                    grep -nE '^(FAIL|ERROR|ABORT)|FAILED:|PULL FAILED|PUBLISH FAILED' "$f" \
-                        | head -15 | sed 's/^/        /'
+                    # awk instead of head: head closing the pipe early gives
+                    # grep SIGPIPE (exit 141), which pipefail turns fatal.
+                    grep -nE '^(FAIL|ERROR|ABORT)|FAILED:|PULL FAILED|PUBLISH FAILED' "$f" 2>/dev/null \
+                        | awk 'NR<=15' | sed 's/^/        /' || true
                 fi
             done < <(ls -1t "${LOGS_DIR}"/*.log 2>/dev/null | head -8)
             ;;
@@ -893,7 +908,7 @@ cmd_verify() {
         _er "scripts/verify-mirror.sh not found"
         return 1
     fi
-    "$script" --base-dir "${MIRRORET_BASE_DIR}" "$@"
+    "$script" --base-dir "${BASE_DIR}" "$@"
 }
 
 # ------------------------------------------------------------------- cache ----
@@ -980,7 +995,7 @@ PY
             ;;
         size|du)
             _h "Cache size"
-            local apt_dir="${MIRRORET_BASE_DIR}/apt"
+            local apt_dir="${BASE_DIR}/apt"
             if [[ ! -d "$apt_dir" ]]; then
                 _wa "${apt_dir} does not exist yet"
                 return 0
@@ -990,11 +1005,17 @@ PY
             df -h "$apt_dir" | tail -1 | sed 's/^/      /'
             ;;
         gc)
-            _need_root "cache gc"
+            _need_root cache gc || return 1
             _h "Evicting least-recently-used packages"
             _in "Eviction runs automatically inside the daemon; this restarts"
             _in "it so a changed MIRRORET_CACHE_MAX_SIZE_GB takes effect now."
-            systemctl restart mirroret-cache && _ok "mirroret-cache restarted"
+            if systemctl restart mirroret-cache; then
+                _ok "mirroret-cache restarted"
+            else
+                _er "mirroret-cache did not restart"
+                _in "See why:  journalctl -u mirroret-cache -n 50"
+                return 1
+            fi
             ;;
         *)
             _er "Usage: mirroretctl cache {status|routes|size|gc}"
@@ -1021,6 +1042,11 @@ cmd_config() {
     local conf="${MIRRORET_CONF}"
     case "$what" in
         show)
+            if [[ -e "$conf" && ! -f "$conf" ]]; then
+                # /dev/null and friends: a deliberate "no config" marker.
+                _wa "no config file (${conf} is not a regular file)"
+                return 0
+            fi
             if [[ ! -f "$conf" ]]; then
                 _wa "${conf} does not exist"
                 _in "Create it: sudo cp ${SCRIPT_DIR}/config/mirroret.conf.example ${conf}"
@@ -1030,8 +1056,13 @@ cmd_config() {
             grep -vE '^\s*(#|$)' "$conf" | sed 's/^/      /'
             ;;
         edit)
-            _need_root config edit
-            [[ -f "$conf" ]] || { mkdir -p /etc/mirroret; cp "${SCRIPT_DIR}/config/mirroret.conf.example" "$conf"; }
+            _need_root config edit || return 1
+            if [[ -e "$conf" && ! -f "$conf" ]]; then
+                _er "no config file (${conf} is not a regular file)"
+                _in "Point MIRRORET_CONF at a real path, or unset it."
+                return 1
+            fi
+            [[ -f "$conf" ]] || { mkdir -p "$(dirname "$conf")"; cp "${SCRIPT_DIR}/config/mirroret.conf.example" "$conf"; }
             "${EDITOR:-vi}" "$conf"
             _in "Apply with: sudo mirroretctl upgrade"
             ;;
@@ -1076,10 +1107,11 @@ _cli_config_diff() {
     for t in ${want_apt}; do
         flavor="${t%%:*}"; release="${t#*:}"; release="${release%%:*}"
         [[ "$flavor" == "$t" ]] && continue
-        if [[ " ${have_apt} " != *"${flavor%%-*}"* ]] && \
-           [[ " ${have_apt} " != *"${flavor}"* ]]; then
-            missing+=" ${t}"
-        fi
+        # Same id lib/targets.sh writes into the spec: <dir>-<codename>.
+        # A bare flavor substring match let "ubuntu-noble" satisfy a newly
+        # added ubuntu:jammy, so the missing spec was never reported.
+        want_id="$(apt_flavor_dir "${flavor}")-$(apt_codename_for "${flavor}" "${release}")"
+        [[ " ${have_apt} " == *" ${want_id} "* ]] || missing+=" ${t}"
     done
     for t in ${want_rpm}; do
         flavor="${t%%:*}"; release="${t#*:}"; release="${release%%:*}"
@@ -1208,22 +1240,28 @@ cmd_menu() {
    3) sync all          run every sync now
    4) sync apt          Ubuntu / Debian only
    5) sync rpm          Oracle / Rocky / Alma / CentOS / EPEL only
-   6) sync status       what is running / locks
-   7) sync stop         stop running syncs
-   8) clean report      retention dry run
-   9) clean prune       retention delete
-  10) serve             probe HTTP endpoints
-  11) client verify     check generated client configs
-  12) client simulate   prove a client can install from this mirror
-  13) logs errors       failures in recent logs
-  14) logs tail         follow newest sync log
-  15) config show       active settings
-  16) config diff       config vs what is actually generated
-  17) config edit       edit and then upgrade
-  18) upgrade           re-apply config, regenerate scripts
-  19) check             validate installation
-  20) report            write one shareable txt report
-  21) targets           what this server mirrors, and whether it synced
+   6) sync pip          PyPI packages only
+   7) sync npm          npm packages only
+   8) sync status       what is running / locks
+   9) sync stop         stop running syncs
+  10) clean report      retention dry run
+  11) clean prune       retention delete
+  12) serve             probe HTTP endpoints
+  13) verify            check every published Release against files on disk
+  14) cache status      on-demand cache daemon, hit rate, routes
+  15) client list       generated client configs and their URLs
+  16) client verify     check generated client configs
+  17) client simulate   prove a client can install from this mirror
+  18) approve list      packages staged and waiting for approval
+  19) logs errors       failures in recent logs
+  20) logs tail         follow newest sync log
+  21) config show       active settings
+  22) config diff       config vs what is actually generated
+  23) config edit       edit config (then run upgrade)
+  24) upgrade           re-apply config, regenerate scripts
+  25) check             validate installation
+  26) report            write one shareable txt report
+  27) targets           what this server mirrors, and whether it synced
    q) quit
 MENU
         printf "select> "
@@ -1239,22 +1277,28 @@ MENU
             3) _menu_run cmd_sync all ;;
             4) _menu_run cmd_sync apt ;;
             5) _menu_run cmd_sync rpm ;;
-            6) _menu_run cmd_sync_status ;;
-            7) _menu_run cmd_sync_stop ;;
-            8) _menu_run cmd_clean report ;;
-            9) _menu_run cmd_clean prune ;;
-            10) _menu_run cmd_serve ;;
-            11) _menu_run cmd_client verify ;;
-            12) _menu_run cmd_client simulate ;;
-            13) _menu_run cmd_logs errors ;;
-            14) _menu_run cmd_logs tail ;;
-            15) _menu_run cmd_config show ;;
-            16) _menu_run cmd_config diff ;;
-            17) _menu_run cmd_config edit ;;
-            18) _menu_run cmd_upgrade ;;
-            19) _menu_run cmd_check ;;
-            20) _menu_run cmd_collect ;;
-            21) _menu_run cmd_targets list ;;
+            6) _menu_run cmd_sync pip ;;
+            7) _menu_run cmd_sync npm ;;
+            8) _menu_run cmd_sync_status ;;
+            9) _menu_run cmd_sync_stop ;;
+            10) _menu_run cmd_clean report ;;
+            11) _menu_run cmd_clean prune ;;
+            12) _menu_run cmd_serve ;;
+            13) _menu_run cmd_verify ;;
+            14) _menu_run cmd_cache status ;;
+            15) _menu_run cmd_client list ;;
+            16) _menu_run cmd_client verify ;;
+            17) _menu_run cmd_client simulate ;;
+            18) _menu_run cmd_approve list ;;
+            19) _menu_run cmd_logs errors ;;
+            20) _menu_run cmd_logs tail ;;
+            21) _menu_run cmd_config show ;;
+            22) _menu_run cmd_config diff ;;
+            23) _menu_run cmd_config edit ;;
+            24) _menu_run cmd_upgrade ;;
+            25) _menu_run cmd_check ;;
+            26) _menu_run cmd_collect ;;
+            27) _menu_run cmd_targets list ;;
             q|Q|quit|exit) return 0 ;;
             "") ;;
             *)  _er "unknown selection: ${choice}" ;;
@@ -1304,7 +1348,7 @@ cmd_approve() {
             esac
             ;;
         all)
-            _need_root approve all "$@"
+            _need_root approve all "$@" || return 1
             case "${1:-}" in
                 pip) approve_all_pip ;;
                 npm) approve_all_npm ;;
@@ -1317,14 +1361,14 @@ cmd_approve() {
                 *) _er "Unknown target: $1"; _in "Valid: pip npm rpm (or omit for all)"; return 1 ;;
             esac
             ;;
-        pip) _need_root approve pip "$@"; [[ -n "${1:-}" ]] || { _er "Usage: approve pip <name>"; return 1; }
+        pip) _need_root approve pip "$@" || return 1; [[ -n "${1:-}" ]] || { _er "Usage: approve pip <name>"; return 1; }
              approve_pip_package "$1" ;;
-        npm) _need_root approve npm "$@"; [[ -n "${1:-}" ]] || { _er "Usage: approve npm <name>"; return 1; }
+        npm) _need_root approve npm "$@" || return 1; [[ -n "${1:-}" ]] || { _er "Usage: approve npm <name>"; return 1; }
              approve_npm_package "$1" ;;
-        rpm) _need_root approve rpm "$@"; [[ -n "${1:-}" ]] || { _er "Usage: approve rpm <name>"; return 1; }
+        rpm) _need_root approve rpm "$@" || return 1; [[ -n "${1:-}" ]] || { _er "Usage: approve rpm <name>"; return 1; }
              approve_rpm_package "$1" ;;
         deny|exclude|reject)
-            _need_root approve deny "$@"
+            _need_root approve deny "$@" || return 1
             local what="${1:-}"; local frag="${2:-}"
             [[ -n "${what}" && -n "${frag}" ]] || { _er "Usage: approve deny pip|npm|rpm <name>"; return 1; }
             case "${what}" in
@@ -1348,14 +1392,20 @@ mirroretctl - control surface for a mirroret mirror server
 
 Usage:
   mirroretctl                        interactive menu
+  mirroretctl menu                   interactive menu (explicitly)
   mirroretctl <command> [args]
 
 Inspect (no root needed):
   status                    services, ports, disk, last sync, cron
   targets                   which distributions this server mirrors, and
                             whether each one has actually synced
+  targets show <file>       print one target spec from /etc/mirroret/targets
   doctor [--net] [--bundle] full read-only diagnostic
   report [-o FILE]          write ONE txt file describing everything, for sharing
+  verify [--flavor F] [--suite S] [--json]
+                            check every published Release: each file it lists
+                            must be on disk with the right size
+  cache status|routes|size  on-demand cache: daemon stats, route table, disk use
   sync status               which syncs are running, lock state
   sync last                 final line of the newest sync logs
   serve                     probe every HTTP endpoint locally
@@ -1367,6 +1417,7 @@ Inspect (no root needed):
   client simulate [pkg...]  act as a client: resolve AND download from the mirror
   logs list|tail|show|errors
   config show|path|diff
+  clean report              retention dry run (default; read-only)
   service list              unit states
 
 Change state (root):
@@ -1379,8 +1430,8 @@ Change state (root):
   approve all [pip|npm|rpm] promote staged packages (omit kind for all)
   approve pip|npm|rpm <n>   promote packages matching a name
   approve deny <kind> <n>   delete staged packages (decline them)
-  clean report              retention dry run (default)
   clean prune               retention delete
+  cache gc                  restart the cache daemon so a new size cap applies
   config edit               edit /etc/mirroret/mirroret.conf
   service start|stop|restart <unit>
   service logs <unit> [n]
@@ -1390,7 +1441,9 @@ Examples:
   mirroretctl targets
   sudo mirroretctl sync apt
   sudo mirroretctl sync rpm
-  sudo mirroretctl clean report
+  mirroretctl clean report
+  mirroretctl verify --flavor ubuntu
+  mirroretctl cache status
   mirroretctl client verify
   mirroretctl serve
   mirroretctl approve list

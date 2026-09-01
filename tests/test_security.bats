@@ -138,11 +138,22 @@ teardown() {
 
 # -- Docker --------------------------------------------------------------------
 
-@test "Docker client config: default does NOT contain insecure-registries" {
-    MIRRORET_DOCKER_INSECURE=0
+@test "Docker client config: default is a plain-http mirror dockerd will accept" {
+    # The registry speaks plain HTTP on its port. dockerd refuses an http
+    # mirror unless it is also listed in insecure-registries, so with TLS not
+    # configured the generated daemon.json MUST carry that entry - and must
+    # never point at https:// on the http port (the old default did, and
+    # Docker silently fell back to Docker Hub).
+    MIRRORET_DOCKER_INSECURE=0 MIRRORET_TLS_ENABLED=0
     generate_docker_client_config "${TMPDIR}/daemon.json"
-    run grep -c "insecure-registries" "${TMPDIR}/daemon.json"
-    [ "$output" = "0" ]
+    run python3 -c "
+import json; d=json.load(open('${TMPDIR}/daemon.json'))
+m=d['registry-mirrors'][0]
+assert m.startswith('http://'), m
+assert 'insecure-registries' in d, d
+assert '_comment' not in d, 'dockerd rejects unknown keys'
+print('ok')"
+    [ "$status" -eq 0 ]
 }
 
 @test "Docker client config: insecure mode adds insecure-registries" {

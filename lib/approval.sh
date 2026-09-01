@@ -25,6 +25,26 @@ MIRRORET_APPROVAL_ENABLED="${MIRRORET_APPROVAL_ENABLED:-0}"
 
 # -- Shared helpers ------------------------------------------------------------
 
+# _approval_refuse_if_syncing <pip|npm|redhat> - refuse to promote while the
+# matching sync script holds its lock. The sync writes files into staging
+# incrementally; promoting one mid-download would publish a truncated
+# package. Lock paths must match the generated sync scripts.
+_approval_refuse_if_syncing() {
+    local eco="$1"
+    local lock="/var/lock/mirroret-sync-${eco}.lock"
+    [[ -e "${lock}" ]] || return 0
+    command -v flock >/dev/null 2>&1 || return 0
+    # flock -n exits 1 when the lock is held by another process.
+    if flock -n "${lock}" true 2>/dev/null; then
+        return 0
+    fi
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        warn "[DRY-RUN] a ${eco} sync is running (${lock} is held); a real run would refuse to promote now."
+        return 0
+    fi
+    die "A ${eco} sync is running right now (lock ${lock} is held). Refusing to promote - a half-written file must never reach clients. Re-run once it finishes (mirroretctl logs tail)."
+}
+
 # _approval_rpm_roots - echo "<staging_root> <mirror_root>".
 _approval_rpm_roots() {
     local base_dir="${MIRRORET_BASE_DIR}"
@@ -184,8 +204,9 @@ approve_all_pip() {
     local dst="${base_dir}/approved/pip"
 
     [[ -d "${src}" ]] || { warn "No pip staging dir: ${src}"; return 0; }
+    _approval_refuse_if_syncing pip
 
-    mkdir -p "${dst}"
+    [[ "${DRY_RUN:-0}" != "1" ]] && mkdir -p "${dst}"
     local count=0
     while IFS= read -r -d '' pkg; do
         local name
@@ -212,6 +233,7 @@ approve_pip_package() {
 
     [[ -n "${fragment}" ]] || die "approve_pip_package: package name fragment required."
     [[ -d "${src}" ]] || die "No pip staging dir: ${src}"
+    _approval_refuse_if_syncing pip
 
     local match
     match=$(find "${src}" -type f -name "*${fragment}*" | head -1)
@@ -219,7 +241,7 @@ approve_pip_package() {
 
     local name
     name="$(basename "${match}")"
-    mkdir -p "${dst}"
+    [[ "${DRY_RUN:-0}" != "1" ]] && mkdir -p "${dst}"
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would approve pip: ${name}"
     else
@@ -276,7 +298,10 @@ _npm_publish_tarball() {
     fi
 
     local out rc=0
-    out="$(npm publish --loglevel=error "${tarball}" --registry "${url}" 2>&1)" || rc=$?
+    # Loopback must bypass any corporate proxy or the publish never reaches
+    # Verdaccio (the proxy cannot connect to this host's localhost).
+    out="$(npm_config_noproxy="localhost,127.0.0.1" \
+           npm publish --loglevel=error "${tarball}" --registry "${url}" 2>&1)" || rc=$?
     if [[ ${rc} -eq 0 ]]; then
         info "Published to Verdaccio: ${name}"
         return 0
@@ -296,32 +321,39 @@ _npm_publish_tarball() {
     return 1
 }
 
-# approve_all_npm - promote all staged npm tarballs and publish them.
+# approve_all_npm - publish all staged npm tarballs and promote them.
+#
+# Publish FIRST, from staging, and move to approved/ only once Verdaccio has
+# accepted the tarball (or already holds that version). Moving first left a
+# failed publish stranded in approved/ where nothing would ever retry it.
 approve_all_npm() {
     local base_dir="${MIRRORET_BASE_DIR}"
     local src="${base_dir}/staging/npm"
     local dst="${base_dir}/approved/npm"
 
     [[ -d "${src}" ]] || { warn "No npm staging dir: ${src}"; return 0; }
+    _approval_refuse_if_syncing npm
 
-    mkdir -p "${dst}"
+    [[ "${DRY_RUN:-0}" != "1" ]] && mkdir -p "${dst}"
     local count=0 pub_failed=0
     while IFS= read -r -d '' pkg; do
         local name
         name="$(basename "${pkg}")"
         if [[ "${DRY_RUN}" == "1" ]]; then
             info "[DRY-RUN] would approve npm: ${name}"
-        else
+        elif _npm_publish_tarball "${pkg}"; then
             mv "${pkg}" "${dst}/${name}"
             info "Approved npm: ${name}"
-            _npm_publish_tarball "${dst}/${name}" || pub_failed=$(( pub_failed + 1 ))
+        else
+            pub_failed=$(( pub_failed + 1 ))
+            warn "Left in staging for retry: ${name}"
         fi
         (( count++ )) || true
     done < <(find "${src}" -type f -name "*.tgz" -print0 2>/dev/null)
 
     if [[ "${pub_failed}" -gt 0 ]]; then
-        warn "npm: ${count} approved but ${pub_failed} could not be published."
-        warn "Those packages are NOT yet installable by clients."
+        warn "npm: ${pub_failed} of ${count} could not be published and remain in staging."
+        warn "Those packages are NOT yet installable by clients. Fix the cause and re-run the approval."
         return 1
     fi
     success "npm: ${count} package(s) approved."
@@ -336,6 +368,7 @@ approve_npm_package() {
 
     [[ -n "${fragment}" ]] || die "approve_npm_package: package name fragment required."
     [[ -d "${src}" ]] || die "No npm staging dir: ${src}"
+    _approval_refuse_if_syncing npm
 
     local match
     match=$(find "${src}" -type f -name "*${fragment}*.tgz" | head -1)
@@ -343,13 +376,17 @@ approve_npm_package() {
 
     local name
     name="$(basename "${match}")"
-    mkdir -p "${dst}"
     if [[ "${DRY_RUN}" == "1" ]]; then
         info "[DRY-RUN] would approve npm: ${name}"
         return 0
     fi
+    mkdir -p "${dst}"
+    # Publish from staging; promote only once Verdaccio has accepted it.
+    if ! _npm_publish_tarball "${match}"; then
+        warn "Left in staging for retry: ${name}"
+        return 1
+    fi
     mv "${match}" "${dst}/${name}"
-    _npm_publish_tarball "${dst}/${name}" || return 1
     success "Approved npm: ${name}"
 }
 
@@ -411,6 +448,7 @@ approve_all_rpm() {
     mirror_root="${roots##* }"
 
     [[ -d "${staging_root}" ]] || { warn "No RPM staging dir: ${staging_root}"; return 0; }
+    _approval_refuse_if_syncing redhat
 
     local files
     files="$(_find_staged_rpms "${staging_root}")"
@@ -475,6 +513,7 @@ approve_rpm_package() {
 
     [[ -n "${fragment}" ]] || die "approve_rpm_package: package name fragment required."
     [[ -d "${staging_root}" ]] || die "No RPM staging dir: ${staging_root}"
+    _approval_refuse_if_syncing redhat
 
     local matches
     matches="$(_find_staged_rpms "${staging_root}" | grep -F -- "${fragment}" || true)"

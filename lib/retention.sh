@@ -151,7 +151,42 @@ retention_rpm_prune() {
     done < <(find "$mirror_root" -type d -name repodata -print0 2>/dev/null)
 }
 
-# -- pip: keep N newest wheels/sdists per package -----------------------------
+# -- pip: keep N newest VERSIONS per package ----------------------------------
+
+# _pip_dist_index <dir> - print one "name<TAB>version<TAB>filename" line per
+# wheel / sdist in <dir>.
+#   wheel : {name}-{version}(-{build})?-{python}-{abi}-{platform}.whl
+#           -> version is the 2nd '-' field
+#   sdist : {name}-{version}.tar.gz | .zip
+#           -> version is the last '-' field before the extension (sdist
+#              names may themselves contain '-', e.g. python-dateutil)
+# Names are normalised (lowercase, '-' '.' -> '_') so a package's wheels and
+# its sdist land in the same group, as PEP 503 intends.
+_pip_dist_index() {
+    local dir="$1"
+    local f base stem name ver
+    for f in "${dir}"/*.whl "${dir}"/*.tar.gz "${dir}"/*.zip; do
+        [[ -f "$f" ]] || continue
+        base="${f##*/}"
+        case "$base" in
+            *.whl)
+                name="${base%%-*}"
+                ver="${base#*-}"
+                ver="${ver%%-*}"
+                ;;
+            *)
+                stem="${base%.tar.gz}"
+                stem="${stem%.zip}"
+                [[ "$stem" == *-* ]] || continue
+                name="${stem%-*}"
+                ver="${stem##*-}"
+                ;;
+        esac
+        [[ -n "$name" && -n "$ver" ]] || continue
+        name="$(printf '%s' "$name" | tr 'A-Z.-' 'a-z__')"
+        printf '%s\t%s\t%s\n' "$name" "$ver" "$base"
+    done
+}
 
 retention_pip_prune() {
     local keep
@@ -165,37 +200,41 @@ retention_pip_prune() {
         "${base_dir}/approved/pip"
     )
 
-    section "pip retention (keep=${keep} per package)"
+    section "pip retention (keep=${keep} versions per package)"
 
     local dir
     for dir in "${candidates[@]}"; do
         [[ -d "$dir" ]] || continue
         info "Directory: ${dir}"
 
-        # Extract unique package names (everything before the first "-<digit>").
-        # We use POSIX-portable ls | sed instead of GNU find -printf, so this
-        # works on BSD/macOS as well as Linux (retention is Linux-only in
-        # production, but tests run on macOS).
-        local pkg
+        # Index every distribution file as (name, version, file). Retention
+        # counts VERSIONS, not files: one release ships several wheels (one
+        # per Python/platform) plus an sdist, and counting files used to
+        # delete most of the current release's wheels while keeping nothing
+        # older either.
+        local index
+        index="$(_pip_dist_index "$dir")"
+        if [[ -z "$index" ]]; then
+            debug " no wheels/sdists in ${dir}"
+            continue
+        fi
+
+        local pkg v f
         while IFS= read -r pkg; do
             [[ -z "$pkg" ]] && continue
 
-            # Order by VERSION, newest last, then reverse. Ordering by mtime
-            # (the old `ls -t`) deleted genuinely newer releases whenever an
-            # older one happened to be re-downloaded more recently.
-            # `sort -V` understands dotted version strings.
-            local -a all=()
-            while IFS= read -r f; do
-                [[ -z "$f" ]] && continue
-                all+=("$f")
-            done < <(
-                cd "$dir" 2>/dev/null || return 0
-                # shellcheck disable=SC2012
-                ls -1 "${pkg}"-[0-9]*.whl "${pkg}"-[0-9]*.tar.gz "${pkg}"-[0-9]*.zip 2>/dev/null \
-                    | sort -V -r
-            )
+            # Distinct versions, newest first. `sort -V` understands dotted
+            # version strings; ordering by mtime (the old `ls -t`) deleted
+            # genuinely newer releases whenever an older one happened to be
+            # re-downloaded more recently.
+            local -a versions=()
+            while IFS= read -r v; do
+                [[ -n "$v" ]] && versions+=("$v")
+            done < <(printf '%s\n' "$index" \
+                        | awk -F'\t' -v p="$pkg" '$1 == p { print $2 }' \
+                        | sort -u | sort -V -r)
 
-            local total="${#all[@]}"
+            local total="${#versions[@]}"
             if [[ "$total" -le "$keep" ]]; then
                 debug " ${pkg}: ${total} version(s), within keep"
                 continue
@@ -205,17 +244,17 @@ retention_pip_prune() {
             info " ${pkg}: ${total} version(s), pruning ${to_prune}"
 
             local i=0
-            for f in "${all[@]}"; do
+            for v in "${versions[@]}"; do
                 (( i += 1 )) || true
                 (( i > keep )) || continue
-                _ret_do "rm ${f}" rm -f "${dir}/${f}"
+                # Drop EVERY file of this version - all wheels and the sdist.
+                while IFS= read -r f; do
+                    [[ -n "$f" ]] || continue
+                    _ret_do "rm ${f} (${pkg} ${v})" rm -f "${dir}/${f}"
+                done < <(printf '%s\n' "$index" \
+                            | awk -F'\t' -v p="$pkg" -v ver="$v" '$1 == p && $2 == ver { print $3 }')
             done
-        done < <(
-            cd "$dir" 2>/dev/null || return 0
-            # shellcheck disable=SC2012
-            ls -1 *.whl *.tar.gz *.zip 2>/dev/null \
-                | sed -E 's/-[0-9].*$//' | sort -u
-        )
+        done < <(printf '%s\n' "$index" | cut -f1 | sort -u)
     done
 }
 
@@ -324,8 +363,17 @@ retention_docker_gc() {
     systemctl stop "${svc}.service" 2>/dev/null || true
 
     # If it's a native binary use that; otherwise fall back to podman run.
-    if check_command registry; then
-        registry garbage-collect "$conf" 2>&1 | while IFS= read -r line; do info " $line"; done || \
+    # RHEL's docker-distribution installs 'registry'; Debian's docker-registry
+    # package installs the binary as 'docker-registry'.
+    local reg_bin=""
+    for c in registry docker-registry; do
+        if check_command "$c"; then
+            reg_bin="$c"
+            break
+        fi
+    done
+    if [[ -n "$reg_bin" ]]; then
+        "$reg_bin" garbage-collect "$conf" 2>&1 | while IFS= read -r line; do info " $line"; done || \
             warn "GC returned non-zero"
     elif check_command podman; then
         info "Using podman to run garbage-collect against registry:2..."

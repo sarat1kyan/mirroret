@@ -104,8 +104,21 @@ rollback() {
 
     while IFS=" " read -r status original_path; do
         if [[ "$status" == "MISSING" ]]; then
-            debug "Skipping (was missing at backup time): ${original_path}"
-            (( skipped += 1 ))
+            # The file did not exist before this install created it, so
+            # "restore" means "remove". Skipping it left every freshly written
+            # unit and nginx block in place - a rollback that undid nothing,
+            # and after a failed `nginx -t` left the broken config live.
+            if [[ -e "$original_path" || -L "$original_path" ]]; then
+                if [[ "${DRY_RUN}" == "1" ]]; then
+                    info "[DRY-RUN] would remove (did not exist before install): ${original_path}"
+                else
+                    rm -f "$original_path" && info "Removed: ${original_path}"
+                fi
+                (( restored += 1 ))
+            else
+                debug "Skipping (was missing at backup time, still absent): ${original_path}"
+                (( skipped += 1 ))
+            fi
             continue
         fi
 
@@ -145,6 +158,12 @@ rollback() {
 
 _post_rollback_reload() {
     info "Reloading services after rollback..."
+
+    # Unit files may just have been restored or removed; without a reload
+    # systemd restarts services from the in-memory (post-install) units.
+    if check_command systemctl; then
+        systemctl daemon-reload 2>/dev/null || true
+    fi
 
     if check_command nginx && service_is_active nginx; then
         if nginx -t &>/dev/null; then

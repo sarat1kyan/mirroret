@@ -184,15 +184,17 @@ teardown() {
     [[ ! -f "${MIRRORET_BASE_DIR}/staging/pip/badpkg-1.0-py3-none-any.whl" ]]
 }
 
-@test "approval: approve_all_npm moves tgz from staging to approved" {
+@test "approval: approve_all_npm keeps the tgz in staging when publish fails" {
     DRY_RUN=0
     mkdir -p "${MIRRORET_BASE_DIR}/staging/npm" "${MIRRORET_BASE_DIR}/approved/npm"
     touch "${MIRRORET_BASE_DIR}/staging/npm/express-4.18.2.tgz"
-    # Promotion also publishes into Verdaccio, which is not running here, so
-    # the call reports failure. The move itself must still have happened.
+    # Verdaccio is not running here, so the publish fails. The tarball must
+    # STAY in staging: moving it first made a failed publish unrecoverable
+    # (nothing was left for a retry to find).
     run approve_all_npm
-    [[ -f "${MIRRORET_BASE_DIR}/approved/npm/express-4.18.2.tgz" ]]
-    [[ ! -f "${MIRRORET_BASE_DIR}/staging/npm/express-4.18.2.tgz" ]]
+    [ "$status" -ne 0 ]
+    [[ -f "${MIRRORET_BASE_DIR}/staging/npm/express-4.18.2.tgz" ]]
+    [[ ! -f "${MIRRORET_BASE_DIR}/approved/npm/express-4.18.2.tgz" ]]
 }
 
 @test "approval: approve_all_npm reports failure when publish does not land" {

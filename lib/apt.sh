@@ -657,6 +657,14 @@ _configure_apt_native() {
         warn "No APT targets configured - skipping APT mirror setup."
         warn "  Set MIRRORET_APT_TARGETS in /etc/mirroret/mirroret.conf, e.g.:"
         warn "    MIRRORET_APT_TARGETS=\"ubuntu:jammy ubuntu:noble debian:bookworm\""
+        # generate_target_specs has already removed the old spec files. A
+        # sync script left over from a previous run would now point at specs
+        # that no longer exist and fail every night with a Python traceback.
+        local stale="${base_dir}/scripts/sync-apt-repos.sh"
+        if [[ "${DRY_RUN}" != "1" && -f "${stale}" ]] && is_managed_file "${stale}"; then
+            rm -f "${stale}"
+            info "Removed stale ${stale} (no targets to sync)."
+        fi
         return 0
     fi
 
@@ -699,11 +707,24 @@ _write_apt_native_sync_script() {
         return 0
     fi
 
-    local spec_args=""
+    local spec_args="" q
     local s
     for s in "${specs[@]}"; do
-        spec_args+=" --spec '${s}'"
+        # %q: a targets dir containing a quote must not produce a script
+        # that only fails to parse at 02:00.
+        printf -v q '%q' "${s}"
+        spec_args+=" --spec ${q}"
     done
+
+    # Storage mode is decided HERE, at generation time, and baked into the
+    # script. Deciding it at run time from MIRRORET_APT_MODE in the
+    # environment meant a non-interactive install that set the mode via env
+    # (which install.sh never persists to the conf) wired nginx and the cache
+    # for hybrid while the first cron run still downloaded the full pool.
+    local mode_args=""
+    if declare -F cache_mode_enabled >/dev/null 2>&1 && cache_mode_enabled; then
+        mode_args=" --metadata-only"
+    fi
 
     cat > "${sync_script}" <<APT_SYNC
 #!/usr/bin/env bash
@@ -758,12 +779,6 @@ if [[ ! -f "\$ENGINE" ]]; then
 fi
 
 ARGS=()
-# hybrid mode publishes the full signed index tree but no packages; the pool
-# is fetched per package on first use by mirroret-cache. Anything else that
-# is not plain 'mirror' also skips the bulk download.
-case "\${MIRRORET_APT_MODE:-mirror}" in
-    hybrid|cache) ARGS+=(--metadata-only) ;;
-esac
 [[ "\${MIRRORET_APT_DELETE:-1}" == "1" ]] && ARGS+=(--delete)
 [[ "\${MIRRORET_APT_REQUIRE_SIGNATURE:-0}" == "1" ]] && ARGS+=(--require-signature)
 [[ "\${MIRRORET_SYNC_ESTIMATE:-1}" == "0" ]] && ARGS+=(--no-estimate)
@@ -781,7 +796,7 @@ fi
 rc=0
 # shellcheck disable=SC2086 # NICE must word-split
 timeout -k 60 "\${MIRRORET_SYNC_TIMEOUT:-12h}" \\
-    \${NICE} python3 "\$ENGINE"${spec_args} \\
+    \${NICE} python3 "\$ENGINE"${spec_args}${mode_args} \\
     --min-free-gb "\${MIRRORET_SYNC_MIN_FREE_GB:-10}" \\
     "\${ARGS[@]}" || rc=\$?
 

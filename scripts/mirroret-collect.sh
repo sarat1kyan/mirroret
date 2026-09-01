@@ -1417,8 +1417,10 @@ if [[ -n "${TIMED_OUT_PROBES:-}" ]]; then
     finding WARN "These probes exceeded ${CAP_TIMEOUT}s and were killed: ${TIMED_OUT_PROBES}. A blocking probe usually means a hung mount, an unreachable daemon or DNS that does not answer. Their sections are incomplete."
 fi
 
-FAIL_N=$(( $(grep -c '^FAIL' "${FINDINGS_FILE}" 2>/dev/null || echo 0) ))
-WARN_N=$(( $(grep -c '^WARN' "${FINDINGS_FILE}" 2>/dev/null || echo 0) ))
+# grep -c prints 0 AND exits 1 when nothing matches, so `|| echo 0` yielded
+# "0\n0" inside $(( )) - a fatal arithmetic error on any clean host.
+FAIL_N=$(grep -c '^FAIL' "${FINDINGS_FILE}" 2>/dev/null || true); FAIL_N=${FAIL_N:-0}
+WARN_N=$(grep -c '^WARN' "${FINDINGS_FILE}" 2>/dev/null || true); WARN_N=${WARN_N:-0}
 
 {
     printf '===============================================================================\n'

@@ -37,7 +37,7 @@ detect_distro() {
             success "Detected: ${OS_ID} ${OS_VER} (RHEL-based)"
             ;;
         *)
-            die "Unsupported distribution: ${OS_ID}. Supported: ubuntu, debian, centos, rhel, fedora, rocky, almalinux."
+            die "Unsupported distribution: ${OS_ID}. Supported: ubuntu, debian, linuxmint, pop, centos, rhel, fedora, rocky, almalinux, ol."
             ;;
     esac
 
@@ -118,6 +118,15 @@ set_selinux_context() {
         info "Setting SELinux file context on ${path}"
         xrun semanage fcontext -a -t httpd_sys_content_t "${path}(/.*)?" 2>/dev/null \
             || xrun semanage fcontext -m -t httpd_sys_content_t "${path}(/.*)?" || true
+        # The container-backend registry writes its blobs under
+        # ${path}/docker/registry. httpd_sys_content_t is not writable by
+        # container processes, so the registry fails on its first push/pull
+        # with EACCES. Label that subtree container_file_t; the more specific
+        # rule wins over the httpd one above on the overlap.
+        local reg_dir="${path}/docker/registry"
+        info "Setting SELinux container_file_t on ${reg_dir}"
+        xrun semanage fcontext -a -t container_file_t "${reg_dir}(/.*)?" 2>/dev/null \
+            || xrun semanage fcontext -m -t container_file_t "${reg_dir}(/.*)?" || true
         xrun restorecon -Rv "$path" || true
     fi
 

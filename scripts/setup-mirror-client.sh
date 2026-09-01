@@ -56,7 +56,7 @@ Options:
                          repos enabled. Useful for a cautious first pass;
                          note the machine may still reach the internet.
   --no-pip               skip /etc/pip.conf
-  --no-npm               skip ~/.npmrc
+  --no-npm               skip the system-wide npm registry setting
   --docker               also configure the Docker registry mirror
   --rollback             restore the most recent backup and remove the
                          mirror config
@@ -162,21 +162,68 @@ detect() {
 # -- Backup / rollback ---------------------------------------------------------
 
 BACKUP_DIR=""
+PREV_BACKUP_DIR=""
 
 new_backup() {
+    # Remember the previous run's backup BEFORE `latest` is repointed: its
+    # .created ledger tells us which files on disk are ours, not the
+    # operator's.
+    PREV_BACKUP_DIR="$(cat "${BACKUP_ROOT}/latest" 2>/dev/null || true)"
     BACKUP_DIR="${BACKUP_ROOT}/$(date +%Y%m%d-%H%M%S)"
     run mkdir -p "$BACKUP_DIR"
     [[ "$DRY_RUN" == "1" ]] || printf '%s\n' "$BACKUP_DIR" > "${BACKUP_ROOT}/latest"
+}
+
+# is_ours <path> - true for a file THIS script produces. Such a file must
+# never enter the backup: on a second run it would be "restored" by
+# --rollback, leaving the machine with the mirror still enabled and its
+# original sources still disabled.
+is_ours() {
+    case "$(basename "$1")" in
+        mirroret.list|mirroret.sources|mirroret.repo|*.disabled-by-mirroret) return 0 ;;
+    esac
+    return 1
+}
+
+# previously_created <path> - was this path created by an earlier run?
+# Read from the previous backup's ledger, so a re-run does not back up its
+# own pip.conf/npmrc as if it were the operator's.
+previously_created() {
+    [[ -n "$PREV_BACKUP_DIR" && -f "${PREV_BACKUP_DIR}/.created" ]] || return 1
+    grep -qxF "$1" "${PREV_BACKUP_DIR}/.created" 2>/dev/null
+}
+
+# mark_created <path> - record a file that did not exist before we wrote it,
+# so --rollback removes it rather than leaving a mirror config behind.
+mark_created() {
+    [[ "$DRY_RUN" == "1" ]] && { info "[dry-run] would record ${1} as created"; return 0; }
+    printf '%s\n' "$1" >> "${BACKUP_DIR}/.created"
 }
 
 # save <path> - copy a file or dir into the backup, preserving its full path.
 save() {
     local src="$1"
     [[ -e "$src" ]] || return 0
+    if is_ours "$src"; then
+        info "not backing up ${src} (written by this script)"
+        return 0
+    fi
     local dst="${BACKUP_DIR}${src}"
     run mkdir -p "$(dirname "$dst")"
     run cp -a "$src" "$dst"
     info "backed up ${src}"
+}
+
+# save_or_mark <path> - before overwriting a single config file: back up the
+# operator's copy, or if there is none (or it is ours from a previous run),
+# note that rollback must delete it.
+save_or_mark() {
+    local f="$1"
+    if [[ ! -e "$f" ]] || previously_created "$f"; then
+        mark_created "$f"
+    else
+        save "$f"
+    fi
 }
 
 do_rollback() {
@@ -196,22 +243,50 @@ do_rollback() {
              /etc/yum.repos.d/mirroret.repo; do
         [[ -e "$f" ]] && { run rm -f "$f"; info "removed ${f}"; }
     done
-    # And the renamed originals. The real files come back from the backup
-    # below; leaving these behind means a later rename recreates duplicate
+    # Files we renamed aside. If the original is absent the rename IS the
+    # restore (the backup taken by a re-run cannot contain it, because by
+    # then it was already renamed). If the original is present the renamed
+    # copy is a leftover; remove it so a later run does not create duplicate
     # sources for the same suite.
+    local orig
     while IFS= read -r -d '' f; do
-        run rm -f "$f"
-        info "removed leftover $(basename "$f")"
+        orig="${f%.disabled-by-mirroret}"
+        if [[ -e "$orig" ]]; then
+            run rm -f "$f"
+            info "removed leftover $(basename "$f")"
+        else
+            run mv "$f" "$orig"
+            info "re-enabled $(basename "$orig")"
+        fi
     done < <(find /etc/apt /etc/apt/sources.list.d -maxdepth 1 \
                   -name '*.disabled-by-mirroret' -print0 2>/dev/null)
 
-    # Restore everything captured, at its original path.
+    # Restore everything captured, at its original path. Skip our own files
+    # should an older backup (taken before the exclusion) contain them.
     while IFS= read -r -d '' src; do
         local target="${src#"$dir"}"
+        # Top-level dotfiles (.created, .disabled-repos) are our ledgers,
+        # not captured system files.
+        [[ "$target" == /.* ]] && continue
+        if is_ours "$target"; then
+            info "skipping ${target} from backup (written by this script)"
+            continue
+        fi
         run mkdir -p "$(dirname "$target")"
         run cp -a "$src" "$target"
         info "restored ${target}"
     done < <(find "$dir" -mindepth 1 \( -type f -o -type l \) -print0)
+
+    # Files this script created that did not exist before it ran.
+    if [[ -f "${dir}/.created" ]]; then
+        while IFS= read -r f; do
+            [[ -z "$f" ]] && continue
+            if [[ -e "$f" ]]; then
+                run rm -f "$f"
+                info "removed ${f} (created by this script)"
+            fi
+        done < "${dir}/.created"
+    fi
 
     # Re-enable RHEL repos we disabled by name.
     if [[ -f "${dir}/.disabled-repos" ]] && command -v dnf >/dev/null 2>&1; then
@@ -257,7 +332,10 @@ check_server() {
     # Treat empty and 000 alike: curl prints 000 when it never connected, and
     # prints nothing at all if it dies before -w is evaluated.
     local code
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    # --noproxy: an http_proxy in the environment must never be asked to
+    # reach the LAN mirror; that is what turns a working server into
+    # "cannot reach" on a proxied desktop.
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --noproxy "$SERVER" --max-time 10 \
             "${BASE_URL}/config/" 2>/dev/null || true)"
     if [[ -z "$code" || "$code" == "000" ]]; then
         die "Cannot reach ${BASE_URL}/config/" \
@@ -273,7 +351,7 @@ check_server() {
 
 # list what the server actually publishes
 available_configs() {
-    curl -sS --max-time 15 "${BASE_URL}/config/" 2>/dev/null \
+    curl -sS --noproxy "$SERVER" --max-time 15 "${BASE_URL}/config/" 2>/dev/null \
         | grep -oE '[A-Za-z0-9._-]+\.(list|sources|repo|conf)' \
         | sort -u
 }
@@ -281,7 +359,7 @@ available_configs() {
 fetch_or_die() {
     local name="$1" dest="$2"
     local code
-    code="$(curl -sS -o "$dest.tmp" -w '%{http_code}' --max-time 30 \
+    code="$(curl -sS -o "$dest.tmp" -w '%{http_code}' --noproxy "$SERVER" --max-time 30 \
             "${BASE_URL}/config/${name}" 2>/dev/null || true)"
     if [[ "${code:-000}" != "200" ]]; then
         rm -f "$dest.tmp"
@@ -321,6 +399,16 @@ setup_apt() {
     local want="${OS_ID}-${CODENAME}.list"
     # Mint/Pop consume the Ubuntu tree.
     case "$OS_ID" in linuxmint|pop) want="ubuntu-${CODENAME}.list" ;; esac
+    # Ubuntu serves arm64/armhf from a separate archive (ports.ubuntu.com),
+    # which mirroret mirrors as the ubuntu-ports flavor. Debian keeps every
+    # arch in one archive, so only Ubuntu-family hosts switch.
+    local arch
+    arch="$(uname -m 2>/dev/null || true)"
+    case "${OS_ID}:${arch}" in
+        ubuntu:aarch64|ubuntu:armv7l|linuxmint:aarch64|linuxmint:armv7l|pop:aarch64|pop:armv7l)
+            want="ubuntu-ports-${CODENAME}.list"
+            info "note: ${arch} client, using the ubuntu-ports tree" ;;
+    esac
     [[ -n "$CONFIG_OVERRIDE" ]] && want="$CONFIG_OVERRIDE"
 
     local avail
@@ -363,6 +451,19 @@ setup_apt() {
     run install -m 0644 "$tmp" /etc/apt/sources.list.d/mirroret.list
     rm -f "$tmp"
     ok "installed /etc/apt/sources.list.d/mirroret.list"
+
+    # apt honours Acquire::http::Proxy from apt.conf.d, and a site-wide
+    # proxy there would send mirror requests out to the internet. Pin the
+    # mirror to DIRECT.
+    local noproxy_conf=/etc/apt/apt.conf.d/99mirroret-noproxy
+    save_or_mark "$noproxy_conf"
+    if [[ "$DRY_RUN" == "1" ]]; then
+        info "[dry-run] would write ${noproxy_conf}"
+    else
+        printf 'Acquire::http::Proxy::%s "DIRECT";\n' "$SERVER" > "$noproxy_conf"
+        chmod 0644 "$noproxy_conf"
+    fi
+    ok "wrote ${noproxy_conf} (mirror bypasses any apt proxy)"
 
     if [[ "$KEEP_UPSTREAM" == "1" ]]; then
         warn "--keep-upstream: leaving the upstream repos enabled"
@@ -435,12 +536,16 @@ setup_apt() {
     fi
     rm -f /tmp/mirroret-aptupdate.$$
 
-    # Is the mirror in apt's list of sources at all?
-    if apt-cache policy 2>/dev/null | grep -q "$SERVER"; then
+    # Is the mirror in apt's list of sources at all? Capture first: `grep -q`
+    # closes the pipe on the first match, apt-cache gets SIGPIPE, and
+    # pipefail then turns a SUCCESSFUL check into a failure.
+    local policy
+    policy="$(apt-cache policy 2>/dev/null || true)"
+    if grep -q "$SERVER" <<<"$policy"; then
         ok "apt lists ${SERVER} as a package source"
     else
         warn "apt-cache policy does not mention ${SERVER} at all"
-        apt-cache policy 2>/dev/null | head -12 | sed 's/^/        /'
+        printf '%s\n' "$policy" | head -12 | sed 's/^/        /' || true
         die "The mirror is not among apt's sources." \
             "Check /etc/apt/sources.list.d/mirroret.list and re-run apt-get update." \
             "To undo:  sudo $0 --rollback"
@@ -573,6 +678,14 @@ setup_rpm() {
     local tmp="/tmp/mirroret-client.repo.$$"
     fetch_or_die "$want" "$tmp" || die "Could not download ${want}."
 
+    # dnf honours a proxy= in dnf.conf for every repo; the mirror is on the
+    # LAN and must be fetched directly. Add proxy=_none_ to each section
+    # unless the server already put it there.
+    if ! grep -qE '^proxy=_none_' "$tmp"; then
+        sed -i -E '/^\[[^]]+\]$/a proxy=_none_' "$tmp"
+        info "added proxy=_none_ to every repo section"
+    fi
+
     new_backup
     local f
     for f in /etc/yum.repos.d/*.repo; do
@@ -632,11 +745,37 @@ setup_rpm() {
         : # informational only; the list is printed above
     fi
 
-    if dnf -y reinstall bash >/dev/null 2>&1 || dnf -y install bash >/dev/null 2>&1; then
-        ok "installed a package through the mirror"
-    else
-        warn "test install failed; try: dnf -y reinstall bash"
+    # A reinstall/install of bash proves nothing: dnf can satisfy it from
+    # the already-installed copy or from any other enabled repo. Ask the
+    # mirror's OWN repos for a NEVRA, then download exactly that from them.
+    local nevra dl rpm
+    nevra="$(dnf repoquery --disablerepo='*' --enablerepo='mirroret-*' \
+             --qf '%{name}-%{evr}.%{arch}' bash 2>/dev/null | head -1 || true)"
+    if [[ -z "$nevra" ]]; then
+        warn "the mirror's repos do not list 'bash'"
+        info "Either the sync has not completed or BaseOS is not mirrored."
+        info "On the SERVER:  mirroretctl targets   /   sudo mirroretctl sync rpm"
+        return 0
     fi
+    info "test package, from the mirror's own metadata: ${nevra}"
+    dl="/tmp/mirroret-rpmtest.$$"
+    rm -rf "$dl"; mkdir -p "$dl"
+    if dnf download --disablerepo='*' --enablerepo='mirroret-*' \
+           --destdir "$dl" "$nevra" >/dev/null 2>&1; then
+        rpm="$(find "$dl" -name '*.rpm' 2>/dev/null | head -1 || true)"
+        if [[ -n "$rpm" ]]; then
+            ok "downloaded ${nevra} from the mirror ($(stat -c%s "$rpm") bytes)"
+        else
+            warn "dnf download reported success but produced no .rpm"
+        fi
+    else
+        warn "could not download ${nevra} from the mirror"
+        info "Its metadata lists that package but the .rpm is not fetchable."
+        info "On the SERVER:"
+        info "  mirroretctl client verify"
+        info "  sudo mirroretctl sync rpm"
+    fi
+    rm -rf "$dl"
 }
 
 # -- pip / npm / docker --------------------------------------------------------
@@ -644,7 +783,7 @@ setup_rpm() {
 setup_pip() {
     [[ "$DO_PIP" == "1" ]] || return 0
     local code
-    code="$(curl -sS -o /tmp/mirroret-pip.$$ -w '%{http_code}' --max-time 15 \
+    code="$(curl -sS -o /tmp/mirroret-pip.$$ -w '%{http_code}' --noproxy "$SERVER" --max-time 15 \
             "${BASE_URL}/config/pip.conf" 2>/dev/null || true)"
     if [[ "${code:-000}" != "200" ]]; then
         rm -f /tmp/mirroret-pip.$$
@@ -652,7 +791,8 @@ setup_pip() {
         return 0
     fi
     step "pip configuration"
-    save /etc/pip.conf
+    [[ -n "$BACKUP_DIR" ]] || new_backup
+    save_or_mark /etc/pip.conf
     run install -m 0644 /tmp/mirroret-pip.$$ /etc/pip.conf
     rm -f /tmp/mirroret-pip.$$
     ok "installed /etc/pip.conf"
@@ -672,7 +812,7 @@ setup_pip() {
 setup_npm() {
     [[ "$DO_NPM" == "1" ]] || return 0
     local code
-    code="$(curl -sS -o /tmp/mirroret-npmrc.$$ -w '%{http_code}' --max-time 15 \
+    code="$(curl -sS -o /tmp/mirroret-npmrc.$$ -w '%{http_code}' --noproxy "$SERVER" --max-time 15 \
             "${BASE_URL}/config/.npmrc" 2>/dev/null || true)"
     if [[ "${code:-000}" != "200" ]]; then
         rm -f /tmp/mirroret-npmrc.$$
@@ -680,12 +820,35 @@ setup_npm() {
         return 0
     fi
     step "npm configuration"
-    # System-wide, so every user gets it rather than only root.
-    save /etc/npmrc
-    run install -m 0644 /tmp/mirroret-npmrc.$$ /etc/npmrc
+    if ! command -v npm >/dev/null 2>&1; then
+        rm -f /tmp/mirroret-npmrc.$$
+        info "npm: not installed on this machine; nothing to configure"
+        return 0
+    fi
+    # npm never reads /etc/npmrc. Its system-wide file is
+    # $(npm prefix -g)/etc/npmrc, which is what --location=global writes.
+    local registry npmrc_global
+    registry="$(grep -E '^registry=' /tmp/mirroret-npmrc.$$ | head -1 | cut -d= -f2- || true)"
+    registry="${registry:-http://${SERVER}:${NPM_PORT}/}"
     rm -f /tmp/mirroret-npmrc.$$
-    ok "installed /etc/npmrc (system-wide)"
-    if [[ "$DRY_RUN" != "1" ]] && command -v npm >/dev/null 2>&1; then
+    npmrc_global="$(npm prefix -g 2>/dev/null || echo /usr/local)/etc/npmrc"
+    [[ -n "$BACKUP_DIR" ]] || new_backup
+    save_or_mark "$npmrc_global"
+    if [[ "$DRY_RUN" == "1" ]]; then
+        info "[dry-run] would set registry=${registry} in ${npmrc_global}"
+    elif npm config set registry "$registry" --location=global >/dev/null 2>&1; then
+        ok "npm config set registry ${registry} --location=global"
+    else
+        # Older npm (<7.20) has no --location; write the same file directly.
+        mkdir -p "$(dirname "$npmrc_global")"
+        if [[ -f "$npmrc_global" ]]; then
+            sed -i '/^registry=/d' "$npmrc_global"
+        fi
+        printf 'registry=%s\n' "$registry" >> "$npmrc_global"
+        chmod 0644 "$npmrc_global"
+        ok "wrote registry=${registry} to ${npmrc_global}"
+    fi
+    if [[ "$DRY_RUN" != "1" ]]; then
         if npm view express version >/dev/null 2>&1; then
             ok "npm resolved a package through the mirror"
         else
@@ -698,7 +861,7 @@ setup_npm() {
 setup_docker() {
     [[ "$DO_DOCKER" == "1" ]] || return 0
     local code
-    code="$(curl -sS -o /tmp/mirroret-docker.$$ -w '%{http_code}' --max-time 15 \
+    code="$(curl -sS -o /tmp/mirroret-docker.$$ -w '%{http_code}' --noproxy "$SERVER" --max-time 15 \
             "${BASE_URL}/config/docker-daemon.json" 2>/dev/null || true)"
     if [[ "${code:-000}" != "200" ]]; then
         rm -f /tmp/mirroret-docker.$$
@@ -706,7 +869,8 @@ setup_docker() {
         return 0
     fi
     step "Docker configuration"
-    save /etc/docker/daemon.json
+    [[ -n "$BACKUP_DIR" ]] || new_backup
+    save_or_mark /etc/docker/daemon.json
     run mkdir -p /etc/docker
     # Replacing daemon.json wholesale would drop unrelated settings, so say so.
     if [[ -f /etc/docker/daemon.json ]]; then

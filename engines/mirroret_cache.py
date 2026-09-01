@@ -47,6 +47,7 @@ import re
 import shutil
 import socketserver
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -301,7 +302,9 @@ class Cache:
         )
         self.stats = CacheStats()
         self._inflight_lock = threading.Lock()
-        self._inflight: dict = {}
+        self._inflight = {}
+        self._reval_lock = threading.Lock()
+        self._reval_inflight = {}
         self._evict_lock = threading.Lock()
 
     # -- paths ---------------------------------------------------------------
@@ -322,13 +325,30 @@ class Cache:
         if route is None:
             return None
         rel = parts[1] if len(parts) > 1 else ""
-        if not rel or rel.endswith("/"):
+        if not rel or rel.endswith("/") or "\x00" in rel:
+            return None
+        # Reject '.'/'..' components outright instead of relying on abspath
+        # normalisation: a request that normalises back to the route root
+        # would otherwise be fetched upstream and then fail on os.replace.
+        if any(seg in ("", ".", "..") for seg in rel.split("/")):
             return None
 
         disk = os.path.abspath(os.path.join(self.cache_dir, route.name, rel))
         root = os.path.join(self.cache_dir, route.name)
-        if disk != root and not disk.startswith(root + os.sep):
+        if not disk.startswith(root + os.sep):
             return None
+        # A path that is already a directory on disk (GET /ubuntu/dists with
+        # no trailing slash) must not be fetched: upstream would answer with
+        # an HTML listing, which would be stored as a regular file *named*
+        # dists, and every later dists/... request would die on
+        # NotADirectoryError. Likewise refuse when an ancestor is a file.
+        if os.path.isdir(disk):
+            return None
+        probe = os.path.dirname(disk)
+        while probe.startswith(root) and probe != root:
+            if os.path.isfile(probe):
+                return None
+            probe = os.path.dirname(probe)
         return route, rel, disk
 
     # -- freshness -----------------------------------------------------------
@@ -367,7 +387,15 @@ class Cache:
             args=(route, rel, disk_path, entry),
             daemon=True,
         )
-        thread.start()
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            # Thread exhaustion. Without this the entry stays registered with
+            # no writer, and every later request for the path coalesces onto
+            # it and waits the full INFLIGHT_TIMEOUT for nothing.
+            entry.fail(exc)
+            self._retire(disk_path)
+            self.stats.bump("errors")
         return entry
 
     def _open_first_available(self, route: Route, rel: str):
@@ -441,6 +469,20 @@ class Cache:
             os.replace(entry.part_path, disk_path)
             self.stats.bump("bytes_from_upstream", written)
             entry.done.set()
+
+            if entry.total is None and is_immutable(rel):
+                # No Content-Length means a clean close and a truncated body
+                # are indistinguishable. For a package - cached forever, never
+                # revalidated - a silently truncated file would give every
+                # client a hash mismatch for good. Serve this response (the
+                # waiters hold the inode) but do not keep it; the next request
+                # fetches again, hopefully with a length.
+                log("cache: %s arrived without Content-Length; served but not "
+                    "retained" % rel)
+                try:
+                    os.unlink(disk_path)
+                except OSError:
+                    pass
         except Exception as exc:  # noqa: BLE001
             entry.fail(exc)
             self.stats.bump("errors")
@@ -466,6 +508,27 @@ class Cache:
         body, which matters when every client on the network runs
         `apt-get update` on the same cron minute.
         """
+        # One revalidation per path at a time. Forty clients hitting a stale
+        # InRelease on the same cron minute used to start forty conditional
+        # GETs that all wrote the SAME temp file with O_TRUNC from different
+        # offsets - a zero-filled hole renamed live under apt's feet. The
+        # first thread does the work; the rest wait, then re-check freshness.
+        with self._reval_lock:
+            guard = self._reval_inflight.get(disk_path)
+            if guard is None:
+                guard = threading.Lock()
+                self._reval_inflight[disk_path] = guard
+        with guard:
+            try:
+                if self.is_fresh(disk_path, rel):
+                    return True  # someone else just revalidated it
+                return self._revalidate_locked(route, rel, disk_path)
+            finally:
+                with self._reval_lock:
+                    if self._reval_inflight.get(disk_path) is guard:
+                        del self._reval_inflight[disk_path]
+
+    def _revalidate_locked(self, route, rel, disk_path):
         try:
             st = os.stat(disk_path)
         except OSError:
@@ -493,24 +556,94 @@ class Cache:
         if resp is None:
             return False
 
+        tmp_path = None
         try:
             if resp.status == 304:
                 os.utime(disk_path, None)
                 self.stats.bump("revalidated")
                 return True
-            part = "%s.mirroret-part" % disk_path
-            with open(part, "wb") as fh:
-                shutil.copyfileobj(resp, fh, BUF)
-            os.replace(part, disk_path)
+            length = resp.headers.get("Content-Length")
+            expected = int(length) if length and length.isdigit() else None
+            # A unique temp name, never the shared ".mirroret-part" the miss
+            # path uses, so a concurrent first-fetch of the same path (or a
+            # previous crashed writer) cannot collide with us.
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=".mirroret-reval-", dir=os.path.dirname(disk_path)
+            )
+            written = 0
+            with os.fdopen(fd, "wb") as fh:
+                while True:
+                    chunk = resp.read(BUF)
+                    if not chunk:
+                        break
+                    fh.write(chunk)
+                    written += len(chunk)
+            if expected is not None and written != expected:
+                # A proxy-truncated 200 must not replace a good index.
+                raise OSError("short read: %d of %d" % (written, expected))
+            os.chmod(tmp_path, 0o644)
+            os.replace(tmp_path, disk_path)
+            tmp_path = None
             self.stats.bump("revalidated")
+            if os.path.basename(disk_path) in ("InRelease", "Release"):
+                # A new Release hashes new Packages/Translation files. On
+                # archives without Acquire-By-Hash (most third-party repos)
+                # those keep their names, so a still-"fresh" sibling would be
+                # served against the new Release and fail apt's hash check
+                # for up to metadata_ttl. Age every sibling so the next
+                # request revalidates it too.
+                self._expire_siblings(os.path.dirname(disk_path))
             return True
         except Exception:  # noqa: BLE001
             return False
         finally:
+            if tmp_path is not None:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
             try:
                 resp.close()
             except Exception:  # noqa: BLE001
                 pass
+
+    def _expire_siblings(self, suite_dir):
+        """Set every cached index under a suite to 'stale' (mtime epoch)."""
+        for dirpath, _dirs, files in os.walk(suite_dir):
+            for name in files:
+                full = os.path.join(dirpath, name)
+                if full.endswith((".mirroret-part",)) or name.startswith(".mirroret-reval-"):
+                    continue
+                if name in ("InRelease", "Release", "Release.gpg"):
+                    continue
+                try:
+                    os.utime(full, (0, 0))
+                except OSError:
+                    pass
+
+    def sweep_temp_files(self, older_than=3600):
+        """Delete partial/temp files left by a killed writer.
+
+        A SIGKILL mid-download leaves *.mirroret-part or .mirroret-reval-*
+        behind; nothing else ever removes them, and a cache that runs for a
+        year accumulates them. Anything older than an hour cannot belong to
+        a live download (INFLIGHT_TIMEOUT is 30 min).
+        """
+        cutoff = time.time() - older_than
+        removed = 0
+        for dirpath, _dirs, files in os.walk(self.cache_dir):
+            for name in files:
+                if not (name.endswith(".mirroret-part")
+                        or name.startswith(".mirroret-reval-")):
+                    continue
+                full = os.path.join(dirpath, name)
+                try:
+                    if os.stat(full).st_mtime < cutoff:
+                        os.unlink(full)
+                        removed += 1
+                except OSError:
+                    pass
+        return removed
 
     # -- eviction ------------------------------------------------------------
 
@@ -591,20 +724,34 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _serve_file(self, disk_path: str, rel: str) -> None:
+        # Open first, then fstat the open descriptor: the length we promise
+        # and the bytes we send come from the same inode. stat-then-open
+        # raced with revalidate()'s os.replace and with GC eviction, and a
+        # length that does not match the body corrupts keep-alive framing
+        # for that client's next request.
         try:
-            st = os.stat(disk_path)
+            fh = open(disk_path, "rb")
         except OSError:
             self._send_simple(404, b"not found\n")
             return
-        self.send_response(200)
-        self.send_header("Content-Type", guess_content_type(rel))
-        self.send_header("Content-Length", str(st.st_size))
-        self.send_header("X-Mirroret-Cache", "HIT")
-        self.end_headers()
-        if self.command == "HEAD":
-            return
-        with open(disk_path, "rb") as fh:
-            shutil.copyfileobj(fh, self.wfile, BUF)
+        with fh:
+            size = os.fstat(fh.fileno()).st_size
+            self.send_response(200)
+            self.send_header("Content-Type", guess_content_type(rel))
+            self.send_header("Content-Length", str(size))
+            self.send_header("X-Mirroret-Cache", "HIT")
+            self.end_headers()
+            if self.command == "HEAD":
+                return
+            remaining = size
+            while remaining > 0:
+                chunk = fh.read(min(BUF, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+            if remaining:
+                self.close_connection = True
 
     def _stream_inflight(self, entry: Inflight, rel: str) -> None:
         """Send a download that is still being written by another thread."""
@@ -660,7 +807,12 @@ class Handler(BaseHTTPRequestHandler):
                 return
         try:
             while sent < entry.total:
-                chunk = fh.read(BUF)
+                # Never read past the length we promised. If upstream streams
+                # more than its declared Content-Length the writer fails the
+                # download, but a tailing reader could already have pushed the
+                # surplus into a keep-alive stream, corrupting the framing of
+                # that client's next request.
+                chunk = fh.read(min(BUF, entry.total - sent))
                 if chunk:
                     self.wfile.write(chunk)
                     sent += len(chunk)
@@ -669,7 +821,7 @@ class Handler(BaseHTTPRequestHandler):
                     # Writer is finished and everything it wrote is flushed,
                     # so one more read sees any bytes that landed between our
                     # last read and this check.
-                    chunk = fh.read(BUF)
+                    chunk = fh.read(min(BUF, entry.total - sent))
                     if chunk:
                         self.wfile.write(chunk)
                         sent += len(chunk)
@@ -777,6 +929,9 @@ def eviction_loop(cache: Cache, interval: int) -> None:
     while True:
         time.sleep(interval)
         try:
+            swept = cache.sweep_temp_files()
+            if swept:
+                log("cache gc: removed %d stale temp file(s)" % swept)
             result = cache.evict_if_needed()
             if result.get("evicted"):
                 log(
@@ -873,10 +1028,15 @@ def main(argv=None) -> int:
         log("ERROR: cannot bind %s: %s" % (args.listen, exc))
         return EXIT_CONFIG
 
-    if args.max_size_gb > 0:
-        threading.Thread(
-            target=eviction_loop, args=(cache, args.gc_interval), daemon=True
-        ).start()
+    # The GC thread always runs: even with no size cap it sweeps temp files
+    # a killed writer left behind. evict_if_needed() itself is a no-op when
+    # max_size_gb is 0.
+    swept = cache.sweep_temp_files()
+    if swept:
+        log("startup: removed %d stale temp file(s) from a previous run" % swept)
+    threading.Thread(
+        target=eviction_loop, args=(cache, args.gc_interval), daemon=True
+    ).start()
 
     log("mirroret cache listening on %s" % args.listen)
     log("  cache dir : %s" % cache.cache_dir)

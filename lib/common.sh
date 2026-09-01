@@ -116,6 +116,28 @@ if [[ -f /etc/mirroret/mirroret.conf ]]; then
     # shellcheck disable=SC1091
     . /etc/mirroret/mirroret.conf
 fi
+# MIRRORET_PROXY is the single operator-facing knob (the wizard writes it).
+# Every tool underneath - python urllib, curl, pip, npm, dnf - reads the
+# conventional http_proxy/https_proxy names, so map it onto those when they
+# are not already set. Without this line the proxy answer was recorded and
+# never used, and every unattended sync behind a corporate proxy failed.
+if [[ -n "${MIRRORET_PROXY:-}" ]]; then
+    : "${http_proxy:=${MIRRORET_PROXY}}"
+    : "${https_proxy:=${MIRRORET_PROXY}}"
+fi
+if [[ -n "${MIRRORET_NO_PROXY:-}" ]]; then
+    : "${no_proxy:=${MIRRORET_NO_PROXY}}"
+fi
+# Loopback must never go through the corporate proxy: the npm sync talks to
+# Verdaccio on localhost:4873, approvals publish to it, and nginx proxies to
+# the cache daemon on 127.0.0.1. With a proxy set and no bypass, every one of
+# those was sent to the proxy and failed.
+if [[ -n "${http_proxy:-}${https_proxy:-}" ]]; then
+    case ",${no_proxy:-}," in
+        *,localhost,*|*,127.0.0.1,*) ;;
+        *) no_proxy="${no_proxy:+${no_proxy},}localhost,127.0.0.1,::1" ;;
+    esac
+fi
 for _v in http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY; do
     [[ -n "${!_v:-}" ]] && export "${_v}"
 done

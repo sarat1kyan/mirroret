@@ -212,6 +212,10 @@ rpm_repo_alias() {
                 addons*)                 printf 'addons'    ; return 0 ;;
                 kvm*)                    printf 'kvm'       ; return 0 ;;
             esac
+            # Not in the table: hand back the ol9_-stripped, lower-cased form
+            # so rpm_repo_url sees "developer" rather than "ol9_developer".
+            printf '%s' "$(printf '%s' "${stripped}" | tr '[:upper:]' '[:lower:]')"
+            return 0
             ;;
         rhel)
             # rhel-9-for-x86_64-appstream-rpms -> appstream
@@ -430,12 +434,22 @@ default_rpm_targets() {
 
 MIRRORET_TARGETS_DIR="${MIRRORET_TARGETS_DIR:-/etc/mirroret/targets}"
 
+# _json_str <value> - a JSON string literal with backslashes and quotes
+# escaped. Operator-supplied values (paths, base URLs) are interpolated into
+# the spec; one stray `"` used to make json.load fail for every target.
+_json_str() {
+    local v="${1:-}"
+    v="${v//\\/\\\\}"
+    v="${v//\"/\\\"}"
+    printf '"%s"' "${v}"
+}
+
 _json_str_array() {
     local first=1 item
     printf '['
     for item in "$@"; do
         [[ "${first}" == 1 ]] || printf ', '
-        printf '"%s"' "${item}"
+        _json_str "${item}"
         first=0
     done
     printf ']'
@@ -477,16 +491,42 @@ write_apt_target_spec() {
   "arches": $(_json_str_array "${arches[@]}"),
   "components": $(_json_str_array "${comps[@]}"),
   "keyrings": ${keyrings_json},
-  "require_signature": ${MIRRORET_APT_REQUIRE_SIGNATURE:-false},
-  "sources": $([[ "${MIRRORET_APT_SOURCE:-0}" == "1" ]] && echo true || echo false),
-  "translations": $([[ "${MIRRORET_APT_TRANSLATIONS:-1}" == "1" ]] && echo true || echo false),
-  "dep11": $([[ "${MIRRORET_APT_DEP11:-1}" == "1" ]] && echo true || echo false),
-  "contents": $([[ "${MIRRORET_APT_CONTENTS:-0}" == "1" ]] && echo true || echo false),
-  "delete": $([[ "${MIRRORET_APT_DELETE:-1}" == "1" ]] && echo true || echo false),
-  "min_free_gb": ${MIRRORET_SYNC_MIN_FREE_GB:-10},
+  "require_signature": $(_json_bool "${MIRRORET_APT_REQUIRE_SIGNATURE:-0}"),
+  "sources": $(_json_bool "${MIRRORET_APT_SOURCE:-0}"),
+  "translations": $(_json_bool "${MIRRORET_APT_TRANSLATIONS:-1}"),
+  "languages": $(_json_str_array ${MIRRORET_APT_LANGUAGES:-en}),
+  "dep11": $(_json_bool "${MIRRORET_APT_DEP11:-1}"),
+  "contents": $(_json_bool "${MIRRORET_APT_CONTENTS:-0}"),
+  "delete": $(_json_bool "${MIRRORET_APT_DELETE:-1}"),
+  "metadata_only": $(_json_bool "$([[ "${MIRRORET_APT_MODE:-mirror}" == "hybrid" || "${MIRRORET_APT_MODE:-mirror}" == "cache" ]] && echo 1 || echo 0)"),
+  "min_free_gb": $(_json_number "${MIRRORET_SYNC_MIN_FREE_GB:-10}" 10),
   "suites": [${suites_json}]
 }
 JSON
+}
+
+# _json_bool <value> - "1", "true", "yes", "on" (any case) → true; else false.
+# Every boolean in the spec goes through this so an operator writing
+# MIRRORET_APT_REQUIRE_SIGNATURE=yes gets a valid document rather than a JSON
+# parse error that kills every target's sync.
+_json_bool() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) printf 'true' ;;
+        *)             printf 'false' ;;
+    esac
+}
+
+# _json_number <value> <fallback> - emit <value> if it is a plain number,
+# otherwise <fallback> (and warn). "10G" in the disk floor must not produce
+# `"min_free_gb": 10G`.
+_json_number() {
+    local v="${1:-}" fallback="${2:-0}"
+    if [[ "${v}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        printf '%s' "${v}"
+    else
+        warn "Expected a number, got '${v}' - using ${fallback}." >&2
+        printf '%s' "${fallback}"
+    fi
 }
 
 # write_rpm_target_spec <flavor> <major> <arches...> - print JSON to stdout.
@@ -520,7 +560,7 @@ write_rpm_target_spec() {
             repo="${canon}"
         fi
         [[ -n "${repos_json}" ]] && repos_json+=", "
-        repos_json+="{\"id\": \"${repo}\", \"url\": \"${url}\"}"
+        repos_json+="{\"id\": $(_json_str "${repo}"), \"url\": $(_json_str "${url}")}"
     done
 
     if [[ -z "${repos_json}" ]]; then
@@ -538,10 +578,10 @@ write_rpm_target_spec() {
   "version": "${major}",
   "dest": "${MIRRORET_BASE_DIR}/redhat/mirror/${flavor}/${major}",
   "arches": $(_json_str_array "${arches[@]}"),
-  "newest_only": $([[ "${MIRRORET_RPM_NEWEST_ONLY:-1}" == "1" ]] && echo true || echo false),
-  "sources": $([[ "${MIRRORET_RPM_SOURCE:-0}" == "1" ]] && echo true || echo false),
-  "delete": $([[ "${MIRRORET_RPM_DELETE:-1}" == "1" ]] && echo true || echo false),
-  "min_free_gb": ${MIRRORET_SYNC_MIN_FREE_GB:-10},
+  "newest_only": $(_json_bool "${MIRRORET_RPM_NEWEST_ONLY:-1}"),
+  "sources": $(_json_bool "${MIRRORET_RPM_SOURCE:-0}"),
+  "delete": $(_json_bool "${MIRRORET_RPM_DELETE:-1}"),
+  "min_free_gb": $(_json_number "${MIRRORET_SYNC_MIN_FREE_GB:-10}" 10),
   "repos": [${repos_json}]
 }
 JSON
@@ -603,6 +643,19 @@ generate_target_specs() {
                 continue
             fi
             release="$(apt_codename_for "${flavor}" "${release}")"
+            # archive.ubuntu.com carries only amd64/i386; every other arch
+            # lives on ports.ubuntu.com under the ubuntu-ports flavor. The
+            # wrong pairing 404s on every Packages index and publishes
+            # nothing, so say so now instead of at 02:00.
+            local _a
+            for _a in ${arches}; do
+                case "${flavor}:${_a}" in
+                    ubuntu:arm64|ubuntu:armhf|ubuntu:ppc64el|ubuntu:s390x|ubuntu:riscv64)
+                        warn "Target '${target}': arch ${_a} is not on archive.ubuntu.com - use the ubuntu-ports flavor." ;;
+                    ubuntu-ports:amd64|ubuntu-ports:i386)
+                        warn "Target '${target}': arch ${_a} is not on ports.ubuntu.com - use the ubuntu flavor." ;;
+                esac
+            done
             local spec_name
             spec_name="apt-$(apt_flavor_dir "${flavor}")-${release}.json"
             spec_file="${write_dir}/${spec_name}"
@@ -632,6 +685,10 @@ generate_target_specs() {
                 warn "RPM target '${target}' has no release. Use flavor:major, e.g. ol:9."
                 continue
             fi
+            # RPM repos are keyed on the major only: "ol:9.4" would build
+            # OL9.4/... URLs that do not exist and a redhat/mirror/ol/9.4 tree
+            # the client .repo never points at.
+            release="${release%%.*}"
             if ! rpm_repo_url "${flavor}" "${release}" baseos x86_64 >/dev/null 2>&1 \
                && ! rpm_repo_url "${flavor}" "${release}" everything x86_64 >/dev/null 2>&1; then
                 warn "Unknown RPM flavor '${flavor}' in target '${target}'."

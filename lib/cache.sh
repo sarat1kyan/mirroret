@@ -71,12 +71,19 @@ generate_cache_config() {
         return 0
     fi
 
+    # The same resolution the mirror uses (explicit MIRRORET_APT_TARGETS, or
+    # the host's own distro when unset). Reading the raw variable meant an
+    # Ubuntu host with no explicit targets got a mirror spec but a daemon
+    # with no routes - which crash-looped and 502'd every pool miss.
     local -a targets=()
-    read -r -a targets <<< "${MIRRORET_APT_TARGETS:-}"
+    local _t
+    while read -r _t; do
+        [[ -n "${_t}" ]] && targets+=("${_t}")
+    done < <(resolved_apt_targets)
     if [[ ${#targets[@]} -eq 0 ]]; then
         warn "No APT targets, so the cache has nothing to route."
         warn "Set MIRRORET_APT_TARGETS and re-run with --upgrade."
-        return 0
+        return 1
     fi
 
     mkdir -p "$(dirname "$conf")"
@@ -104,9 +111,9 @@ generate_cache_config() {
     done
 
     if [[ ! -s "$tmp" ]]; then
-        warn "Could not derive any cache routes from MIRRORET_APT_TARGETS."
+        warn "Could not derive any cache routes from the APT targets."
         rm -f "$tmp"
-        return 0
+        return 1
     fi
 
     # Build the JSON with python so quoting and escaping are not our problem.
@@ -231,11 +238,23 @@ configure_cache() {
     validate_cache_mode
     if ! cache_mode_enabled; then
         debug "MIRRORET_APT_MODE=mirror: no cache daemon needed."
+        # Switching back to full-mirror mode must also stop the daemon that
+        # an earlier hybrid/cache install left enabled.
+        if [[ "${DRY_RUN:-0}" != "1" ]] && [[ -f "${MIRRORET_CACHE_UNIT}" ]]; then
+            systemctl disable --now mirroret-cache 2>/dev/null || true
+            info "mirroret-cache disabled (MIRRORET_APT_MODE=mirror)."
+        fi
         return 0
     fi
 
     section "Configuring On-Demand Cache (mode: ${MIRRORET_APT_MODE})"
-    generate_cache_config "${MIRRORET_CACHE_CONFIG}"
+    if ! generate_cache_config "${MIRRORET_CACHE_CONFIG}"; then
+        # No routes means the daemon would die on start-up and restart
+        # every 5 s forever while nginx 502s every pool miss. Better to
+        # leave it uninstalled and say so.
+        warn "Cache daemon not installed: no routes could be generated."
+        return 0
+    fi
     install_cache_service
 
     if [[ "${DRY_RUN:-0}" == "1" ]]; then

@@ -11,6 +11,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # uninstall.sh is the actual remover.
 # shellcheck source=lib/logging.sh
 source "${SCRIPT_DIR}/lib/logging.sh"
+
+# Load the operator's config BEFORE lib/uninstall.sh sets its defaults with
+# ${VAR:-default}, so a custom MIRRORET_BASE_DIR / ports / service users are
+# what gets removed rather than the stock paths.
+MIRRORET_CONF="${MIRRORET_CONF:-/etc/mirroret/mirroret.conf}"
+if [[ -f "${MIRRORET_CONF}" ]]; then
+    # shellcheck source=/dev/null
+    source "${MIRRORET_CONF}"
+    debug "Loaded config: ${MIRRORET_CONF}"
+fi
+
 # shellcheck source=lib/common.sh
 source "${SCRIPT_DIR}/lib/common.sh"
 # shellcheck source=lib/distro.sh

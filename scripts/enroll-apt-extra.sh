@@ -139,12 +139,21 @@ do_rollback() {
         info "restored ${target}"
     done < <(find "$dir" -mindepth 1 \( -type f -o -type l \) -print0)
 
-    # And a corresponding rename-back for any file we suffixed.
+    # And the files we suffixed. The backup restore above has normally put
+    # the original back, in which case the renamed copy is a leftover that
+    # a later re-enrol would suffix a second time - remove it. If the
+    # original is NOT back (older backup), the rename is the restore.
     local renamed
     while IFS= read -r renamed; do
         [[ -z "$renamed" ]] && continue
         local orig="${renamed%.disabled-by-mirroret-extra-${NAME}}"
-        [[ -e "$orig" ]] || run mv "$renamed" "$orig"
+        if [[ -e "$orig" ]]; then
+            run rm -f "$renamed"
+            info "removed leftover $(basename "$renamed")"
+        else
+            run mv "$renamed" "$orig"
+            info "renamed back $(basename "$orig")"
+        fi
     done < <(find /etc/apt/sources.list.d -maxdepth 1 \
                   -name "*.disabled-by-mirroret-extra-${NAME}" 2>/dev/null)
 
@@ -165,7 +174,9 @@ command -v curl >/dev/null 2>&1 || die "curl is not installed."
 BASE_URL="http://${SERVER}:${WEB_PORT}"
 
 step "Reaching the mirror"
-code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+# --noproxy: a corporate http_proxy in the environment must not be asked to
+# reach a LAN mirror it has never heard of.
+code="$(curl -sS -o /dev/null -w '%{http_code}' --noproxy "$SERVER" --max-time 10 \
         "${BASE_URL}/config/extra-${NAME}.list" 2>/dev/null || true)"
 if [[ -z "$code" || "$code" == "000" ]]; then
     die "Cannot reach ${BASE_URL}/config/extra-${NAME}.list" \
@@ -184,7 +195,7 @@ if [[ "$code" != "200" ]]; then
 fi
 ok "config extra-${NAME}.list is published at ${BASE_URL}"
 
-code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+code="$(curl -sS -o /dev/null -w '%{http_code}' --noproxy "$SERVER" --max-time 10 \
         "${BASE_URL}/config/extra-${NAME}.gpg" 2>/dev/null || true)"
 [[ "${code:-000}" == "200" ]] || die \
     "The server does not publish the signing key for '${NAME}' (HTTP ${code:-000})." \
@@ -199,7 +210,7 @@ new_backup
 
 # Key first, so signed-by can verify from the moment the .list lands.
 key_tmp="$(mktemp)"
-curl -fsSL --max-time 30 -o "$key_tmp" "${BASE_URL}/config/extra-${NAME}.gpg" \
+curl -fsSL --noproxy "$SERVER" --max-time 30 -o "$key_tmp" "${BASE_URL}/config/extra-${NAME}.gpg" \
     || die "Could not download the signing key."
 # Prove it is a real keyring before installing it.
 if ! gpg --show-keys --with-colons "$key_tmp" 2>/dev/null | grep -q '^pub:'; then
@@ -215,7 +226,7 @@ ok "installed /usr/share/keyrings/mirroret-${NAME}.gpg"
 # .list. Download to a temp file first, then move: half-written .list files
 # make apt-get update fail hard mid-edit.
 list_tmp="$(mktemp)"
-curl -fsSL --max-time 30 -o "$list_tmp" "${BASE_URL}/config/extra-${NAME}.list" \
+curl -fsSL --noproxy "$SERVER" --max-time 30 -o "$list_tmp" "${BASE_URL}/config/extra-${NAME}.list" \
     || die "Could not download the sources.list."
 save "/etc/apt/sources.list.d/mirroret-${NAME}.list"
 run install -m 0644 "$list_tmp" "/etc/apt/sources.list.d/mirroret-${NAME}.list"
@@ -231,6 +242,9 @@ if [[ "$DISABLE_UPSTREAM" == "1" ]]; then
             [[ -e "$f" ]] || continue
             # Never disable our own file we just wrote.
             [[ "$f" == "/etc/apt/sources.list.d/mirroret-${NAME}.list" ]] && continue
+            # Nor a file a previous run already disabled: a second suffix
+            # makes rollback unable to find it.
+            [[ "$f" == *.disabled-by-mirroret-extra-* ]] && continue
             # Only disable if it actually references the upstream vendor.
             if grep -q 'https\?://[^ ]' "$f" 2>/dev/null && \
                ! grep -q "${SERVER}" "$f" 2>/dev/null; then

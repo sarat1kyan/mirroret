@@ -59,13 +59,28 @@ _tls_generate_self_signed() {
         return 0
     fi
 
+    # SAN: an IP literal must go in an IP: entry and a hostname in a DNS:
+    # entry. openssl rejects "IP:mirror.example.com" outright, and clients
+    # ignore a DNS: entry holding an IP address.
+    local san
+    if [[ "${server_ip}" =~ ^[0-9.]+$ ]]; then
+        san="IP:${server_ip},DNS:localhost"
+    else
+        san="DNS:${server_ip},DNS:localhost"
+    fi
+
     info "Generating 4096-bit self-signed certificate for ${server_ip} (valid 10 yr)."
-    openssl req -x509 -newkey rsa:4096 \
-        -keyout "${key_file}" -out "${cert_file}" \
-        -days 3650 -nodes \
-        -subj "/CN=${server_ip}/O=mirroret" \
-        -addext "subjectAltName=IP:${server_ip},DNS:${server_ip}" \
-        2>/dev/null
+    local openssl_err
+    if ! openssl_err="$(openssl req -x509 -newkey rsa:4096 \
+            -keyout "${key_file}" -out "${cert_file}" \
+            -days 3650 -nodes \
+            -subj "/CN=${server_ip}/O=mirroret" \
+            -addext "subjectAltName=${san}" 2>&1 >/dev/null)"; then
+        error "openssl failed to generate the self-signed certificate:"
+        # Drop the key-generation progress lines (dots/pluses), keep the error.
+        printf '%s\n' "${openssl_err}" | grep -v '^[.+*]*$' >&2 || true
+        die "TLS certificate generation failed (SAN: ${san})."
+    fi
 
     chmod 640 "${cert_file}"
     chmod 600 "${key_file}"

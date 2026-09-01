@@ -117,8 +117,29 @@ def suite_report(suite_dir):
         return {"missing_release": True}
 
     entries = load_release(release)
-    missing, wrong_size, ok = [], [], 0
+
+    # The engine records which Release entries THIS configuration mirrors.
+    # A filtered mirror (amd64 only, no Contents-*, no sources, main +
+    # restricted) legitimately leaves most of Release unmirrored while
+    # republishing the signed Release verbatim - so "every entry must exist"
+    # is the wrong test and flagged every healthy sync. When a manifest is
+    # present, only its entries are required; the rest are reported as
+    # intentionally skipped. Without a manifest (a tree written by an older
+    # engine, or a third-party mirror) fall back to checking everything.
+    manifest_path = os.path.join(suite_dir, ".mirroret-manifest.json")
+    intended = None
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path) as fh:
+                intended = set(json.load(fh).get("entries", []))
+        except (OSError, ValueError):
+            intended = None
+
+    missing, wrong_size, ok, skipped = [], [], 0, 0
     for rel, (_sha, size) in entries.items():
+        if intended is not None and rel not in intended:
+            skipped += 1
+            continue
         # Release always references files under the suite directory.
         target = os.path.join(suite_dir, rel)
         if not os.path.isfile(target):
@@ -132,6 +153,9 @@ def suite_report(suite_dir):
     return {
         "release_file": os.path.basename(release),
         "entries": len(entries),
+        "checked": len(entries) - skipped,
+        "skipped_by_config": skipped,
+        "manifest": intended is not None,
         "ok": ok,
         "missing": missing,
         "wrong_size": wrong_size,
@@ -186,12 +210,16 @@ for r in suites:
         print("  %sFAIL%s  %s: no Release/InRelease found" % (RED, END, tag))
         continue
     if not r["missing"] and not r["wrong_size"]:
-        print("  %sok%s    %s: %d/%d indices present (%s)"
-              % (GREEN, END, tag, r["ok"], r["entries"], r["release_file"]))
+        extra = ""
+        if r.get("skipped_by_config"):
+            extra = ", %d not mirrored by config" % r["skipped_by_config"]
+        print("  %sok%s    %s: %d/%d indices present%s (%s)"
+              % (GREEN, END, tag, r["ok"], r["checked"], extra,
+                 r["release_file"]))
         continue
-    print("  %sFAIL%s  %s: %d missing, %d wrong size (of %d listed)"
+    print("  %sFAIL%s  %s: %d missing, %d wrong size (of %d checked)"
           % (RED, END, tag, len(r["missing"]), len(r["wrong_size"]),
-             r["entries"]))
+             r["checked"]))
     for path in r["missing"][:10]:
         print("        missing: %s" % path)
     if len(r["missing"]) > 10:
@@ -204,7 +232,7 @@ if any_bad:
     print("%sSTOP%s  clients WILL 404 on the paths listed above." % (RED, END))
     print("      This means the mirror published a Release that references")
     print("      files never mirrored. Root-cause the sync log:")
-    print("        sudo mirroretctl logs sync-apt")
+    print("        sudo mirroretctl logs errors")
     print("      Then re-run:")
     print("        sudo mirroretctl sync apt")
     sys.exit(2)

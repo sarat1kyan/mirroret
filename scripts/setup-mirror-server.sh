@@ -117,6 +117,27 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+# -- Install layout ------------------------------------------------------------
+
+# conf_val <KEY> <default> - a value from the operator conf, if it exists.
+# Evaluated in a throwaway shell so a broken conf cannot take us down here;
+# phase 2 reports syntax problems properly.
+conf_val() {
+    local key="$1" def="$2" v=""
+    if [[ -f "$CONF" ]]; then
+        v="$(bash -c "set +u; . '${CONF}' >/dev/null 2>&1; printf '%s' \"\${${key}:-}\"" 2>/dev/null || true)"
+    fi
+    printf '%s' "${v:-$def}"
+}
+
+# Never hardcode /srv/mirroret or the ports: an install with a relocated
+# base dir or moved ports must be detected, sized and firewalled as it is.
+BASE_DIR="$(conf_val MIRRORET_BASE_DIR /srv/mirroret)"
+WEB_PORT="$(conf_val MIRRORET_WEB_PORT 8080)"
+PIP_PORT="$(conf_val MIRRORET_PIP_PORT 8081)"
+NPM_PORT="$(conf_val MIRRORET_NPM_PORT 4873)"
+REG_PORT="$(conf_val MIRRORET_DOCKER_REGISTRY_PORT 5000)"
+
 # -- Output --------------------------------------------------------------------
 
 if [[ -t 1 ]]; then
@@ -312,7 +333,7 @@ phase_preflight() {
     ok "target syntax valid"
 
     # Disk.
-    local base="/srv/mirroret" probe avail
+    local base="${BASE_DIR}" probe avail
     probe="$base"; while [[ ! -d "$probe" && "$probe" != "/" ]]; do probe="$(dirname "$probe")"; done
     avail="$(df -BG --output=avail "$probe" 2>/dev/null | tail -1 | tr -dc '0-9')"
     if [[ -n "$avail" ]]; then
@@ -481,7 +502,7 @@ phase_config() {
     run mkdir -p /etc/mirroret
     if [[ ! -f "$CONF" ]] && [[ -f "${TREE_DIR}/config/mirroret.conf.example" ]]; then
         run install -m 0644 "${TREE_DIR}/config/mirroret.conf.example" "$CONF"
-        ok "seeded ${CONF} from the shipped example"
+        [[ "$DRY_RUN" != 1 ]] && ok "seeded ${CONF} from the shipped example"
     fi
 
     local block
@@ -552,7 +573,7 @@ phase_install() {
     phase 3 "Install / upgrade"
 
     local -a args=()
-    [[ -d /srv/mirroret ]] && args+=(--upgrade)
+    [[ -d "${BASE_DIR}" ]] && args+=(--upgrade)
     args+=(--non-interactive)
     [[ ${#EXTRA_INSTALL_ARGS[@]} -gt 0 ]] && args+=("${EXTRA_INSTALL_ARGS[@]}")
     [[ "$SKIP_FIREWALL" == "1" ]] && args+=(--no-firewall)
@@ -586,9 +607,9 @@ phase_install() {
         if printf '%s' "$preview" | grep -q 'insufficient disk space'; then
             local have floor
             have="$(printf '%s' "$preview" | grep -oE 'space \([0-9]+ GB\)' \
-                    | grep -oE '[0-9]+' | head -1)"
+                    | grep -oE '[0-9]+' | head -1 || true)"
             floor="$(printf '%s' "$preview" | grep -oE 'minimum \([0-9]+ GB\)' \
-                     | grep -oE '[0-9]+' | head -1)"
+                     | grep -oE '[0-9]+' | head -1 || true)"
             gate_fail "install.sh refuses to install: not enough free disk." \
                 "It sees ${have:-?} GB free and wants at least ${floor:-50} GB." \
                 "" \
@@ -657,7 +678,9 @@ phase_install() {
     if ! (cd "$TREE_DIR" && ./mirroretctl targets) >>"$LOG" 2>&1; then
         warn "mirroretctl targets returned non-zero; see ${LOG}"
     fi
-    (cd "$TREE_DIR" && ./mirroretctl targets 2>&1) | sed 's/^/        /'
+    # `|| true`: under pipefail a non-zero `targets` (already reported just
+    # above) would otherwise abort the whole script mid-phase.
+    (cd "$TREE_DIR" && ./mirroretctl targets 2>&1) | sed 's/^/        /' || true
 }
 
 # -- Phase 4: firewall ---------------------------------------------------------
@@ -671,7 +694,7 @@ phase_firewall() {
         return 0
     fi
 
-    local ports=(8080 8081 4873 5000)
+    local ports=("${WEB_PORT}" "${PIP_PORT}" "${NPM_PORT}" "${REG_PORT}")
     if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
         local p
         for p in "${ports[@]}"; do
@@ -696,7 +719,7 @@ phase_firewall() {
         ok "ufw: opened ${ports[*]}${FIREWALL_SOURCE:+ from ${FIREWALL_SOURCE}}"
     else
         warn "no firewalld or ufw detected; open these TCP ports yourself:"
-        info "8080 nginx (APT/RPM)  8081 pip  4873 npm  5000 docker"
+        info "${WEB_PORT} nginx (APT/RPM)  ${PIP_PORT} pip  ${NPM_PORT} npm  ${REG_PORT} docker"
     fi
 }
 
@@ -788,7 +811,7 @@ phase_verify() {
 
     say ""
     info "--- what this server serves"
-    (cd "$TREE_DIR" && ./mirroretctl targets 2>&1) | tee -a "$LOG" | sed 's/^/        /'
+    (cd "$TREE_DIR" && ./mirroretctl targets 2>&1) | tee -a "$LOG" | sed 's/^/        /' || true
 
     say ""
     info "--- HTTP endpoints"
@@ -796,7 +819,7 @@ phase_verify() {
         ok "every endpoint answered"
     else
         warn "at least one endpoint did not answer as expected"
-        (cd "$TREE_DIR" && ./mirroretctl serve 2>&1) | sed 's/^/        /'
+        (cd "$TREE_DIR" && ./mirroretctl serve 2>&1) | sed 's/^/        /' || true
         hard=1
     fi
 
@@ -806,7 +829,7 @@ phase_verify() {
         ok "client configs are consistent with the published mirror"
     else
         warn "client configs advertise something that is not published"
-        (cd "$TREE_DIR" && ./mirroretctl client verify 2>&1) | sed 's/^/        /'
+        (cd "$TREE_DIR" && ./mirroretctl client verify 2>&1) | sed 's/^/        /' || true
         hard=1
     fi
 
@@ -817,7 +840,7 @@ phase_verify() {
             ok "a client can resolve and download from this mirror"
         else
             warn "client simulation failed"
-            (cd "$TREE_DIR" && ./mirroretctl client simulate 2>&1) | tail -20 | sed 's/^/        /'
+            (cd "$TREE_DIR" && ./mirroretctl client simulate 2>&1) | tail -20 | sed 's/^/        /' || true
             hard=1
         fi
     fi
@@ -839,9 +862,12 @@ phase_verify() {
 
 print_summary() {
     local ip
+    # `|| true`: on a host with no generated configs yet (a --dry-run before
+    # the first install) grep matches nothing, and without the guard set -e
+    # would drop the summary entirely.
     ip="$(cd "$TREE_DIR" && ./mirroretctl client list 2>/dev/null \
-          | grep -m1 -oE 'http://[^/]+' | sed 's|http://||')"
-    ip="${ip:-<server-ip>:8080}"
+          | grep -m1 -oE 'http://[^/]+' | sed 's|http://||' || true)"
+    ip="${ip:-<server-ip>:${WEB_PORT}}"
 
     printf '\n%s=== NEXT: POINT THE CLIENTS AT IT ===%s\n\n' "$C_HEAD" "$C_OFF"
     say "On each client, run:"

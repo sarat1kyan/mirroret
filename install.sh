@@ -185,14 +185,38 @@ parse_args() {
         [[ "$_a" == "--config" ]] && { _explicit_config=1; break; }
     done
     if [[ -f /etc/mirroret/mirroret.conf ]] && [[ "${_explicit_config}" == "0" ]]; then
+        # The documented contract is "environment beats config file", so an
+        # operator can run `sudo MIRRORET_ENABLE_NPM=1 ./install.sh --upgrade`
+        # against a wizard-written conf. Sourcing the conf blindly inverted
+        # that: every explicit MIRRORET_* assignment in the file silently
+        # clobbered the shell value. Snapshot the environment first and
+        # re-apply it after.
+        local _env_snapshot
+        _env_snapshot="$(env | grep -E '^MIRRORET_[A-Z0-9_]+=' || true)"
         # shellcheck disable=SC1091
         source /etc/mirroret/mirroret.conf
         info "Loaded config: /etc/mirroret/mirroret.conf (auto)"
+        if [[ -n "${_env_snapshot}" ]]; then
+            local _line _name _value
+            while IFS= read -r _line; do
+                _name="${_line%%=*}"
+                _value="${_line#*=}"
+                printf -v "${_name}" '%s' "${_value}"
+            done <<< "${_env_snapshot}"
+        fi
     fi
+
+    # Every flag that takes a value must actually have one. `--apt-targets`
+    # as the last argument used to die with "$1: unbound variable" instead of
+    # a usage error.
+    _need_val() {
+        [[ $# -ge 2 ]] || die "$1 requires a value. See: $0 --help"
+    }
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --config)
+                _need_val "$@"
                 shift
                 load_config "$1"
                 ;;
@@ -213,6 +237,7 @@ parse_args() {
                 MODE_BACKUP_ONLY=1
                 ;;
             --rollback)
+                _need_val "$@"
                 shift
                 MODE_ROLLBACK="$1"
                 ;;
@@ -246,22 +271,27 @@ parse_args() {
                 warn_insecure "Use only in isolated lab/air-gapped environments."
                 ;;
             --docker-mode)
+                _need_val "$@"
                 shift
                 MIRRORET_DOCKER_MODE="$1"
                 ;;
             --apt-targets)
+                _need_val "$@"
                 shift
                 MIRRORET_APT_TARGETS="$1"
                 ;;
             --rpm-targets)
+                _need_val "$@"
                 shift
                 MIRRORET_RPM_TARGETS="$1"
                 ;;
             --rpm-engine)
+                _need_val "$@"
                 shift
                 MIRRORET_RPM_ENGINE="$1"
                 ;;
             --apt-flavor)
+                _need_val "$@"
                 shift
                 MIRRORET_APT_FLAVOR="$1"
                 ;;
@@ -444,6 +474,11 @@ _on_error() {
     error "Installation failed at line ${line_no} with exit code ${exit_code}."
     error "Log file: ${MIRRORET_LOG_FILE:-/var/log/mirroret-install.log}"
     error "To roll back: $0 --list-backups && $0 --rollback <id>"
+    # A dry run writes its target specs to a scratch dir; the success path
+    # removes it, so a die() must too or every failed dry run leaks one.
+    if [[ -n "${MIRRORET_DRYRUN_TARGETS_DIR:-}" && -d "${MIRRORET_DRYRUN_TARGETS_DIR}" ]]; then
+        rm -rf "${MIRRORET_DRYRUN_TARGETS_DIR}"
+    fi
 }
 trap '_on_error' ERR
 
@@ -486,7 +521,9 @@ install_system_packages() {
 
     if [[ "${DISTRO_TYPE}" == "debian" ]]; then
         # Repair any interrupted dpkg transactions from a previous broken install.
-        DEBIAN_FRONTEND=noninteractive dpkg --configure -a 2>/dev/null || true
+        if [[ "${DRY_RUN}" != "1" ]]; then
+            DEBIAN_FRONTEND=noninteractive dpkg --configure -a 2>/dev/null || true
+        fi
         xrun apt-get update -qq
         # python3-venv is a separate package on Debian/Ubuntu; required for the
         # pypiserver virtualenv fallback when python3-pypiserver is not in repos.
@@ -525,8 +562,12 @@ install_system_packages() {
         local rhel_pkgs=(createrepo_c yum-utils nginx wget curl rsync cronie python3 python3-pip policycoreutils-python-utils)
         xrun ${PKG_MGR_INSTALL} "${rhel_pkgs[@]}"
         # nodejs and npm: in AppStream on RHEL 8/9. RHEL 8 may need the module stream enabled first.
+        # Everything below used to bypass xrun, so `--dry-run` on RHEL really
+        # installed nodejs, npm and podman. Dry run must change nothing.
         if [[ "${MIRRORET_ENABLE_NPM}" == "1" ]]; then
-            if ! ${PKG_MGR_INSTALL} nodejs npm 2>/dev/null; then
+            if [[ "${DRY_RUN}" == "1" ]]; then
+                info "[DRY-RUN] would install: nodejs npm (enabling the AppStream module if needed)"
+            elif ! ${PKG_MGR_INSTALL} nodejs npm 2>/dev/null; then
                 info "nodejs install failed - trying AppStream module enable..."
                 dnf module enable nodejs -y 2>/dev/null || true
                 xrun ${PKG_MGR_INSTALL} nodejs npm
@@ -535,12 +576,16 @@ install_system_packages() {
         if [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]]; then
             # docker-distribution (native registry) is in RHEL 8/Rocky 8 extras.
             # On RHEL 9/Rocky 9 it may not be available - fall back to container backend.
+            if [[ "${DRY_RUN}" == "1" ]]; then
+                info "[DRY-RUN] would install: docker-distribution (or podman as the container backend)"
+            else
             ${PKG_MGR_INSTALL} docker-distribution 2>/dev/null \
                 || warn "docker-distribution not in repos; container backend will be used."
             # Podman is the RHEL-native container runtime (BaseOS on RHEL 8/9).
             # Install as the container backend fallback when docker-distribution is unavailable.
             # This is a no-op on systems that already have Docker or Podman installed.
             ${PKG_MGR_INSTALL} podman 2>/dev/null || true
+            fi
         fi
         xrun systemctl enable --now crond || xrun systemctl enable --now cron || true
     fi
@@ -599,6 +644,29 @@ install_mirror_engines() {
             debug "installed helper: ${aux}"
         fi
     done
+}
+
+# -- CLI on PATH ---------------------------------------------------------------
+# Every hint the tool prints says `sudo mirroretctl ...`, and the uninstaller
+# already removes /usr/local/bin/mirroretctl - but nothing ever created it, so
+# the operator got "command not found" unless they cd'd into the install tree.
+install_cli_symlink() {
+    local target="${SCRIPT_DIR}/mirroretctl"
+    local link="/usr/local/bin/mirroretctl"
+    [[ -f "${target}" ]] || return 0
+    if [[ "${DRY_RUN}" == "1" ]]; then
+        info "[DRY-RUN] would link ${link} -> ${target}"
+        return 0
+    fi
+    # Refuse to clobber a real file that is not ours; a stale symlink from a
+    # previous extract location is exactly what we want to replace.
+    if [[ -e "${link}" && ! -L "${link}" ]]; then
+        warn "${link} exists and is not a symlink - leaving it alone."
+        return 0
+    fi
+    mkdir -p /usr/local/bin
+    ln -sfn "${target}" "${link}"
+    success "mirroretctl available on PATH: ${link}"
 }
 
 # -- Cron setup ----------------------------------------------------------------
@@ -700,6 +768,12 @@ write_master_sync_script() {
         docker_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-docker-images.sh"
     fi
 
+    # pip and npm were the only two steps not gated on their ENABLE flag, so
+    # disabling them in the conf left the nightly sync still running them.
+    local pip_sync_cmd="" npm_sync_cmd=""
+    [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && pip_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
+    [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && npm_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
+
     # We do NOT use 'set -e' for the script body: we WANT the master to
     # run every step even if an earlier one fails, and we exit with the
     # accumulated failure count.
@@ -734,7 +808,11 @@ fi
 exec > >(tee -a "\$LOG_FILE") 2>&1
 trap 'kill -- -\$\$ 2>/dev/null || true' INT TERM
 
-# Abort early rather than letting each child hit the floor separately.
+$(mirroret_script_preamble)
+
+# Abort early rather than letting each child hit the floor separately. This
+# must come AFTER the preamble: cron gives us an empty environment, and the
+# operator's MIRRORET_SYNC_MIN_FREE_GB lives in the conf the preamble sources.
 MIN_FREE_GB="\${MIRRORET_SYNC_MIN_FREE_GB:-10}"
 _free_gb() { df -BG --output=avail "\$BASE_DIR" 2>/dev/null | tail -1 | tr -dc '0-9'; }
 _free="\$(_free_gb)"
@@ -742,8 +820,6 @@ if [[ -n "\$_free" ]] && [[ "\$_free" -lt "\$MIN_FREE_GB" ]]; then
     echo "ABORT: only \${_free} GB free on \${BASE_DIR} (floor: \${MIN_FREE_GB} GB)."
     exit 4
 fi
-
-$(mirroret_script_preamble)
 
 echo "=== Mirroret sync started: \$(date) ==="
 
@@ -771,9 +847,9 @@ _run_step() {
 
 _run_step "apt" "${apt_sync_cmd}"
 _run_step "rpm" "${rpm_sync_cmd}"
-_run_step "pip" "\${BASE_DIR}/scripts/sync-pip-packages.sh"
+_run_step "pip" "${pip_sync_cmd}"
 _run_step "Docker" "${docker_sync_cmd}"
-_run_step "npm" "\${BASE_DIR}/scripts/sync-npm-packages.sh"
+_run_step "npm" "${npm_sync_cmd}"
 
 echo "=== Mirroret sync completed: \$(date) (failures: \${FAILED}) ==="
 exit "\${FAILED}"
@@ -1062,9 +1138,19 @@ print_summary() {
     echo ""
 
     echo "Next steps:"
-    echo " 1. Run initial sync: ${MIRRORET_BASE_DIR}/scripts/sync-all.sh"
-    echo " 2. Verify: $0 --check"
-    echo " 3. Distribute client configs from ${MIRRORET_BASE_DIR}/config/"
+    if [[ "${MIRRORET_APT_MODE:-mirror}" == "mirror" ]]; then
+        echo " 1. First sync (hours for a full mirror - run it in tmux):"
+        echo "      sudo mirroretctl sync apt      # or: sudo mirroretctl sync"
+    else
+        echo " 1. First sync (minutes: ${MIRRORET_APT_MODE} mode fetches indices only):"
+        echo "      sudo mirroretctl sync apt"
+    fi
+    echo " 2. Check the published tree is complete:"
+    echo "      mirroretctl verify"
+    echo " 3. Enrol a client (run ON the client):"
+    echo "      curl -fsSL -o /tmp/s.sh http://${MIRRORET_SERVER_IP}:${MIRRORET_WEB_PORT}/config/setup-mirror-client.sh"
+    echo "      sudo bash /tmp/s.sh --server ${MIRRORET_SERVER_IP}"
+    echo " 4. Anything else: mirroretctl help   (or just: sudo mirroretctl)"
     echo ""
     list_required_ports
 }
@@ -1096,18 +1182,20 @@ main() {
     # Handle non-install modes.
     if [[ "${MODE_CLEANUP}" == "1" ]] || [[ "${MODE_CLEANUP_REPORT}" == "1" ]]; then
         detect_distro
+        local _rc=0
         if [[ "${MODE_CLEANUP_REPORT}" == "1" ]]; then
-            retention_report
+            retention_report || _rc=$?
         else
-            retention_prune
+            retention_prune || _rc=$?
         fi
-        exit $?
+        exit "${_rc}"
     fi
 
     if [[ "${MODE_CHECK}" == "1" ]]; then
         detect_distro
-        run_validation
-        exit $?
+        local _rc=0
+        run_validation || _rc=$?
+        exit "${_rc}"
     fi
 
     if [[ "${MODE_STATUS}" == "1" ]]; then
@@ -1171,6 +1259,17 @@ main() {
     export MIRRORET_SERVER_IP
     info "Server IP: ${MIRRORET_SERVER_IP}"
 
+    # First-run interactive wizard: on a fresh box with nothing preconfigured
+    # and a real TTY, walk the operator through the picks and write the
+    # answers straight to /etc/mirroret/mirroret.conf. It runs BEFORE
+    # preflight and package installation, because its answers change both:
+    # the disk floor depends on mirror vs hybrid mode, the proxy answer is
+    # what lets dnf/apt-get reach a repo at all on a proxied box, and nobody
+    # wants nodejs and podman installed for ecosystems they then decline.
+    if should_run_first_run_wizard; then
+        run_first_run_wizard
+    fi
+
     # Pre-flight checks.
     run_preflight
 
@@ -1197,18 +1296,27 @@ main() {
     # dnf/apt-get with -y on already-installed packages is a slow no-op
     # (and can hit repo issues) - the operator is on the same code path
     # they already installed with, they just want configs refreshed.
+    # The set of enabled components from the LAST run. --upgrade skips
+    # package installation for speed, which is right when nothing changed
+    # but wrong when the operator just flipped MIRRORET_ENABLE_NPM=1 in the
+    # conf: Verdaccio needs nodejs, and the per-module self-install then dies
+    # on a minimal RHEL 9. Compare and install only when a component is new.
+    local components_now components_before=""
+    components_now="apt=${MIRRORET_ENABLE_APT} rpm=${MIRRORET_ENABLE_RPM} pip=${MIRRORET_ENABLE_PIP} npm=${MIRRORET_ENABLE_NPM} docker=${MIRRORET_ENABLE_DOCKER}"
+    [[ -f /etc/mirroret/.components ]] && components_before="$(cat /etc/mirroret/.components 2>/dev/null || true)"
     if [[ "${MODE_UPGRADE}" == "1" ]]; then
-        info "Upgrade mode: skipping system package install."
+        if [[ -n "${components_before}" && "${components_before}" != "${components_now}" ]]; then
+            info "Upgrade mode: component set changed (${components_before} -> ${components_now}); installing packages."
+            install_system_packages
+        else
+            info "Upgrade mode: skipping system package install."
+        fi
     else
         install_system_packages
     fi
-
-    # First-run interactive wizard: on a fresh box with nothing preconfigured
-    # and a real TTY, walk the operator through the picks and write the
-    # answers straight to /etc/mirroret/mirroret.conf. Anything set via env
-    # vars, --yes, or an existing conf skips the wizard.
-    if should_run_first_run_wizard; then
-        run_first_run_wizard
+    if [[ "${DRY_RUN}" != "1" ]]; then
+        mkdir -p /etc/mirroret
+        printf '%s\n' "${components_now}" > /etc/mirroret/.components
     fi
 
     # Seed /etc/mirroret/mirroret.conf from the shipped example on first
@@ -1305,6 +1413,8 @@ main() {
         [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && ports+=("${MIRRORET_NPM_PORT}")
         configure_firewall "${ports[@]}"
     fi
+
+    install_cli_symlink
 
     print_summary
 

@@ -136,8 +136,10 @@ print('ok')"
         source '${SCRIPT_DIR}/lib/distro.sh'
         source '${SCRIPT_DIR}/lib/targets.sh'
         source '${SCRIPT_DIR}/lib/cache.sh'
-        MIRRORET_APT_TARGETS='' generate_cache_config '${TMPDIR_TEST}/none.json'"
-    [ "$status" -eq 0 ]
+        MIRRORET_APT_TARGETS='' OS_ID=rhel generate_cache_config '${TMPDIR_TEST}/none.json'"
+    # Non-zero on purpose: configure_cache uses it to NOT install a daemon
+    # that would crash-loop with no routes.
+    [ "$status" -ne 0 ]
     [[ "$output" == *"nothing to route"* ]]
     [ ! -f "${TMPDIR_TEST}/none.json" ]
 }
@@ -214,10 +216,12 @@ print('ok')"
 @test "sync script: hybrid and cache modes pass --metadata-only" {
     # Without this the sync would download the full pool anyway and the whole
     # point of the mode is lost.
-    grep -q 'MIRRORET_APT_MODE' "${SCRIPT_DIR}/lib/apt.sh"
-    run bash -c "grep -A3 'MIRRORET_APT_MODE:-mirror' '${SCRIPT_DIR}/lib/apt.sh'"
-    [[ "$output" == *"hybrid|cache"* ]]
-    [[ "$output" == *"--metadata-only"* ]]
+    # Decided at GENERATION time via cache_mode_enabled and baked into the
+    # script - not read from the environment at run time, which cron never
+    # has.
+    grep -q 'cache_mode_enabled' "${SCRIPT_DIR}/lib/apt.sh"
+    grep -q 'mode_args=" --metadata-only"' "${SCRIPT_DIR}/lib/apt.sh"
+    grep -q '${spec_args}${mode_args}' "${SCRIPT_DIR}/lib/apt.sh"
 }
 
 # -- systemd ------------------------------------------------------------------

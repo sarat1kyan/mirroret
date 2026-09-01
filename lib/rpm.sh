@@ -311,8 +311,13 @@ REPOS=(${repos})
 _estimate_gb() {
     local repo="\$1" bytes
     command -v dnf >/dev/null 2>&1 || { printf '0'; return 0; }
+    # \${VAR:+x} tests non-empty, not truthy: NEWEST_ONLY=0 used to add the
+    # flag too, so the estimate counted one build per package while reposync
+    # downloaded every build, and the disk guard under-estimated by 10x.
+    local latest_flag=""
+    [[ "\${NEWEST_ONLY:-1}" == "1" ]] && latest_flag="--latest-limit=1"
     bytes="\$(dnf repoquery --repo="\${repo}" --arch="\${ARCH_CSV},noarch" \
-        \${NEWEST_ONLY:+--latest-limit=1} \
+        \${latest_flag} \
         --queryformat='%{downloadsize}\\n' 2>/dev/null \
         | awk '/^[0-9]+\$/ {t+=\$1} END {print t+0}')"
     [[ -z "\$bytes" ]] && bytes=0
@@ -456,11 +461,16 @@ if [[ "\${MIRRORET_SYNC_SMOKE_TEST:-1}" == "1" ]] && command -v dnf >/dev/null 2
     for repo in \${REPOS[@]+"\${REPOS[@]}"}; do
         target="\${REPO_BASE}/\${FLAVOR}/\${RHEL_VER}/\${repo}"
         [[ -d "\${target}/repodata" ]] || continue
-        if dnf --quiet --disablerepo='*' \
+        # Capture, then test. Any "pipe into grep -q" variant closes the pipe
+        # on the first match and dnf dies of SIGPIPE, which pipefail reports
+        # as a failed smoke test on a perfectly good repo. (No backticks in
+        # this comment: inside an unquoted heredoc they would execute.)
+        _smoke_out="\$(dnf --quiet --disablerepo='*' \
                --repofrompath="smoke-\${repo},file://\${target}" \
                --repo="smoke-\${repo}" \
                --setopt=cachedir="\${_tmpcache}" \
-               repoquery --queryformat='%{name}' 2>/dev/null | head -1 | grep -q .; then
+               repoquery --queryformat='%{name}' 2>/dev/null || true)"
+        if [[ -n "\${_smoke_out}" ]]; then
             echo " OK: \${repo} is readable by dnf"
         else
             echo " FAIL: \${repo} repodata is not readable by dnf"
@@ -578,17 +588,26 @@ _rpm_engine_path() {
     echo "${MIRRORET_BASE_DIR}/engines/mirroret_rpm.py"
 }
 
-# _rpm_specs_have_repos - true when every generated RPM spec resolved at
-# least one upstream URL. A spec with an empty repo list means the operator
-# named repo ids the catalog does not know.
+# _rpm_specs_have_repos - true when at least one generated RPM spec resolved
+# an upstream URL.
+#
+# "At least one", not "every": with MIRRORET_RPM_TARGETS="ol:9 epel:9" and a
+# global MIRRORET_RPM_REPOS="baseos appstream", epel resolves zero repos. That
+# used to flip the WHOLE install to reposync, which mirrors the host's own
+# dnf repos - so the ol:9 target the operator asked for was silently never
+# mirrored. An empty spec is now warned about and skipped by the engine.
 _rpm_specs_have_repos() {
-    local sp
+    local sp any=0
     for sp in "${MIRRORET_RPM_SPECS[@]:-}"; do
         [[ -z "${sp}" ]] && continue
-        [[ -f "${sp}" ]] || return 1
-        [[ -n "$(mirroret_json_field "${sp}" repos)" ]] || return 1
+        [[ -f "${sp}" ]] || continue
+        if [[ -n "$(mirroret_json_field "${sp}" repos)" ]]; then
+            any=1
+        else
+            warn "RPM spec $(basename "${sp}") resolved no repos and will be skipped."
+        fi
     done
-    return 0
+    [[ "${any}" == 1 ]]
 }
 
 # _rpm_resolve_engine - print the engine that will actually be used.

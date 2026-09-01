@@ -65,6 +65,15 @@ configure_nginx_unified() {
         npm_serve_dir=""
     fi
 
+    # The three proxied services, as one block so the plain-HTTP listener and
+    # the TLS listener serve the same paths. The TLS block used to get an
+    # empty location list, so Docker clients pointed at https://host:8443/v2/
+    # (the only correct URL when TLS is on) hit a 404.
+    local proxy_locations
+    proxy_locations="$(_nginx_proxy_locations "${pip_port}" "${npm_port}" "${docker_port}")"
+    MIRRORET_NGINX_PROXY_LOCATIONS="${proxy_locations}"
+    export MIRRORET_NGINX_PROXY_LOCATIONS
+
     _write_nginx_config "$backup_id" "$base_dir" "$web_port" \
         "$(cat <<NGINX_EOF
 ${apt_locations}
@@ -81,33 +90,7 @@ ${apt_locations}
         autoindex on;
     }
 
-    # PyPI proxy (pypiserver on ${pip_port})
-    location /pip/ {
-        proxy_pass http://127.0.0.1:${pip_port}/;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_read_timeout 300s;
-    }
-
-    # npm proxy (Verdaccio on ${npm_port})
-    location /npm/ {
-        proxy_pass http://127.0.0.1:${npm_port}/;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_read_timeout 300s;
-    }
-
-    # Docker registry proxy (on ${docker_port})
-    location /v2/ {
-        proxy_pass http://127.0.0.1:${docker_port}/v2/;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        client_max_body_size 0;
-        chunked_transfer_encoding on;
-        proxy_read_timeout 900s;
-    }
+${proxy_locations}
 
     # Approved pip packages (static files when approval workflow is active)
     location /pip-packages/ {
@@ -136,7 +119,7 @@ NGINX_EOF
             if grep -qF '# -- TLS listener' "${conf_file}"; then
                 info "TLS server block already present in ${conf_file} - skipping append."
             else
-                tls_nginx_server_block "" "mirroret-unified" >> "${conf_file}"
+                tls_nginx_server_block "${MIRRORET_NGINX_PROXY_LOCATIONS:-}" "mirroret-unified" >> "${conf_file}"
                 info "TLS server block appended to ${conf_file}"
             fi
             # Same SELinux gotcha applies - an append can carry over the
@@ -151,6 +134,43 @@ NGINX_EOF
             fi
         fi
     fi
+}
+
+# _nginx_proxy_locations <pip_port> <npm_port> <docker_port>
+#
+# The pip / npm / Docker reverse-proxy locations. Emitted once and used by
+# BOTH server blocks (plain :8080 and TLS :8443) so the two never drift.
+_nginx_proxy_locations() {
+    local pip_port="$1" npm_port="$2" docker_port="$3"
+    cat <<PROXY_EOF
+    # PyPI proxy (pypiserver on ${pip_port})
+    location /pip/ {
+        proxy_pass http://127.0.0.1:${pip_port}/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 300s;
+    }
+
+    # npm proxy (Verdaccio on ${npm_port})
+    location /npm/ {
+        proxy_pass http://127.0.0.1:${npm_port}/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_read_timeout 300s;
+    }
+
+    # Docker registry proxy (on ${docker_port})
+    location /v2/ {
+        proxy_pass http://127.0.0.1:${docker_port}/v2/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        client_max_body_size 0;
+        chunked_transfer_encoding on;
+        proxy_read_timeout 900s;
+    }
+PROXY_EOF
 }
 
 # _nginx_apt_locations <base_dir> <legacy_apt_data_path>
@@ -181,8 +201,11 @@ _nginx_apt_locations() {
     if [[ ${#dirs[@]} -eq 0 ]]; then
         # No native targets: serve the legacy single-flavor tree so an
         # existing apt-mirror/debmirror install keeps working after upgrade.
-        printf '    location /ubuntu/ {\n        alias %s/;\n        autoindex on;\n    }\n' \
-            "${legacy_path}"
+        # The prefix follows the legacy flavor (a debmirror of Debian is
+        # published under /debian, and its client .list says so).
+        local legacy_prefix="${MIRRORET_APT_NGINX_PREFIX:-/ubuntu}"
+        printf '    location %s/ {\n        alias %s/;\n        autoindex on;\n    }\n' \
+            "${legacy_prefix%/}" "${legacy_path}"
         return 0
     fi
     # In hybrid/cache mode a path that is not on disk is a cache miss, not a
@@ -193,7 +216,23 @@ _nginx_apt_locations() {
         on_demand=1
     fi
 
+    local proxy_block
+    proxy_block="$(_nginx_cache_proxy_directives)"
+
     for dir in "${dirs[@]}"; do
+        if [[ "${on_demand}" == "1" && "${MIRRORET_APT_MODE:-}" == "cache" ]]; then
+            # Pure cache mode: nothing rewrites dists/ on a schedule, so an
+            # index that nginx served straight off disk would never be
+            # revalidated and clients would be pinned to the day-one
+            # InRelease forever - no security update would ever appear.
+            # Metadata therefore always goes through the daemon, which
+            # applies its TTL and conditional GET. Regex locations take
+            # precedence over the prefix location below, so this wins for
+            # every dists/ path. Only the immutable pool is served off disk.
+            printf '    location ~ ^/%s/dists/ {\n' "${dir}"
+            printf '%s' "${proxy_block}"
+            printf '    }\n'
+        fi
         printf '    location /%s/ {\n' "${dir}"
         if [[ "${on_demand}" == "1" ]]; then
             # `root` rather than `alias`: try_files resolves against the
@@ -212,24 +251,29 @@ _nginx_apt_locations() {
         printf '\n    # Cache miss handler (MIRRORET_APT_MODE=%s).\n' \
             "${MIRRORET_APT_MODE:-mirror}"
         printf '    location @mirroret_cache {\n'
-        printf '        proxy_pass http://127.0.0.1:%s;\n' \
-            "${MIRRORET_CACHE_PORT:-8082}"
-        printf '        proxy_set_header Host $host;\n'
-        # A cold package can be hundreds of megabytes through a slow
-        # corporate proxy and the client is already waiting on it, so nginx
-        # must not time out before the daemon finishes.
-        printf '        proxy_connect_timeout 30s;\n'
-        printf '        proxy_read_timeout 1800s;\n'
-        printf '        proxy_send_timeout 1800s;\n'
-        # Stream through as bytes arrive instead of spooling whole packages
-        # into nginx temp space first.
-        printf '        proxy_buffering off;\n'
-        printf '        proxy_request_buffering off;\n'
+        printf '%s' "${proxy_block}"
         printf '    }\n'
     fi
     # Browsable index of every APT tree at once.
     printf '    location /apt/ {\n        alias %s/apt/;\n        autoindex on;\n    }\n' \
         "${base_dir}"
+}
+
+# _nginx_cache_proxy_directives - the proxy_* lines shared by the cache-miss
+# handler and (in pure cache mode) the metadata location.
+_nginx_cache_proxy_directives() {
+    printf '        proxy_pass http://127.0.0.1:%s;\n' "${MIRRORET_CACHE_PORT:-8082}"
+    printf '        proxy_set_header Host $host;\n'
+    # A cold package can be hundreds of megabytes through a slow corporate
+    # proxy and the client is already waiting on it, so nginx must not time
+    # out before the daemon finishes.
+    printf '        proxy_connect_timeout 30s;\n'
+    printf '        proxy_read_timeout 1800s;\n'
+    printf '        proxy_send_timeout 1800s;\n'
+    # Stream through as bytes arrive instead of spooling whole packages into
+    # nginx temp space first.
+    printf '        proxy_buffering off;\n'
+    printf '        proxy_request_buffering off;\n'
 }
 
 # -- Internal helpers ---------------------------------------------------------
@@ -279,7 +323,7 @@ server {
     # with embedded credentials) and scripts/ (generated sync scripts).
     # The catch-all location below would otherwise serve both to any
     # client that can reach this port.
-    location ~ ^/(logs|scripts|staging)(/|\$) {
+    location ~ ^/(logs|scripts|staging|engines|backups|targets)(/|\$) {
         deny all;
         return 404;
     }

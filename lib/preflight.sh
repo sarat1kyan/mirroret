@@ -106,10 +106,27 @@ _pf_check_disk_space() {
 
     info "Available disk space on ${check_dir}: ${avail_gb} GB"
 
-    if [[ "${MIRRORET_MIN_DISK_GB}" -gt 0 ]] && [[ "$avail_gb" -lt "${MIRRORET_MIN_DISK_GB}" ]]; then
-        warn "Available disk space (${avail_gb} GB) is below minimum (${MIRRORET_MIN_DISK_GB} GB)."
-        warn "A full mirror requires 200-500 GB. Set MIRRORET_MIN_DISK_GB=0 to skip this check."
-        if ! confirm "Continue anyway?"; then
+    # The floor depends on how packages are stored. A full mirror needs
+    # hundreds of GB; hybrid/cache mode needs a few GB of indices plus
+    # whatever the fleet actually installs, so the 50 GB default would
+    # wrongly block exactly the installs designed for small disks.
+    local min_gb="${MIRRORET_MIN_DISK_GB}"
+    case "${MIRRORET_APT_MODE:-mirror}" in
+        hybrid|cache) [[ "${min_gb}" -gt 10 ]] && min_gb=10 ;;
+    esac
+
+    if [[ "${min_gb}" -gt 0 ]] && [[ "$avail_gb" -lt "${min_gb}" ]]; then
+        warn "Available disk space (${avail_gb} GB) is below minimum (${min_gb} GB)."
+        warn "A full mirror requires 200-500 GB; hybrid/cache mode far less."
+        warn "Set MIRRORET_MIN_DISK_GB=0 to skip this check."
+        if [[ "${DRY_RUN:-0}" == "1" ]]; then
+            warn "Dry run: continuing so the rest of the plan can be shown."
+        elif [[ "${MIRRORET_NON_INTERACTIVE:-0}" == "1" ]]; then
+            # Nobody is there to answer. Refusing outright turned every
+            # scripted install on a modest VM into an abort; the sync engines
+            # have their own disk floor and will stop before filling the disk.
+            warn "Non-interactive: continuing. The sync engines enforce their own free-space floor."
+        elif ! confirm "Continue anyway?"; then
             die "Aborted: insufficient disk space."
         fi
     else
@@ -161,18 +178,45 @@ _pf_resolve_one() {
 _pf_check_dns() {
     local hosts=()
 
-    # Pick the hosts we'll actually need based on what's enabled.
-    [[ "${MIRRORET_ENABLE_APT:-1}" == "1" ]] && case "${OS_ID:-}" in
-        debian) hosts+=(deb.debian.org security.debian.org) ;;
-        *) hosts+=(archive.ubuntu.com) ;;
-    esac
-    [[ "${MIRRORET_ENABLE_RPM:-1}" == "1" ]] && case "${OS_ID:-}" in
-        rocky|almalinux) hosts+=(dl.rockylinux.org repo.almalinux.org) ;;
-        rhel) hosts+=(cdn.redhat.com) ;;
-        ol) hosts+=(yum.oracle.com) ;;
-        centos) hosts+=(mirror.stream.centos.org) ;;
-        fedora) hosts+=(dl.fedoraproject.org) ;;
-    esac
+    # Probe the hosts the configured TARGETS need, not the ones this host's
+    # own distro would. A RHEL server mirroring Ubuntu used to probe
+    # cdn.redhat.com and never archive.ubuntu.com - the one host that
+    # actually mattered.
+    local t flavor
+    if [[ "${MIRRORET_ENABLE_APT:-1}" == "1" ]]; then
+        if [[ -n "${MIRRORET_APT_TARGETS:-}" ]]; then
+            for t in ${MIRRORET_APT_TARGETS}; do
+                flavor="${t%%:*}"
+                case "${flavor}" in
+                    ubuntu)       hosts+=(archive.ubuntu.com security.ubuntu.com) ;;
+                    ubuntu-ports) hosts+=(ports.ubuntu.com) ;;
+                    debian)       hosts+=(deb.debian.org) ;;
+                esac
+            done
+        else
+            case "${OS_ID:-}" in
+                debian) hosts+=(deb.debian.org) ;;
+                *)      hosts+=(archive.ubuntu.com) ;;
+            esac
+        fi
+    fi
+    if [[ "${MIRRORET_ENABLE_RPM:-1}" == "1" ]]; then
+        local rpm_flavors="${OS_ID:-}"
+        if [[ -n "${MIRRORET_RPM_TARGETS:-}" ]]; then
+            rpm_flavors=""
+            for t in ${MIRRORET_RPM_TARGETS}; do rpm_flavors+=" ${t%%:*}"; done
+        fi
+        for flavor in ${rpm_flavors}; do
+            case "${flavor}" in
+                rocky)     hosts+=(dl.rockylinux.org) ;;
+                almalinux) hosts+=(repo.almalinux.org) ;;
+                rhel)      hosts+=(cdn.redhat.com) ;;
+                ol)        hosts+=(yum.oracle.com) ;;
+                centos)    hosts+=(mirror.stream.centos.org) ;;
+                epel|fedora) hosts+=(dl.fedoraproject.org) ;;
+            esac
+        done
+    fi
     [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]] && hosts+=(pypi.org files.pythonhosted.org)
     [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && hosts+=(registry-1.docker.io)
     [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]] && hosts+=(registry.npmjs.org)
@@ -239,6 +283,9 @@ _pf_check_port_conflicts() {
     local ports=("${MIRRORET_WEB_PORT:-8080}")
     [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]] && ports+=("${MIRRORET_PIP_PORT:-8081}")
     [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]] && ports+=("${MIRRORET_DOCKER_REGISTRY_PORT:-5000}")
+    case "${MIRRORET_APT_MODE:-mirror}" in
+        hybrid|cache) ports+=("${MIRRORET_CACHE_PORT:-8082}") ;;
+    esac
     [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]] && ports+=("${MIRRORET_NPM_PORT:-4873}")
     [[ "${MIRRORET_TLS_SELF_SIGNED:-0}" == "1" ]] && ports+=("${MIRRORET_TLS_PORT:-8443}")
     [[ -n "${MIRRORET_TLS_CERT:-}" ]] && ports+=("${MIRRORET_TLS_PORT:-8443}")

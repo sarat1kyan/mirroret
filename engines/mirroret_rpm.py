@@ -734,6 +734,13 @@ class RpmRepoMirror(object):
         """
         if not os.path.isdir(self.dest):
             return 0
+        if not packages:
+            # Belt and braces: run() already refuses an empty selection, but
+            # "delete everything not in the empty set" must never be reachable
+            # from any future caller either.
+            log("  prune skipped: no packages listed, nothing can be safely "
+                "identified as obsolete.")
+            return 0
         wanted = set(
             safe_relpath(p.href, self.repo_id) for p in packages
         )
@@ -770,7 +777,26 @@ class RpmRepoMirror(object):
 
     def run(self):
         log("--- repo %s <- %s" % (self.repo_id, self.url))
+        # The repo id becomes a directory name under the target root, and
+        # prune() walks that directory. An empty id resolves to the root and
+        # would prune every sibling repo; '..' or '/' would walk outside it.
+        if (not self.repo_id or "/" in self.repo_id
+                or self.repo_id in (".", "..") or "\x00" in self.repo_id):
+            raise SystemExit(
+                "ERROR: invalid repo id %r - must be a single plain path "
+                "component (e.g. baseos, appstream)." % self.repo_id
+            )
         os.makedirs(self.dest, exist_ok=True)
+        # Crash recovery for the two-step repodata swap in _publish_metadata:
+        # a kill between "rename repodata -> repodata.old" and "rename staging
+        # -> repodata" leaves clients with no repomd.xml at all. If that
+        # happened last time, put the previous metadata back before doing
+        # anything else, so the repo is never left worse than we found it.
+        live = os.path.join(self.dest, "repodata")
+        stale = live + ".old"
+        if not os.path.isdir(live) and os.path.isdir(stale):
+            os.rename(stale, live)
+            log("  recovered repodata from an interrupted previous run")
         staging = tempfile.mkdtemp(prefix=".mirroret-repodata-", dir=self.dest)
         try:
             entries, revision, repomd_raw, asc = self._fetch_repomd()
@@ -778,6 +804,16 @@ class RpmRepoMirror(object):
                                      required=("primary",))
             with open(files["primary"], "rb") as fh:
                 primary_xml = decompress(fh.read(), files["primary"])
+            if "modules" in entries and self.newest_only:
+                # A modular repo (RHEL/Alma/OL AppStream) advertises several
+                # streams of one package name - nodejs:18 and nodejs:20 are
+                # different builds under the same name. Collapsing to the
+                # single newest build would strip every non-default stream's
+                # RPMs while modules.yaml, passed through verbatim, still
+                # advertises them: `dnf module install nodejs:18` then 404s.
+                log("  modular repo (modules.yaml present): newest-only "
+                    "disabled so every module stream stays installable")
+                self.newest_only = False
             packages, seen = self._select(primary_xml)
             # "Filtered" is an observed fact, not a guess from the flags: if
             # every package upstream advertises was selected, upstream's own
@@ -788,8 +824,19 @@ class RpmRepoMirror(object):
                 % (seen, len(packages), ",".join(sorted(self.arches)) or "all",
                    self.newest_only, self.include_source))
             if not packages:
-                log("  WARN: nothing matched the filters. Check "
-                    "MIRRORET_RPM_ARCH against what this repo publishes.")
+                # Never a warning. Publishing an empty primary.xml would
+                # advertise zero packages to every client, and with delete
+                # enabled prune() would then remove every RPM on disk against
+                # an empty wanted-set. Whether upstream is transiently empty or
+                # the arch filter is a typo (x86_64 vs amd64), the safe answer
+                # is to leave the previous metadata and packages untouched.
+                raise SystemExit(
+                    "ERROR: %s: no packages matched arches=%s out of %d "
+                    "upstream. Check MIRRORET_RPM_ARCH against what this repo "
+                    "publishes. Refusing to publish empty metadata."
+                    % (self.repo_id, ",".join(sorted(self.arches)) or "all",
+                       seen)
+                )
 
             if self.filtered:
                 # Only what we can rewrite or pass through. The sqlite *_db
@@ -874,7 +921,9 @@ def run_spec(spec, args):
             log("        subscription-manager, or pass --client-cert/--client-key.")
 
     fetcher = Fetcher(
-        ca_bundle=args.ca_bundle if args.ca_bundle and os.path.exists(args.ca_bundle) else None,
+        # Pass through as given; build_opener reports a missing bundle by
+        # name instead of a per-file CERTIFICATE_VERIFY_FAILED.
+        ca_bundle=args.ca_bundle or None,
         client_cert=cert,
         client_key=key,
         insecure=args.insecure_tls,

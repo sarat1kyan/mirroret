@@ -3,7 +3,7 @@
 #
 # When the operator runs `sudo ./install.sh` on a fresh box with nothing
 # preconfigured (no /etc/mirroret/mirroret.conf, no MIRRORET_APT_TARGETS
-# in env, no --yes), walk them through the setup: what to mirror, which
+# in env, not --non-interactive), walk them through the setup: what to mirror, which
 # arches, proxy, disk floor. Sensible defaults so pressing Enter picks a
 # working configuration.
 #
@@ -69,6 +69,9 @@ _wz_multichoice() {
     local raw
     IFS= read -r raw
     raw="${raw:-$default_idx}"
+    # "1,2" is at least as natural as "1 2"; treat commas as separators
+    # rather than silently matching nothing and disabling the whole family.
+    raw="${raw//,/ }"
     local out=() n
     for n in $raw; do
         [[ "$n" =~ ^[0-9]+$ ]] || continue
@@ -256,8 +259,16 @@ run_first_run_wizard() {
         _wz_prompt "Proxy URL (e.g. http://proxy.example:3128)" ""
         local proxy="$REPLY"
         if [[ -n "$proxy" ]]; then
+            # MIRRORET_PROXY is the operator-facing name; the preamble maps
+            # it onto http_proxy/https_proxy for every tool. Export those now
+            # as well so the REST OF THIS INSTALL (dnf, apt-get, pip) can
+            # reach a repository - the wizard runs before packages install.
             _wz_proxy_line="MIRRORET_PROXY=\"${proxy}\""
             export MIRRORET_PROXY="$proxy"
+            export http_proxy="$proxy" https_proxy="$proxy"
+            export HTTP_PROXY="$proxy" HTTPS_PROXY="$proxy"
+            export no_proxy="${no_proxy:-localhost,127.0.0.1}"
+            export NO_PROXY="$no_proxy"
             # Corporate CONNECT-only proxies won't relay plain HTTP to
             # Ubuntu; force HTTPS so it round-trips as CONNECT :443.
             if _wz_yesno \
@@ -272,6 +283,16 @@ run_first_run_wizard() {
     # 5. Disk floor --------------------------------------------------------
     _wz_prompt "Refuse to start a sync when free disk would drop below (GB)" "15"
     export MIRRORET_SYNC_MIN_FREE_GB="$REPLY"
+
+    # 5b. Sync schedule -----------------------------------------------------
+    # The conf has always carried MIRRORET_SYNC_HOUR; it was just never asked.
+    _wz_prompt "Nightly sync hour (0-23, server local time)" "2"
+    if [[ "$REPLY" =~ ^([0-9]|1[0-9]|2[0-3])$ ]]; then
+        export MIRRORET_SYNC_HOUR="$REPLY"
+    else
+        printf '  %sNot an hour; keeping 2.%s\n' "${_WZ_YEL}" "${_WZ_END}" >&2
+        export MIRRORET_SYNC_HOUR=2
+    fi
 
     # 6. Confirmation & write -----------------------------------------------
     local enabled=""
@@ -307,7 +328,7 @@ run_first_run_wizard() {
 # should_run_first_run_wizard - true when nothing is preconfigured and
 # stdin is a real TTY. Called from install.sh's main().
 should_run_first_run_wizard() {
-    # Never in --upgrade, --yes / non-interactive, or when the config is
+    # Never in --upgrade, --non-interactive, dry-run, or when the config is
     # already there.
     [[ "${MODE_UPGRADE:-0}" == "1" ]] && return 1
     [[ "${MIRRORET_NON_INTERACTIVE:-0}" == "1" ]] && return 1

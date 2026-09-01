@@ -39,6 +39,14 @@ setup_gpg() {
         _gpg_verify_key "${MIRRORET_GPG_KEYID}"
     fi
 
+    # No key found and MIRRORET_GPG_AUTO is off: signing stays disabled.
+    # Say so plainly instead of announcing an empty key as "ready".
+    if [[ -z "${MIRRORET_GPG_KEYID}" ]]; then
+        warn "No GPG key configured - repository signing is disabled."
+        warn "Set MIRRORET_GPG_AUTO=1 (or MIRRORET_GPG_KEYID) and re-run to enable it."
+        return 0
+    fi
+
     _gpg_export_public_key
     export MIRRORET_GPG_KEYID MIRRORET_APT_KEYRING
     success "GPG key ready: ${MIRRORET_GPG_KEYID}"
@@ -141,6 +149,7 @@ write_gpg_client_instructions() {
 #!/usr/bin/env bash
 # Import the mirroret repository GPG public key.
 # Run this once on each client before adding the APT/RPM repository.
+set -euo pipefail
 
 SERVER="http://${server_ip}:${web_port}"
 KEY_URL="\${SERVER}/config/GPG-KEY.asc"
@@ -149,16 +158,26 @@ KEY_URL="\${SERVER}/config/GPG-KEY.asc"
 if command -v apt-get >/dev/null 2>&1; then
     echo "Importing GPG key for APT..."
     mkdir -p /etc/apt/keyrings
-    curl -fsSL "\${KEY_URL}" | gpg --dearmor -o /etc/apt/keyrings/mirroret.gpg
-    chmod 644 /etc/apt/keyrings/mirroret.gpg
-    echo "APT key imported: /etc/apt/keyrings/mirroret.gpg"
+    # --batch --yes: never prompt, overwrite an existing keyring on re-run.
+    if curl -fsSL "\${KEY_URL}" | gpg --batch --yes --dearmor -o /etc/apt/keyrings/mirroret.gpg; then
+        chmod 644 /etc/apt/keyrings/mirroret.gpg
+        echo "APT key imported: /etc/apt/keyrings/mirroret.gpg"
+    else
+        echo "ERROR: could not download or import the key from \${KEY_URL}" >&2
+        rm -f /etc/apt/keyrings/mirroret.gpg
+        exit 1
+    fi
 fi
 
 # RPM (RHEL/Rocky/Alma/CentOS)
 if command -v rpm >/dev/null 2>&1; then
     echo "Importing GPG key for RPM..."
-    rpm --import "\${KEY_URL}"
-    echo "RPM key imported."
+    if rpm --import "\${KEY_URL}"; then
+        echo "RPM key imported."
+    else
+        echo "ERROR: rpm --import failed for \${KEY_URL}" >&2
+        exit 1
+    fi
 fi
 CLIENT_EOF
 

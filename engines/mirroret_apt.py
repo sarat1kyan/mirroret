@@ -73,6 +73,20 @@ COMPRESSION_PREFERENCE = (".xz", ".gz", ".bz2", "")
 _COMPRESSION_PRIORITY = {".xz": 0, ".gz": 1, ".bz2": 2, "": 3}
 
 
+def _safe_archive_relpath(rel):
+    """True if `rel` is a plain relative path that stays inside the archive.
+
+    Both Release entry paths and Packages' Filename fields are joined onto
+    the destination directory and written as root. With an http:// upstream
+    and no local keyring (the normal RHEL case) they are attacker-influenced,
+    so an absolute path or any '..' component is rejected outright rather
+    than trusted.
+    """
+    if not rel or rel.startswith("/") or "\x00" in rel:
+        return False
+    return all(part not in ("", ".", "..") for part in rel.split("/"))
+
+
 def _split_compression(path):
     """Strip a known compression suffix. Returns (base, priority)."""
     for suffix in (".xz", ".gz", ".bz2"):
@@ -456,6 +470,9 @@ class AptMirror(object):
 
         groups = {}  # base -> [(priority, path, algo, digest, size)]
         for path, (algo, digest, size) in release.entries.items():
+            if not _safe_archive_relpath(path):
+                log("  WARN: ignoring suspicious Release entry: %r" % path)
+                continue
             if not self._entry_matches_filters(path):
                 continue
             base, prio = _split_compression(path)
@@ -472,12 +489,14 @@ class AptMirror(object):
                 picked.append((path, algo, digest, size, base))
         return picked
 
-    def _packages_check(self, picked):
-        """Warn (loudly) if any (component, arch) has no Packages index.
+    def _packages_check(self, suite, picked):
+        """Refuse a suite whose selection produced no Packages index at all.
 
-        A missing Packages index is the only class of "missing metadata" that
-        actually breaks package install for clients, so we still call it out
-        even though the new selector no longer builds a hand-typed allowlist.
+        A partial miss (one arch of several not published) is a warning. A
+        total miss is fatal, because it is almost always a configuration typo
+        - MIRRORET_APT_ARCH="x86_64", a capitalised component - and treating
+        it as success would publish a Release with no usable index and, with
+        --delete, prune the entire pool against an empty package list.
         """
         seen = set()
         for path, _algo, _digest, _size, _base in picked:
@@ -489,6 +508,14 @@ class AptMirror(object):
                 if (comp, arch) not in seen:
                     log("  WARN: %s/binary-%s/Packages is not listed in this "
                         "suite's Release" % (comp, arch))
+        if not seen:
+            raise SystemExit(
+                "ERROR: %s: no Packages index matched components=%s arches=%s.\n"
+                "       Check the spelling of MIRRORET_APT_COMPONENTS / arch "
+                "(apt uses amd64, not x86_64). Refusing to publish a suite "
+                "with no package index." % (suite, ",".join(self.components),
+                                           ",".join(self.arches))
+            )
 
     def _fetch_suite_indices(self, suite, base_url, staging):
         """Download+verify one suite's Release and indices into `staging`.
@@ -505,13 +532,15 @@ class AptMirror(object):
             try:
                 data = self.fetcher.get_bytes(join_url(dists, name))
             except FetchError as exc:
-                # InRelease and Release.gpg are both optional on their own:
-                # a modern archive publishes InRelease, an older one
-                # Release + Release.gpg, and a plain internal archive may
-                # publish an unsigned Release. Only "no Release at all" is
-                # fatal, and that is checked after the loop.
+                # Every one of the three is optional on its own: a modern
+                # archive publishes InRelease (many third-party repos publish
+                # ONLY that), an older one Release + Release.gpg, and a plain
+                # internal archive an unsigned Release. Only "no Release at
+                # all" is fatal, and that is checked after the loop.
                 if name in ("InRelease", "Release.gpg"):
                     continue
+                if any(g[0] == "InRelease" for g in got):
+                    continue  # InRelease is enough; apt itself prefers it
                 raise SystemExit(
                     "ERROR: %s: cannot fetch %s (%s).\n"
                     "       Check the suite name and that the upstream host is "
@@ -553,7 +582,7 @@ class AptMirror(object):
         all_variants = self.args.all_index_compressions or self.spec.get(
             "all_index_compressions", False)
         picked = self._select_release_entries(release, all_variants)
-        self._packages_check(picked)
+        self._packages_check(suite, picked)
 
         # Group by base so we can flag the *first* variant of each Packages
         # index for the pool-collection step, exactly like the old code did
@@ -592,6 +621,13 @@ class AptMirror(object):
             for pkg in iter_paragraphs(text, {"Filename", "Size", "SHA256", "MD5sum"}):
                 filename = pkg.get("Filename")
                 if not filename:
+                    continue
+                # Filename is attacker-influenced on an http:// upstream with
+                # no local keyring (the RHEL default). It is joined onto dest
+                # and written as root, so it must stay inside pool/.
+                if not _safe_archive_relpath(filename) or not filename.startswith("pool/"):
+                    log("  WARN: ignoring suspicious Filename in %s: %r"
+                        % (os.path.basename(path), filename))
                     continue
                 if filename in self.wanted:
                     continue
@@ -713,6 +749,10 @@ class AptMirror(object):
         """
         suite_dir = os.path.join(self.dest, "dists", suite)
         release_names = ("InRelease", "Release", "Release.gpg")
+        all_variants = bool(
+            self.args.all_index_compressions
+            or self.spec.get("all_index_compressions", False)
+        )
         ordered = [s for s in staged if s[0] not in release_names]
         ordered += [s for s in staged if s[0] in release_names]
         for rel, src in ordered:
@@ -720,6 +760,39 @@ class AptMirror(object):
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             os.chmod(src, 0o644)
             os.replace(src, dst)
+            # Remove stale sibling compressions of the same index. If a
+            # previous run mirrored Packages.gz and this one picked
+            # Packages.xz, the old .gz is still on disk with bytes the new
+            # Release no longer hashes; a client that prefers .gz (or falls
+            # back to it) gets "Hash Sum mismatch" instead of a clean 404.
+            if all_variants:
+                continue  # every compression is wanted; nothing is stale
+            base, _prio = _split_compression(dst)
+            for suffix in (".xz", ".gz", ".bz2", ""):
+                sibling = base + suffix
+                if sibling != dst and os.path.isfile(sibling):
+                    try:
+                        os.unlink(sibling)
+                    except OSError:
+                        pass
+
+        # Record exactly which Release entries this configuration mirrors.
+        # verify-mirror checks the published tree against THIS list, not
+        # against every entry in Release: a filtered mirror legitimately
+        # skips other arches, Contents-*, sources and other components, and
+        # judging it by the full Release produced a false "clients WILL 404"
+        # on every healthy nightly sync.
+        manifest = {
+            "generated": int(time.time()),
+            "components": self.components,
+            "arches": self.arches,
+            "entries": sorted(rel for rel, _src in ordered),
+        }
+        manifest_tmp = os.path.join(suite_dir, ".mirroret-manifest.json.tmp")
+        with open(manifest_tmp, "w") as fh:
+            json.dump(manifest, fh, indent=1, sort_keys=True)
+        os.chmod(manifest_tmp, 0o644)
+        os.replace(manifest_tmp, os.path.join(suite_dir, ".mirroret-manifest.json"))
         log("  published: dists/%s (%d index files)" % (suite, len(ordered)))
 
     # -- pruning ------------------------------------------------------------
@@ -732,6 +805,14 @@ class AptMirror(object):
         """
         pool_root = os.path.join(self.dest, "pool")
         if not os.path.isdir(pool_root):
+            return 0
+        if not self.wanted:
+            # Every code path that legitimately reaches here has at least one
+            # package listed. An empty wanted-set means something upstream of
+            # us went wrong, and "delete everything not in the empty set" is
+            # the whole archive. Refuse.
+            log("  prune skipped: no packages are listed, so nothing can be "
+                "safely identified as obsolete.")
             return 0
         removed = 0
         freed = 0
@@ -927,7 +1008,10 @@ def main(argv=None):
         specs.append(spec_from_args(args))
 
     fetcher = Fetcher(
-        ca_bundle=args.ca_bundle if args.ca_bundle and os.path.exists(args.ca_bundle) else None,
+        # Pass the path through as given. Silently dropping a missing bundle
+        # left the operator with an opaque CERTIFICATE_VERIFY_FAILED retried
+        # per file; build_opener raises a clear error naming the path.
+        ca_bundle=args.ca_bundle or None,
         insecure=args.insecure_tls,
         retries=args.retries,
         timeout=args.timeout,

@@ -78,7 +78,10 @@ for arg in "$@"; do
         --net|--network) RUN_NET=1 ;;
         --bundle) DO_BUNDLE=1 ;;
         -h|--help)
-            grep '^# ' "$0" | sed 's/^# \?//'
+            # Header block only: every comment line after the shebang, up to
+            # the first non-comment line. A bare grep dumped every comment in
+            # the file.
+            awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"
             exit 0
             ;;
         *)

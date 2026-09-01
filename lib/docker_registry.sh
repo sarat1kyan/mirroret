@@ -53,15 +53,20 @@ _docker_proxy_run_args() {
 }
 
 # _write_service_proxy_dropin <service-name> - write a systemd drop-in that
-# injects proxy env into the given service. No-op if no proxy env is set.
+# injects proxy env (and the corporate CA bundle, when MIRRORET_CA_BUNDLE is
+# set) into the given service. No-op if neither proxy nor CA bundle is set.
 _write_service_proxy_dropin() {
     local svc="$1"
     local http_p="${HTTP_PROXY:-${http_proxy:-}}"
     local https_p="${HTTPS_PROXY:-${https_proxy:-}}"
     local no_p="${NO_PROXY:-${no_proxy:-}}"
+    local ca_bundle=""
+    if [[ -n "${MIRRORET_CA_BUNDLE:-}" ]] && [[ -f "${MIRRORET_CA_BUNDLE}" ]]; then
+        ca_bundle="${MIRRORET_CA_BUNDLE}"
+    fi
 
-    if [[ -z "$http_p" && -z "$https_p" && -z "$no_p" ]]; then
-        debug "No proxy env in installer shell - skipping ${svc} proxy drop-in."
+    if [[ -z "$http_p" && -z "$https_p" && -z "$no_p" && -z "$ca_bundle" ]]; then
+        debug "No proxy env or CA bundle in installer shell - skipping ${svc} proxy drop-in."
         return 0
     fi
 
@@ -82,6 +87,9 @@ _write_service_proxy_dropin() {
                              && printf 'Environment="https_proxy=%s"\n' "$https_p"
         [[ -n "$no_p" ]] && printf 'Environment="NO_PROXY=%s"\n' "$no_p" \
                              && printf 'Environment="no_proxy=%s"\n' "$no_p"
+        # The registry is a Go binary: it honours SSL_CERT_FILE, so this is
+        # how a corporate CA (TLS-intercepting proxy) reaches it.
+        [[ -n "$ca_bundle" ]] && printf 'Environment="SSL_CERT_FILE=%s"\n' "$ca_bundle"
     } > "$file"
     info "Wrote proxy drop-in for ${svc}: ${file}"
 }
@@ -200,15 +208,23 @@ _is_native_registry_available() {
         || dpkg -l "${NATIVE_PKG}" 2>/dev/null | grep -q '^ii'
 }
 
-# _emit_registry_config <path> - write the registry config.yml at <path>.
-# Embeds the proxy block ONLY when MIRRORET_DOCKER_MODE=cache.
+# _emit_registry_config <path> [backend] - write the registry config.yml at
+# <path>. Embeds the proxy block ONLY when MIRRORET_DOCKER_MODE=cache.
+# <backend> is 'native' (default) or 'container'. The container backend
+# bind-mounts ${MIRRORET_BASE_DIR}/docker/registry at /var/lib/registry, so
+# rootdirectory MUST be the in-container path: the host path does not exist
+# inside the container, the registry then writes into the container's
+# writable layer, and every restart (the unit uses --new) wipes the cache.
 _emit_registry_config() {
     local conf_file="$1"
+    local backend="${2:-native}"
     local base_dir="${MIRRORET_BASE_DIR}"
     local registry_port="${MIRRORET_DOCKER_REGISTRY_PORT:-5000}"
     local mode="${MIRRORET_DOCKER_MODE:-cache}"
+    local root_dir="${base_dir}/docker/registry"
+    [[ "${backend}" == "container" ]] && root_dir="/var/lib/registry"
 
-    mkdir -p "$(dirname "${conf_file}")"
+    [[ "${DRY_RUN:-0}" == "1" ]] || mkdir -p "$(dirname "${conf_file}")"
 
     {
         cat <<HEAD
@@ -225,7 +241,7 @@ storage:
   cache:
     blobdescriptor: inmemory
   filesystem:
-    rootdirectory: ${base_dir}/docker/registry
+    rootdirectory: ${root_dir}
 http:
   addr: :${registry_port}
   headers:
@@ -276,7 +292,7 @@ _setup_native_registry() {
     fi
 
     mkdir -p "${NATIVE_CONF_DIR}" "${MIRRORET_BASE_DIR}/docker/registry"
-    _emit_registry_config "${NATIVE_CONF_FILE}"
+    _emit_registry_config "${NATIVE_CONF_FILE}" native
 
     # Native services run under systemd with a minimal env - they won't
     # inherit the operator's shell HTTP_PROXY. Drop in an Environment
@@ -306,7 +322,7 @@ _setup_container_registry() {
     fi
 
     mkdir -p /etc/docker/registry "${base_dir}/docker/registry"
-    _emit_registry_config "/etc/docker/registry/config.yml"
+    _emit_registry_config "/etc/docker/registry/config.yml" container
 
     if _container_is_running "${MIRRORET_DOCKER_CONTAINER_NAME}"; then
         info "Registry container already running. Restarting to pick up config changes."
@@ -322,14 +338,24 @@ _setup_container_registry() {
         local proxy_args
         proxy_args="$(_docker_proxy_run_args)"
         [[ -n "${proxy_args}" ]] && info "Passing proxy env into container: ${proxy_args}"
+        # Corporate CA bundle: mount it and point Go's TLS stack at it, or a
+        # TLS-intercepting proxy makes every upstream pull fail with x509.
+        local -a ca_args=()
+        if [[ -n "${MIRRORET_CA_BUNDLE:-}" ]] && [[ -f "${MIRRORET_CA_BUNDLE}" ]]; then
+            ca_args=(-v "${MIRRORET_CA_BUNDLE}:/etc/ssl/certs/mirroret-ca.pem:ro,z"
+                     -e SSL_CERT_FILE=/etc/ssl/certs/mirroret-ca.pem)
+            info "Mounting CA bundle into container: ${MIRRORET_CA_BUNDLE}"
+        fi
+        # :z relabels the bind mounts for SELinux hosts (no-op elsewhere).
         # shellcheck disable=SC2086 # proxy_args must be word-split into -e/name/value triples
         xrun "${CONTAINER_CMD}" run -d \
             --name "${MIRRORET_DOCKER_CONTAINER_NAME}" \
             --restart=always \
             -p "${registry_port}:${registry_port}" \
-            -v "${base_dir}/docker/registry:/var/lib/registry" \
-            -v "/etc/docker/registry/config.yml:/etc/docker/registry/config.yml:ro" \
+            -v "${base_dir}/docker/registry:/var/lib/registry:z" \
+            -v "/etc/docker/registry/config.yml:/etc/docker/registry/config.yml:ro,z" \
             ${proxy_args} \
+            ${ca_args[@]+"${ca_args[@]}"} \
             registry:2
     fi
 
@@ -434,48 +460,73 @@ generate_docker_client_config() {
         return 0
     fi
 
-    # registry-mirrors is the right field for cache (pull-through) mode;
-    # in hosted mode clients pull explicitly from <server>:<port>/<image>,
-    # so we emit a comment rather than misconfiguring the daemon.
-    local registry_url scheme="https"
-    [[ "${insecure}" == "1" ]] && scheme="http"
-    registry_url="${scheme}://${server_ip}:${registry_port}"
+    # dockerd rejects unknown keys in daemon.json (it refuses to start), so
+    # the file may only ever contain real keys: registry-mirrors and
+    # insecure-registries. Explanations go to the log, never into the JSON.
+    #
+    # The registry itself speaks plain HTTP on ${registry_port}. An https://
+    # URL is only correct when TLS is set up, and then it must point at the
+    # nginx TLS listener (MIRRORET_TLS_PORT), not at the registry port.
+    # Without TLS the only working config is http:// plus insecure-registries
+    # - dockerd refuses an http mirror that is not listed there.
+    local tls_port="${MIRRORET_TLS_PORT:-8443}"
+    local tls_ready=0
+    if declare -f is_tls_ready >/dev/null 2>&1 && is_tls_ready; then
+        tls_ready=1
+    fi
+
+    local registry_url registry_host_port
+    if [[ "${insecure}" != "1" && "${tls_ready}" == "1" ]]; then
+        registry_url="https://${server_ip}:${tls_port}"
+        registry_host_port="${server_ip}:${tls_port}"
+    else
+        registry_url="http://${server_ip}:${registry_port}"
+        registry_host_port="${server_ip}:${registry_port}"
+        if [[ "${insecure}" == "1" ]]; then
+            warn_insecure "Docker client config: insecure-registries enabled for ${registry_host_port}"
+        else
+            warn "Docker client config: TLS is not configured, so the registry is reachable"
+            warn "  over plain HTTP only. dockerd refuses an http:// registry unless it is"
+            warn "  listed in insecure-registries, so ${registry_host_port} is listed there."
+            warn "  Set up TLS (MIRRORET_TLS_SELF_SIGNED=1 or MIRRORET_TLS_CERT/KEY) and"
+            warn "  re-run to get an https:// client config. See docs/SECURITY.md."
+        fi
+    fi
 
     if [[ "${mode}" == "cache" ]]; then
-        if [[ "${insecure}" == "1" ]]; then
-            warn_insecure "Docker client config: insecure-registries enabled for ${server_ip}:${registry_port}"
-            cat > "$output_file" <<DOCKER_EOF
-{
-  "registry-mirrors": ["${registry_url}"],
-  "insecure-registries": ["${server_ip}:${registry_port}"]
-}
-DOCKER_EOF
-        else
+        if [[ "${insecure}" != "1" && "${tls_ready}" == "1" ]]; then
             cat > "$output_file" <<DOCKER_EOF
 {
   "registry-mirrors": ["${registry_url}"]
 }
 DOCKER_EOF
-            info "Docker client config: TLS mode. Ensure a valid certificate is configured on the server."
-            info "See docs/SECURITY.md for TLS setup."
-        fi
-    else
-        if [[ "${insecure}" == "1" ]]; then
-            warn_insecure "Docker client config: insecure-registries enabled for ${server_ip}:${registry_port}"
+            info "Docker client config: TLS mode via ${registry_url} (nginx TLS listener)."
+            info "Clients must trust the server certificate. See docs/SECURITY.md."
+        else
             cat > "$output_file" <<DOCKER_EOF
 {
-  "_comment": "Hosted-mode mirror: pull with docker pull ${server_ip}:${registry_port}/<image>",
-  "insecure-registries": ["${server_ip}:${registry_port}"]
+  "registry-mirrors": ["${registry_url}"],
+  "insecure-registries": ["${registry_host_port}"]
 }
+DOCKER_EOF
+        fi
+    else
+        # Hosted mode: no registry-mirrors. Clients pull explicitly from
+        # <server>:<port>/<image>; the daemon only needs to know whether that
+        # endpoint is plain HTTP.
+        if [[ "${insecure}" != "1" && "${tls_ready}" == "1" ]]; then
+            cat > "$output_file" <<DOCKER_EOF
+{}
 DOCKER_EOF
         else
             cat > "$output_file" <<DOCKER_EOF
 {
-  "_comment": "Hosted-mode mirror: pull with docker pull ${server_ip}:${registry_port}/<image>"
+  "insecure-registries": ["${registry_host_port}"]
 }
 DOCKER_EOF
-            info "Docker client config: hosted mode. Pull explicitly with docker pull ${server_ip}:${registry_port}/<image>."
         fi
+        info "Docker client config: hosted mode. Pull explicitly with:"
+        info "  docker pull ${registry_host_port}/<image>"
     fi
 
     success "Docker client config written: ${output_file}"
@@ -490,7 +541,6 @@ write_docker_sync_script() {
     local output_file="$1"
     local base_dir="${MIRRORET_BASE_DIR}"
     local registry_port="${MIRRORET_DOCKER_REGISTRY_PORT:-5000}"
-    local runtime="${CONTAINER_CMD:-docker}"
     local images_file="${MIRRORET_DOCKER_IMAGES_FILE:-}"
     local min_free_gb="${MIRRORET_SYNC_MIN_FREE_GB:-10}"
     local pull_timeout="${MIRRORET_DOCKER_PULL_TIMEOUT:-30m}"
@@ -546,7 +596,6 @@ ${MIRRORET_MANAGED_MARKER}
 # mode registries reject pushes.
 
 LOCAL_REGISTRY="localhost:${registry_port}"
-CONTAINER_CMD="${runtime}"
 LOG_DIR="${base_dir}/logs"
 LOG_FILE="\${LOG_DIR}/sync-docker-\$(date +%Y%m%d-%H%M%S).log"
 MIN_FREE_GB="${min_free_gb}"
@@ -588,10 +637,31 @@ _check_disk || exit 4
 
 echo "Starting Docker image sync: \$(date)"
 
-if ! command -v "\${CONTAINER_CMD}" >/dev/null 2>&1; then
-    echo "ERROR: container runtime '\${CONTAINER_CMD}' not found on this host."
+# Detect the container runtime at RUN time, not at generation time: the
+# runtime present when install.sh ran may since have been replaced (e.g.
+# docker removed in favour of podman) and a baked-in name then breaks every
+# nightly run. Podman is preferred because the podman-docker shim also
+# provides a 'docker' command.
+CONTAINER_CMD=""
+for c in podman docker; do
+    if command -v "\$c" >/dev/null 2>&1; then
+        CONTAINER_CMD="\$c"
+        break
+    fi
+done
+if [[ -z "\${CONTAINER_CMD}" ]]; then
+    echo "ERROR: no container runtime found on this host (need podman or docker)."
     echo "Install docker or podman, or set MIRRORET_DOCKER_MODE=cache to disable pre-seed."
     exit 2
+fi
+echo "Container runtime: \${CONTAINER_CMD}"
+
+# The local registry speaks plain HTTP. Docker treats localhost registries as
+# insecure automatically; podman does not and fails the push with
+# "http: server gave HTTP response to HTTPS client" unless told otherwise.
+PUSH_ARGS=()
+if [[ "\${CONTAINER_CMD}" == "podman" ]]; then
+    PUSH_ARGS=(--tls-verify=false)
 fi
 
 IMAGES=(
@@ -616,7 +686,7 @@ for image in "\${IMAGES[@]}"; do
         failed=\$(( failed + 1 ))
         continue
     fi
-    if ! "\${CONTAINER_CMD}" push "\${LOCAL_REGISTRY}/\${image}"; then
+    if ! "\${CONTAINER_CMD}" push \${PUSH_ARGS[@]+"\${PUSH_ARGS[@]}"} "\${LOCAL_REGISTRY}/\${image}"; then
         echo " PUSH FAILED: \${image}"
         failed=\$(( failed + 1 ))
         continue

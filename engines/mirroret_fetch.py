@@ -20,6 +20,8 @@ Everything here is deliberately conservative:
 
 import gzip
 import hashlib
+import http.client
+import socket
 import lzma
 import os
 import shutil
@@ -55,6 +57,27 @@ class FetchError(Exception):
 
 class VerifyError(Exception):
     """Raised when downloaded bytes do not match the advertised checksum."""
+
+
+class TransferError(FetchError):
+    """The connection opened fine but died mid-body. Retryable."""
+
+
+# What a proxy or flaky link can throw out of resp.read() after a successful
+# open. IncompleteRead (chunked truncation) is an HTTPException, not an
+# OSError, which is why it has to be listed explicitly.
+_TRANSFER_ERRORS = (OSError, http.client.HTTPException)
+
+# createrepo emitted type="sha" for years to mean SHA-1; hashlib does not
+# know that name and hashlib.new("sha") raises ValueError.
+_ALGO_ALIASES = {"sha": "sha1", "sha-1": "sha1", "sha-256": "sha256",
+                 "sha-512": "sha512", "md5sum": "md5"}
+
+
+def normalize_algo(algo: Optional[str]) -> str:
+    """Map repository checksum type names onto hashlib names."""
+    name = (algo or "sha256").strip().lower()
+    return _ALGO_ALIASES.get(name, name)
 
 
 def log(msg: str) -> None:
@@ -152,10 +175,24 @@ class Fetcher:
             except urllib.error.HTTPError as exc:
                 # 4xx other than 408/429 will not get better by retrying.
                 if exc.code not in (408, 429) and 400 <= exc.code < 500:
+                    exc.close()
                     raise FetchError(url, f"HTTP {exc.code}", exc.code) from exc
+                # A 5xx HTTPError is also a live response object; close it or
+                # every retry leaks a socket until the run ends.
+                exc.close()
                 last = exc
             except urllib.error.URLError as exc:
+                # Some failures are deterministic and retrying them only turns
+                # one clear error into minutes of backoff per file: a CA the
+                # bundle does not trust, or a hostname that does not resolve.
+                reason = getattr(exc, "reason", None)
+                if isinstance(reason, (ssl.SSLCertVerificationError, socket.gaierror)):
+                    raise FetchError(url, f"{type(reason).__name__}: {reason}") from exc
                 last = exc
+            except ssl.SSLCertVerificationError as exc:
+                raise FetchError(url, f"SSLCertVerificationError: {exc}") from exc
+            except socket.gaierror as exc:
+                raise FetchError(url, f"gaierror: {exc}") from exc
             except (TimeoutError, OSError) as exc:
                 last = exc
             if attempt + 1 < self.retries:
@@ -164,11 +201,24 @@ class Fetcher:
         raise FetchError(url, f"{type(last).__name__}: {last}", status)
 
     def get_bytes(self, url: str, max_bytes: Optional[int] = None) -> bytes:
-        """Retrieve a (small) URL fully into memory. For metadata only."""
-        with self._open(url) as resp:
-            data = resp.read(max_bytes) if max_bytes else resp.read()
-        self.bytes_downloaded += len(data)
-        return data
+        """Retrieve a (small) URL fully into memory. For metadata only.
+
+        The read is retried like the connect: a proxy resetting the
+        connection halfway through InRelease must not take the whole run
+        down with a raw ConnectionResetError.
+        """
+        last: Optional[Exception] = None
+        for attempt in range(self.retries):
+            try:
+                with self._open(url) as resp:
+                    data = resp.read(max_bytes) if max_bytes else resp.read()
+                self.bytes_downloaded += len(data)
+                return data
+            except _TRANSFER_ERRORS as exc:
+                last = exc
+                if attempt + 1 < self.retries:
+                    time.sleep(self.backoff * (2**attempt))
+        raise FetchError(url, f"{type(last).__name__}: {last}")
 
     def exists(self, url: str) -> bool:
         try:
@@ -202,7 +252,11 @@ class Fetcher:
         for attempt in range(self.retries):
             try:
                 return self._download_once(url, dest, checksum, algo, size, mode)
-            except VerifyError as exc:
+            except (VerifyError, TransferError) as exc:
+                # Both are "the bytes we got were wrong or incomplete": a
+                # fresh attempt is the right response. A FetchError from
+                # _open (404, bad certificate, DNS) has already been retried
+                # where it makes sense and propagates untouched.
                 last = exc
                 if attempt + 1 < self.retries:
                     time.sleep(self.backoff * (2**attempt))
@@ -210,7 +264,13 @@ class Fetcher:
 
     def _download_once(self, url, dest, checksum, algo, size, mode):
         tmp = "%s.mirroret-tmp.%d" % (dest, os.getpid())
-        digest = hashlib.new(algo) if checksum else None
+        algo = normalize_algo(algo)
+        try:
+            digest = hashlib.new(algo) if checksum else None
+        except ValueError:
+            raise FetchError(
+                url, "unsupported checksum algorithm %r in repository metadata" % algo
+            )
         written = 0
         # When the expected size is known, stop reading once it is exceeded.
         # A server that keeps streaming past its declared Content-Length -
@@ -219,20 +279,30 @@ class Fetcher:
         # oversize read is then caught by the size check below.
         limit = None if size is None else size + 1
         try:
-            with self._open(url) as resp, open(tmp, "wb") as fh:
-                while True:
-                    chunk = resp.read(1 << 16)
-                    if not chunk:
-                        break
-                    fh.write(chunk)
-                    written += len(chunk)
-                    if digest is not None:
-                        digest.update(chunk)
-                    if limit is not None and written > limit:
-                        raise VerifyError(
-                            "%s: server sent more than the advertised %d bytes"
-                            % (url, size)
-                        )
+            try:
+                with self._open(url) as resp, open(tmp, "wb") as fh:
+                    while True:
+                        chunk = resp.read(1 << 16)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        written += len(chunk)
+                        if digest is not None:
+                            digest.update(chunk)
+                        if limit is not None and written > limit:
+                            raise VerifyError(
+                                "%s: server sent more than the advertised %d bytes"
+                                % (url, size)
+                            )
+            except FetchError:
+                raise  # _open already classified it; do not re-wrap
+            except _TRANSFER_ERRORS as exc:
+                # Connection reset, read timeout, chunked truncation: the
+                # transport died after a good open. Retryable, and it must
+                # never surface as a raw exception - inside a worker pool
+                # that would stall the whole run until every queued
+                # download finished, then crash it.
+                raise TransferError(url, "%s: %s" % (type(exc).__name__, exc)) from exc
             if size is not None and written != size:
                 raise VerifyError(
                     "%s: size mismatch (expected %d, got %d)"
@@ -259,7 +329,7 @@ class Fetcher:
 
 
 def file_digest(path: str, algo: str = "sha256") -> str:
-    h = hashlib.new(algo)
+    h = hashlib.new(normalize_algo(algo))
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
@@ -283,7 +353,10 @@ def file_matches(path: str, checksum: Optional[str], algo: str, size: Optional[i
     if checksum:
         try:
             return file_digest(path, algo).lower() == checksum.lower()
-        except OSError:
+        except (OSError, ValueError):
+            # ValueError: an algorithm hashlib does not know. Treat the file
+            # as not matching so it is re-fetched (and the fetch reports the
+            # unsupported algorithm clearly) rather than crashing the run.
             return False
     return size is not None
 
