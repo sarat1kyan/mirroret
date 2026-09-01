@@ -1,491 +1,260 @@
-# Operations Guide
+# Operations
 
-## Daily operations
-
-### Check system status
+## Status and logs
 
 ```bash
-sudo ./install.sh --status
+mirroretctl status                  # services, ports, disk, last sync, cron
+mirroretctl service list            # unit states
+mirroretctl logs list|tail|show|errors
+mirroretctl sync status             # running syncs, lock state
+mirroretctl sync last               # last line of each newest sync log
 ```
 
-### Check individual service health
+Units: `nginx`, `pypiserver`, `verdaccio`, `mirroret-cache` (hybrid/cache
+mode), and one of `docker-distribution` (RHEL native), `docker-registry`
+(Debian native) or the `mirroret-registry` container/podman unit.
 
 ```bash
-# All services at once:
-systemctl status nginx pypiserver verdaccio
-
-# Native Docker registry (RHEL):
-systemctl status docker-distribution
-
-# Native Docker registry (Debian):
-systemctl status docker-registry
-
-# Container-based registry:
-docker ps --filter name=mirroret-registry
-```
-
-### View recent logs
-
-```bash
-# nginx access log:
+journalctl -u pypiserver -u verdaccio -u mirroret-cache -n 50 --no-pager
 tail -f /var/log/nginx/mirroret-unified-access.log
-
-# nginx TLS access log (when TLS is enabled):
-tail -f /var/log/nginx/mirroret-unified-tls-access.log
-
-# pypiserver:
-journalctl -u pypiserver -n 50 --no-pager
-
-# Verdaccio:
-journalctl -u verdaccio -n 50 --no-pager
-
-# Sync logs:
-ls -lth /srv/mirroret/logs/ | head -20
-tail -f /srv/mirroret/logs/sync-pip-*.log
+ls -lth /srv/mirroret/logs/ | head          # one file per sync run
 ```
 
 ---
 
-## Sync operations
-
-### Sync all repositories (cron also runs this daily)
+## Sync
 
 ```bash
-sudo /srv/mirroret/scripts/sync-all.sh
+sudo mirroretctl sync all           # = /srv/mirroret/scripts/sync-all.sh (what cron runs)
+sudo mirroretctl sync apt
+sudo mirroretctl sync rpm
+sudo mirroretctl sync pip
+sudo mirroretctl sync npm
+sudo mirroretctl sync docker        # hosted mode only
+sudo mirroretctl sync stop
 ```
 
-`sync-all.sh` calls the correct per-tool script for each component. The APT
-sync command inside `sync-all.sh` is automatically set to the right binary when
-`install.sh` runs:
+Each ecosystem has a generated script under `/srv/mirroret/scripts/`
+(`sync-apt-repos.sh`, `sync-rpm-repos.sh`, `sync-pip-packages.sh`,
+`sync-npm-packages.sh`, `sync-docker-images.sh`); `mirroretctl sync` runs
+them. Each takes a lock in `/var/lock/mirroret-sync-*.lock`, writes a
+timestamped log, runs under `nice`/`ionice`, is capped by
+`MIRRORET_SYNC_TIMEOUT`, and re-reads `/etc/mirroret/mirroret.conf` on every
+run (proxy, CA, disk floor).
 
-- `apt-mirror` selected -> calls `/usr/bin/apt-mirror`
-- `apt-mirror2` selected -> calls `/usr/local/bin/apt-mirror2`
-- `debmirror` selected -> calls `/srv/mirroret/scripts/sync-apt-debmirror.sh`
+The APT script ends with `verify-mirror.sh`; run it any time with
+`mirroretctl verify [--flavor F] [--suite S] [--json]`.
 
-To see which tool was selected, check the first line of the APT section:
+Hybrid/cache mode: `sudo mirroretctl sync apt` refreshes indices only;
+packages arrive on demand. `mirroretctl cache status|routes|size` and
+`sudo mirroretctl cache gc` operate the daemon ([CACHE.md](CACHE.md)).
+
+### Schedule
+
+`install.sh` writes a managed block into root's crontab:
+
+```
+# >>> mirroret managed (do not edit between markers) >>>
+0 2 * * *   /srv/mirroret/scripts/sync-all.sh
+0 3 * * 0   /srv/mirroret/scripts/cleanup-all.sh
+# <<< mirroret managed <<<
+```
+
+Change it with `MIRRORET_SYNC_HOUR`, `MIRRORET_CLEANUP_HOUR`,
+`MIRRORET_CLEANUP_DOW` in the conf, then `sudo mirroretctl upgrade`. Hand
+edits between the markers are replaced on the next upgrade.
+
+### Package lists for pip / npm / Docker
 
 ```bash
-grep "_run_step.*apt" /srv/mirroret/scripts/sync-all.sh
+sudo tee /etc/mirroret/pip-packages.txt <<'EOF2'
+requests
+flask
+EOF2
+# in /etc/mirroret/mirroret.conf:
+#   MIRRORET_PIP_PACKAGES_FILE=/etc/mirroret/pip-packages.txt
+#   MIRRORET_NPM_PACKAGES_FILE=/etc/mirroret/npm-packages.txt
+#   MIRRORET_DOCKER_IMAGES_FILE=/etc/mirroret/docker-images.txt   (hosted mode)
+sudo mirroretctl upgrade
 ```
 
-### Sync individual repositories
-
-```bash
-# APT (Ubuntu/Debian) - the correct tool is called by sync-all.sh.
-# To run manually, check which tool is configured:
-grep "_run_step.*apt" /srv/mirroret/scripts/sync-all.sh | awk '{print $2}'
-# Then call that script or binary directly.
-
-# With debmirror:
-sudo /srv/mirroret/scripts/sync-apt-debmirror.sh
-
-# With apt-mirror or apt-mirror2:
-sudo /usr/bin/apt-mirror
-# or:
-sudo /usr/local/bin/apt-mirror2
-
-# RHEL/CentOS RPM:
-sudo /srv/mirroret/scripts/sync-redhat-repos.sh
-
-# pip packages:
-sudo /srv/mirroret/scripts/sync-pip-packages.sh
-
-# Docker images:
-sudo /srv/mirroret/scripts/sync-docker-images.sh
-
-# npm packages:
-sudo /srv/mirroret/scripts/sync-npm-packages.sh
-```
-
-### Customise the package list
-
-**Option A - edit the generated sync script directly (changes may be overwritten on reinstall):**
-
-```bash
-sudo nano /srv/mirroret/scripts/sync-pip-packages.sh
-# Edit the PACKAGES array.
-
-sudo nano /srv/mirroret/scripts/sync-docker-images.sh
-# Edit the IMAGES array.
-
-sudo nano /srv/mirroret/scripts/sync-npm-packages.sh
-# Edit the PACKAGES array.
-```
-
-**Option B - supply a package list file that persists across reinstalls:**
-
-```bash
-# Docker images:
-cat > /etc/mirroret/docker-images.txt <<'EOF'
-ubuntu:22.04
-debian:12
-nginx:stable
-# comment lines start with #
-myregistry.example/app:latest
-EOF
-sudo MIRRORET_DOCKER_IMAGES_FILE=/etc/mirroret/docker-images.txt ./install.sh
-
-# npm packages:
-cat > /etc/mirroret/npm-packages.txt <<'EOF'
-express
-lodash
-typescript
-EOF
-sudo MIRRORET_NPM_PACKAGES_FILE=/etc/mirroret/npm-packages.txt ./install.sh
-```
+Editing the generated scripts directly works only if you remove their
+`mirroret-managed` marker line, after which upgrades leave them alone
+([RETENTION.md](RETENTION.md)).
 
 ---
 
-## APT repository management
-
-### Force re-sync of APT mirror
+## Changing what is mirrored
 
 ```bash
-# apt-mirror / apt-mirror2:
-sudo /usr/bin/apt-mirror # or /usr/local/bin/apt-mirror2
-
-# debmirror:
-sudo /srv/mirroret/scripts/sync-apt-debmirror.sh
+sudo mirroretctl config edit        # MIRRORET_APT_TARGETS / MIRRORET_RPM_TARGETS / MIRRORET_APT_MODE
+sudo mirroretctl upgrade            # regenerates specs, nginx, cache routes, client configs
+mirroretctl targets
+sudo mirroretctl sync apt
 ```
 
-### Regenerate APT index after adding custom packages
+Removing a target drops its spec so it stops syncing; its data stays on disk
+until you delete `/srv/mirroret/apt/<flavor>/` or
+`/srv/mirroret/redhat/mirror/<flavor>/<major>/` yourself.
 
-```bash
-cd /srv/mirroret/debian/approved
-dpkg-scanpackages . /dev/null | gzip -9c > Packages.gz
-dpkg-scanpackages . /dev/null > Packages
-```
-
-### Clean removed packages (apt-mirror only)
-
-```bash
-bash /srv/mirroret/debian/mirror/var/clean.sh
-```
+Do not hand-edit `dists/`, `pool/` or `repodata/`: APT `Release` files are
+upstream-signed and a rebuilt index would fail client verification; RPM
+repodata is rebuilt by the engine to match the disk. For your own packages
+use a separate repository (`scripts/mirror-apt-extra.sh` for third-party APT
+repos, or the approval workflow for RPMs).
 
 ---
 
-## RPM repository management
+## Approval workflow
 
-### Update RPM metadata after changes
+With `MIRRORET_APPROVAL_ENABLED=1` (`--approval-mode`), syncs stage downloads
+and nothing reaches a client until an operator promotes it. Covers **pip,
+npm and RPM**.
 
 ```bash
-createrepo --update /srv/mirroret/redhat/approved/rocky/9/baseos
-createrepo --update /srv/mirroret/redhat/approved/rocky/9/appstream
+mirroretctl approve list            # everything waiting
+mirroretctl approve list rpm        # full staged RPM file list
+
+sudo mirroretctl approve all        # promote everything
+sudo mirroretctl approve all rpm    # one kind: rpm | pip | npm
+sudo mirroretctl approve rpm glibc  # by name fragment
+sudo mirroretctl approve pip requests
+sudo mirroretctl approve deny rpm telnet     # delete from staging
+sudo mirroretctl approve deny npm oldlib
 ```
+
+The same operations exist as `install.sh` flags (`--list-staging`,
+`--approve-all-pip`, `--approve-all-npm`, `--approve-all-rpm`,
+`--approve-package <n>`, `--approve-rpm <n>`, `--exclude-pip <n>`,
+`--exclude-npm <n>`, `--exclude-rpm <n>`).
+
+| Kind | Staged in | Promoted to | Extra step on approval |
+|---|---|---|---|
+| pip | `staging/pip` | `approved/pip` | none; pypiserver serves the directory |
+| npm | `staging/npm` | `approved/npm` | `npm publish` into Verdaccio |
+| rpm | `redhat/staging` | `redhat/mirror` | `createrepo_c` rebuild of each touched repo |
+
+Notes:
+
+- An approved `.rpm` is invisible to dnf until repodata lists it; if
+  `createrepo_c` is missing the approval warns and the packages stay hidden.
+- With approval on, the generated Verdaccio config has **no npmjs uplink**:
+  a package nobody approved returns 404 instead of being fetched live.
+- npm promotion needs credentials: `npm login --registry http://localhost:4873/`
+  once, or `MIRRORET_NPM_ALLOW_ANON_PUBLISH=1`.
+- RPM syncs in approval mode still exit non-zero on download failures, so
+  cron failures are not masked.
 
 ---
 
-## Docker registry management
-
-### List images in the registry
+## Docker registry
 
 ```bash
+# mode: MIRRORET_DOCKER_MODE=cache (pull-through, rejects push) | hosted (accepts push)
+# backend: MIRRORET_DOCKER_BACKEND=auto | native | container
 curl http://localhost:5000/v2/_catalog
 ```
 
-### Delete an image
+| Backend | Service | Config |
+|---|---|---|
+| native, RHEL family | `docker-distribution` | `/etc/docker-distribution/registry/config.yml` |
+| native, Debian/Ubuntu | `docker-registry` | `/etc/docker/registry/config.yml` |
+| container (docker or podman) | `mirroret-registry` | `/etc/docker/registry/config.yml` (mounted) |
+
+Storage: `/srv/mirroret/docker/registry/`. Garbage collection runs weekly
+from `cleanup-all.sh` when `MIRRORET_DOCKER_GC=1` (brief restart); by hand:
 
 ```bash
-# Get the digest:
-curl -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-     http://localhost:5000/v2/<image>/manifests/<tag>
-
-# Delete by digest:
-curl -X DELETE http://localhost:5000/v2/<image>/manifests/<digest>
+sudo registry garbage-collect /etc/docker-distribution/registry/config.yml   # RHEL native
+sudo registry garbage-collect /etc/docker/registry/config.yml                # Debian native
+docker exec mirroret-registry registry garbage-collect /etc/docker/registry/config.yml
 ```
 
-### Run garbage collection
-
-**Container backend:**
-
-```bash
-docker exec mirroret-registry \
-    registry garbage-collect /etc/docker/registry/config.yml
-```
-
-**Native backend - RHEL (`docker-distribution`):**
-
-```bash
-sudo registry garbage-collect \
-    /etc/docker-distribution/registry/config.yml
-```
-
-**Native backend - Debian (`docker-registry`):**
-
-```bash
-sudo registry garbage-collect \
-    /etc/docker/registry/config.yml
-```
-
-After garbage collection, restart the registry service:
-
-```bash
-# Container:
-docker restart mirroret-registry
-
-# Native RHEL:
-sudo systemctl restart docker-distribution
-
-# Native Debian:
-sudo systemctl restart docker-registry
-```
+then restart the service. Pre-seeding (`sync-docker-images.sh`, hosted mode)
+needs a `docker` or `podman` CLI on the server.
 
 ---
 
-## Disk space management
-
-### Check usage by component
+## Disk
 
 ```bash
 du -sh /srv/mirroret/*
 df -h /srv/mirroret
+mirroretctl cache size             # hybrid/cache: per-flavor cache usage
 ```
 
-### Find the largest packages
+Levers, largest first: `MIRRORET_APT_MODE=hybrid` (a few GB instead of
+hundreds), `MIRRORET_APT_COMPONENTS="main restricted"`, fewer targets,
+`MIRRORET_CACHE_MAX_SIZE_GB` for the on-demand cache, retention for RPM /
+pip / npm ([RETENTION.md](RETENTION.md)). Syncs abort before breaching
+`MIRRORET_SYNC_MIN_FREE_GB`.
 
-```bash
-# Largest .deb files:
-find /srv/mirroret/debian -name "*.deb" -printf "%s %p\n" | sort -rn | head -20
-
-# Largest .rpm files:
-find /srv/mirroret/redhat -name "*.rpm" -printf "%s %p\n" | sort -rn | head -20
-
-# Largest Docker image layers:
-du -sh /srv/mirroret/docker/registry/docker/registry/v2/blobs/sha256/*/*
-```
-
-### Set up log rotation
-
-```bash
-cat > /etc/logrotate.d/mirroret <<'EOF'
-/srv/mirroret/logs/*.log {
-    weekly
-    rotate 8
-    compress
-    missingok
-    notifempty
-}
-EOF
-```
+Do not delete files out of an APT `pool/` by hand; the signed indices would
+still list them.
 
 ---
 
-## Cron management
+## Log rotation
 
-### View the scheduled sync
+`install.sh` writes `/etc/logrotate.d/mirroret` (managed; it carries the
+`mirroret-managed` marker and is regenerated on upgrade unless you remove
+the marker):
 
-```bash
-crontab -l | grep mirroret
-```
+- `/srv/mirroret/logs/*.log`: weekly, keep 8, compressed
+- `/var/log/mirroret-install.log`, `/var/log/mirroret-uninstall.log`:
+  monthly, keep 6
 
-### Change sync time
-
-```bash
-# Edit directly:
-crontab -e
-
-# Or reinstall with a different hour:
-MIRRORET_SYNC_HOUR=4 sudo ./install.sh
-```
+Because every sync run creates a new timestamped file, `cleanup-all.sh`
+additionally deletes logs older than `MIRRORET_LOG_KEEP_DAYS` (default 30;
+`0` disables).
 
 ---
 
-## Service restarts
+## Service control
 
 ```bash
-# nginx (graceful reload is preferred - no dropped connections):
-sudo systemctl reload nginx
-
-# Full restart:
-sudo systemctl restart nginx
-
-# pypiserver:
-sudo systemctl restart pypiserver
-
-# Verdaccio:
-sudo systemctl restart verdaccio
-
-# Docker registry - container backend:
-docker restart mirroret-registry
-
-# Docker registry - native RHEL:
-sudo systemctl restart docker-distribution
-
-# Docker registry - native Debian:
-sudo systemctl restart docker-registry
+sudo mirroretctl service restart nginx
+sudo mirroretctl service restart pypiserver
+sudo mirroretctl service restart verdaccio
+sudo mirroretctl service restart mirroret-cache
+mirroretctl service logs verdaccio 100
 ```
+
+nginx changes: `sudo nginx -t && sudo systemctl reload nginx`.
 
 ---
 
 ## Validation
 
 ```bash
-# Full post-install validation:
-sudo ./install.sh --check
-
-# Via make:
-sudo make validate
+sudo mirroretctl check              # = sudo ./install.sh --check; validates, regenerates nothing
+mirroretctl verify                  # APT tree integrity against each published Release
+mirroretctl serve                   # every HTTP endpoint locally
+mirroretctl client verify           # client configs vs published suites/repos
+mirroretctl doctor                  # everything
 ```
 
 ---
 
-## Package approval workflow
+## Routine
 
-When `MIRRORET_APPROVAL_ENABLED=1`, sync downloads to a staging area and
-nothing reaches a client until an operator promotes it. Covers pip, npm and RPM.
-
-```bash
-# See everything waiting for approval:
-mirroretctl approve list
-
-# Full staged RPM file list (can be thousands of lines):
-mirroretctl approve list rpm
-
-# Promote everything of one kind:
-sudo mirroretctl approve all rpm
-sudo mirroretctl approve all pip
-sudo mirroretctl approve all npm
-
-# Promote by name fragment:
-sudo mirroretctl approve rpm glibc
-sudo mirroretctl approve pip requests
-
-# Decline (delete from staging):
-sudo mirroretctl approve deny rpm telnet
-sudo mirroretctl approve deny npm oldlib
-```
-
-The same operations exist as `install.sh` flags (`--list-staging`,
-`--approve-all-pip`, `--approve-all-npm`, `--approve-all-rpm`,
-`--approve-package`, `--approve-rpm`, `--exclude-pip`, `--exclude-npm`,
-`--exclude-rpm`) for scripted use.
-
-Directory layout:
-
-```
-/srv/mirroret/
-+-- staging/
-| +-- pip/            <- sync writes here; admin reviews
-| +-- npm/            <- sync writes here; admin reviews
-+-- approved/
-| +-- pip/            <- pypiserver serves from here
-| +-- npm/            <- promoted AND published into Verdaccio
-+-- redhat/
-    +-- staging/      <- reposync writes here in approval mode
-    +-- mirror/       <- promoted RPMs land here; clients read this
-```
-
-### What promotion actually does
-
-Moving a file is not enough to make it installable. Each kind needs a
-different final step, and approval performs it:
-
-| Kind | Move | Additional step |
-|------|------|-----------------|
-| pip  | `staging/pip` -> `approved/pip` | none; pypiserver reads the directory |
-| npm  | `staging/npm` -> `approved/npm` | `npm publish` into Verdaccio |
-| rpm  | `redhat/staging` -> `redhat/mirror` | `createrepo_c` rebuild of each touched repo |
-
-For RPM this matters: a `.rpm` sitting in the tree that repodata does not list
-does not exist as far as `dnf` is concerned. If `createrepo_c` is missing, the
-approval warns loudly and the packages stay invisible until you install it and
-re-run.
-
-### npm approval turns off the npmjs proxy
-
-Verdaccio normally proxies `registry.npmjs.org`, so a client can pull any
-package on demand. That silently defeats approval: the approved set is never
-consulted. With `MIRRORET_APPROVAL_ENABLED=1` the generated Verdaccio config
-omits the uplink entirely.
-
-Consequence: a package nobody approved returns 404 instead of being fetched
-live. That is the intended trade and the reason to think before enabling this
-on a busy developer network.
-
-Publishing needs credentials. Either run
-`npm login --registry=http://localhost:4873/` once, or set
-`MIRRORET_NPM_ALLOW_ANON_PUBLISH=1`. Without one of those, promotion reports
-`authentication required` and the package is moved but not installable.
-
-### RPM syncs still report download failures
-
-In approval mode the RPM sync exits before metadata generation, but it still
-returns non-zero if any `reposync` failed or the disk floor aborted the run,
-so a cron failure is not masked by the early exit.
-
-When approval mode is off, sync scripts write directly to the served
-directories and packages are available immediately.
-
----
-
-## APT sync tool selection
-
-On Debian 12+ where `apt-mirror` is no longer in the repos, mirroret falls back
-automatically to `apt-mirror2` (pip) or `debmirror`.
-
-To force a specific tool:
-
-```bash
-MIRRORET_APT_MIRROR_TOOL=debmirror sudo ./install.sh
-```
-
-When `debmirror` is selected the sync script is generated at:
-`/srv/mirroret/scripts/sync-apt-debmirror.sh`
-
-Run it manually after install to populate the mirror:
-
-```bash
-sudo /srv/mirroret/scripts/sync-apt-debmirror.sh
-```
-
-debmirror requires the Ubuntu archive keyring:
-
-```bash
-sudo apt-get install -y ubuntu-keyring
-```
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#debmirror-gpg) for GPG key issues.
-
----
-
-## Docker registry backend
-
-```bash
-# Native OS package (no Docker daemon needed on the mirror server):
-MIRRORET_DOCKER_BACKEND=native sudo ./install.sh
-
-# Container via Docker or Podman:
-MIRRORET_DOCKER_BACKEND=container sudo ./install.sh
-
-# Auto (default): native if available, else container:
-MIRRORET_DOCKER_BACKEND=auto sudo ./install.sh
-```
-
-Native backend services:
-
-| Distro | Package | Service | Config file |
-|---|---|---|---|
-| RHEL/Rocky/Alma/CentOS | `docker-distribution` | `docker-distribution` | `/etc/docker-distribution/registry/config.yml` |
-| Debian/Ubuntu | `docker-registry` | `docker-registry` | `/etc/docker/registry/config.yml` |
-
-For the container backend, Podman on RHEL is detected automatically (podman-docker shim).
-A systemd unit is generated when Podman is used (`podman generate systemd`).
-
-> **Note:** Docker image pre-seeding (`sync-docker-images.sh`) still requires `docker`
-> or `podman` CLI installed on the mirror server regardless of the registry backend.
-> The CLI is used to `pull` images from Docker Hub and `push` them to the local registry.
+- After each nightly sync: `mirroretctl logs errors`, `mirroretctl targets`.
+- Weekly: `df -h /srv/mirroret`, `mirroretctl cache status` (hybrid/cache),
+  `mirroretctl approve list` if approval mode is on.
+- After editing the conf: `sudo mirroretctl upgrade`, then `mirroretctl config diff`.
+- After updating the checkout: `sudo ./install.sh --upgrade`, `mirroretctl doctor`.
 
 ---
 
 ## Port reference
 
-| Port | Variable | Service | Protocol |
-|---|---|---|---|
-| 8080 | `MIRRORET_WEB_PORT` | nginx HTTP | TCP |
-| 8443 | `MIRRORET_TLS_PORT` | nginx HTTPS (when TLS enabled) | TCP |
-| 8081 | `MIRRORET_PIP_PORT` | pypiserver | TCP |
-| 5000 | `MIRRORET_DOCKER_REGISTRY_PORT` | Docker registry | TCP |
-| 4873 | `MIRRORET_NPM_PORT` | Verdaccio | TCP |
+| Port | Variable | Service |
+|---|---|---|
+| 8080 | `MIRRORET_WEB_PORT` | nginx HTTP: APT, RPM, `/config/`, proxies for `/pip/`, `/npm/`, `/v2/` |
+| 8443 | `MIRRORET_TLS_PORT` | nginx HTTPS (when TLS configured) |
+| 8081 | `MIRRORET_PIP_PORT` | pypiserver |
+| 5000 | `MIRRORET_DOCKER_REGISTRY_PORT` | Docker registry, all interfaces |
+| 4873 | `MIRRORET_NPM_PORT` | Verdaccio |
+| 8082 | `MIRRORET_CACHE_PORT` | `mirroret-cache`, loopback only |
 
-All ports are configurable. See [CONFIGURATION.md](CONFIGURATION.md).
-For firewall setup commands see [NETWORK_ACCESS.md](NETWORK_ACCESS.md).
+Firewall commands: [NETWORK_ACCESS.md](NETWORK_ACCESS.md).

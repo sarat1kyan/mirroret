@@ -1,3 +1,5 @@
+> Historical snapshot (2026-06). Describes an earlier version; see README.md for current behaviour.
+
 # MIRRORET Deep Technical Review
 
 **Date:** 2026-06-04

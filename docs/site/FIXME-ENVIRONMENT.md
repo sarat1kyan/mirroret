@@ -1,3 +1,5 @@
+> Site-specific notes: written for one particular deployment (hostnames, proxy addresses and blockers are that site's). Not general documentation; see README.md and docs/ for current behaviour.
+
 # Environment fixes - things mirroret cannot fix for you
 
 These are problems in **your infrastructure**, not bugs in the tool. Work

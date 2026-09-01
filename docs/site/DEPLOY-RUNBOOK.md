@@ -1,3 +1,5 @@
+> Site-specific notes: written for one particular deployment (hostnames, proxy addresses and blockers are that site's). Not general documentation; see README.md and docs/ for current behaviour.
+
 # Deploy runbook
 
 For the admin deploying mirroret to the mirror server.

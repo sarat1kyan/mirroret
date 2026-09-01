@@ -1,170 +1,130 @@
-# Uninstalling Mirroret
+# Uninstalling mirroret
 
-The uninstaller removes things mirroret itself created. It **never**
-removes nginx, Docker, Podman, debmirror, or other OS packages - those
-may be in use by other things on the host.
+The uninstaller removes what mirroret itself created. It never removes
+nginx, Docker, Podman, debmirror or other OS packages.
 
-Three ways to invoke it; they're equivalent:
+Three equivalent entry points:
 
 ```bash
 sudo ./uninstall.sh [opts]
 sudo ./install.sh --uninstall [opts]
-sudo make uninstall # implies --list --all (preview only)
+sudo mirroretctl uninstall [opts]
 ```
+
+`make uninstall` runs `./uninstall.sh --list --all` (preview only).
+
+`uninstall.sh` loads `/etc/mirroret/mirroret.conf` first, so a custom
+`MIRRORET_BASE_DIR`, ports or service users are what gets removed.
 
 ---
 
-## 1. Preview before doing anything
+## 1. Preview
 
 ```bash
-sudo ./uninstall.sh --list
+sudo ./uninstall.sh --list        # components present + plan, changes nothing
+sudo ./uninstall.sh --dry-run     # same plan with [plan] markers per step
 ```
 
-`--list` prints which mirroret components exist on the host, the full
-removal plan, and exits without changing anything. Use it before every
-real run - especially on production servers.
-
-`--dry-run` is similar but logs each step with a `[plan]` marker.
-
-Neither `--list` nor `--dry-run` requires root.
+Neither `--list` nor `--dry-run` requires root when invoked through
+`install.sh --uninstall`.
 
 ---
 
-## 2. Remove selectively
+## 2. Selective removal
 
-You can target individual components in any combination. The defaults
-(when no target is named) are equivalent to `--all`.
-
-```bash
-# Just stop using Docker - leave everything else running:
-sudo ./uninstall.sh --docker
-
-# Drop pip + npm but keep distro mirrors and the Docker registry:
-sudo ./uninstall.sh --pip --npm
-
-# Remove a stale RPM sync script after switching to RHEL-only:
-sudo ./uninstall.sh --rpm
-
-# Common housekeeping only (nginx vhost, cron, sync-all.sh) without
-# touching any of the per-language services:
-sudo ./uninstall.sh --common
-```
+Name any combination of components. No component named = `--all`.
 
 | Flag | Removes |
 |---|---|
-| `--apt` | `/etc/apt/mirror.list`, `sync-apt-debmirror.sh`, apt-mirror2 venv |
-| `--rpm` | `sync-redhat-repos.sh` |
-| `--pip` | `pypiserver.service`, `mirroret-pip` user, `/opt/mirroret-pypiserver`, `sync-pip-packages.sh` |
-| `--npm` | `verdaccio.service`, `mirroret-npm` user, `/etc/verdaccio/`, `sync-npm-packages.sh` |
-| `--docker` | `docker-distribution` / `docker-registry` / `mirroret-registry` services, the registry container, `/etc/docker/registry/`, `/etc/docker-distribution/registry/`, `sync-docker-images.sh` |
-| `--common` | nginx vhost, cron managed block, `sync-all.sh`, SELinux file-context restore, firewall rule reversal |
+| `--apt` | `/etc/apt/mirror.list`; `scripts/sync-apt-repos.sh`, `scripts/sync-apt-debmirror.sh`; `/etc/mirroret/targets/apt-*.json`; `/usr/local/bin/apt-mirror2` symlink and `/opt/mirroret-apt-mirror2`; the `mirroret-cache` unit (stopped, disabled, unit file and any `mirroret-cache.service.d/proxy.conf` drop-in), `scripts/run-cache.sh`, `/etc/mirroret/cache.json` |
+| `--rpm` | `scripts/sync-rpm-repos.sh`, `scripts/sync-redhat-repos.sh`; `/etc/mirroret/targets/rpm-*.json` |
+| `--pip` | `pypiserver.service` (+ proxy drop-in), `mirroret-pip` user, `/usr/local/bin/pypi-server` symlink (only if it is a symlink), `/opt/mirroret-pypiserver`, `scripts/sync-pip-packages.sh` |
+| `--npm` | `verdaccio.service` (+ proxy drop-in), `mirroret-npm` user, `/etc/verdaccio/`, `scripts/sync-npm-packages.sh` |
+| `--docker` | `docker-distribution`, `docker-registry` and `mirroret-registry` units (+ proxy drop-ins), the `mirroret-registry` container (docker or podman), `/etc/docker/registry/config.yml`, `/etc/docker-distribution/registry/config.yml`, `scripts/sync-docker-images.sh` (and its `.cache-mode-disabled` stub) |
+| `--common` | nginx vhost (`sites-available`/`sites-enabled`/`conf.d` variants, then nginx reload); the managed cron block; `scripts/sync-all.sh`, `scripts/cleanup-all.sh`; `/etc/logrotate.d/mirroret`; `/usr/local/bin/mirroretctl` symlink; `/srv/mirroret/engines/`; `config/setup-mirror-client.sh`; `/etc/mirroret/targets` if empty; stale `/var/lock/mirroret-sync-*.lock`; SELinux file-context restore; firewall rule reversal; `--purge` targets |
 | `--all` | every component above |
+
+`scripts/` means `${MIRRORET_BASE_DIR}/scripts/`.
+
+```bash
+sudo ./uninstall.sh --docker           # registry only
+sudo ./uninstall.sh --pip --npm        # pip + npm only
+sudo ./uninstall.sh --common           # housekeeping only
+```
 
 ---
 
 ## 3. Full removal including data
 
-`--all` deletes services and configs but **never** deletes mirror data,
-backups, or the GPG signing key. Those are explicitly opt-in:
+`--all` leaves mirror data, backups, TLS and GPG in place. `--purge`
+(effective only together with `--common` / `--all`) also deletes:
+
+- `${MIRRORET_BASE_DIR}` (default `/srv/mirroret/`) - the data tree
+- `${MIRRORET_BACKUP_BASE}` (default `/var/backups/mirroret/`)
+- `${MIRRORET_TLS_DIR}` (default `/etc/mirroret/tls/`)
+- `${MIRRORET_GPG_HOMEDIR}` (default `/etc/mirroret/gnupg/`) - irreversible
+- `/etc/mirroret/` if it is empty afterwards
+
+The data tree and the GPG homedir each get a confirmation prompt unless
+`--yes` is given.
 
 ```bash
-sudo ./uninstall.sh --all --purge
-```
-
-`--purge` ALSO deletes:
-
-- `/srv/mirroret/` - the mirror data tree (hundreds of GB)
-- `/var/backups/mirroret/` - every backup snapshot install.sh has ever taken
-- `/etc/mirroret/tls/` - TLS cert + key
-- `/etc/mirroret/gnupg/` - the GPG signing key
-
-Each of those gets a separate interactive confirmation. Add `--yes` to
-skip them (e.g. for unattended decommissioning).
-
-```bash
-# Unattended full wipe (CI / decommissioning).
-sudo ./uninstall.sh --all --purge --yes
+sudo ./uninstall.sh --all --purge          # prompts
+sudo ./uninstall.sh --all --purge --yes    # unattended
 ```
 
 ---
 
-## 4. Common modifiers
+## 4. Modifiers
 
 | Flag | Effect |
 |---|---|
-| `--purge` | Also delete mirror data, backups, TLS, GPG. Prompts unless `--yes`. |
-| `--keep-users` | Do not delete `mirroret-pip` / `mirroret-npm` system users |
-| `--keep-firewall` | Do not reverse ufw / firewalld / iptables rules |
-| `--base-dir <p>` | Override `MIRRORET_BASE_DIR` (default `/srv/mirroret`) |
-| `--yes`, `-y` | Accept all confirmations |
-| `--dry-run` | Print plan, change nothing |
-| `--list` | Same as `--dry-run` |
-| `--help`, `-h` | Show flag reference |
+| `--purge` | also delete data, backups, TLS, GPG (prompts unless `--yes`) |
+| `--keep-users` | do not `userdel` `mirroret-pip` / `mirroret-npm` |
+| `--keep-firewall` | do not reverse ufw / firewalld / iptables rules |
+| `--base-dir <p>` | override `MIRRORET_BASE_DIR` |
+| `--yes`, `-y` | accept all confirmations |
+| `--dry-run` | print the plan, exit |
+| `--list` | print the plan, exit |
+| `--help`, `-h` | usage |
+
+Firewall reversal removes the ports for the selected components (web + TLS
+port for `--common`, pip/docker/npm ports for their components), trying both
+the source-restricted and the plain rule shapes so whichever the installer
+wrote is matched.
 
 ---
 
-## 5. Behavior guarantees
+## 5. Guarantees
 
-- **Idempotent.** Re-running on an already-partially-removed install is
-  safe - missing files / dead services / nonexistent users count as
-  `skip`, not as failures.
-- **Non-destructive by default.** Data, backups, GPG keys, and TLS certs
-  are kept unless you explicitly pass `--purge`.
-- **Scoped.** No third-party OS packages are removed. If you want
-  Docker / Podman / nginx gone, do that yourself with your package
-  manager after the uninstaller finishes.
-- **Verifiable.** After uninstalling, run `./scripts/mirroret-debug.sh`
-  to confirm the host is clean - listening ports free, services absent,
-  data tree absent.
+- Idempotent: missing files, dead units and nonexistent users count as
+  skips, not failures.
+- Non-destructive by default: data, backups, GPG and TLS survive without
+  `--purge`.
+- Scoped: no OS packages are removed.
+- The summary line reports `removed= skipped= failed=`; failed items are
+  listed by name.
+
+Verify the host afterwards with `sudo ./scripts/mirroret-debug.sh`.
 
 ---
 
-## 6. Examples
-
-```bash
-# Show what would happen on a production server, change nothing:
-sudo ./uninstall.sh --list
-
-# Remove just the Docker pieces (registry container, config, native service):
-sudo ./uninstall.sh --docker --yes
-
-# Decommission entirely, including all data:
-sudo ./uninstall.sh --all --purge --yes
-
-# Step the uninstall through interactively, but keep the firewall rules
-# (because you have other services on the same ports):
-sudo ./uninstall.sh --all --keep-firewall
-
-# Verify the host is clean afterwards:
-sudo ./scripts/mirroret-debug.sh
-```
-
----
-
-## 7. What the uninstaller does NOT do
-
-If you want the host fully clean of every related package, do these
-manually after the uninstaller runs:
+## 6. Removing OS packages yourself
 
 ```bash
 # Debian/Ubuntu
 sudo apt-get remove --purge -y nginx debmirror docker-registry
 sudo npm uninstall -g verdaccio
-sudo rm -rf /opt/mirroret-pypiserver /opt/mirroret-apt-mirror2 # if --pip / --apt was skipped
 
 # RHEL family
 sudo dnf remove -y nginx docker-distribution podman createrepo_c
 sudo npm uninstall -g verdaccio
 ```
 
-The uninstaller flags any leftover OS-package paths in its `[skip]`
-output so you can decide.
-
 ---
 
-## 8. Rollback vs uninstall
+## 7. Rollback is not uninstall
 
-`./install.sh --rollback <backup-id>` is **not** the uninstaller - it
-restores config files from a timestamped backup but leaves services,
-data, and the directory tree in place. Use `--rollback` to undo a bad
-install; use the uninstaller to leave the host clean.
+`sudo ./install.sh --rollback <backup-id>` restores backed-up config files
+and leaves services, data and directories in place. See
+[ROLLBACK.md](ROLLBACK.md).

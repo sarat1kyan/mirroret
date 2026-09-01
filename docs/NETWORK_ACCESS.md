@@ -13,14 +13,21 @@ Open these on the mirror server's firewall. All ports are configurable via envir
 
 | Default port | Variable | Service | Required |
 |---|---|---|---|
-| 8080 | `MIRRORET_WEB_PORT` | nginx HTTP - APT, RPM, static files | Always |
-| 8443 | `MIRRORET_TLS_PORT` | nginx HTTPS - TLS listener | Only if TLS enabled |
+| 8080 | `MIRRORET_WEB_PORT` | nginx HTTP - APT, RPM, `/config/`, proxies for `/pip/`, `/npm/`, `/v2/` | Always |
+| 8443 | `MIRRORET_TLS_PORT` | nginx HTTPS - TLS listener | Only if TLS configured |
 | 8081 | `MIRRORET_PIP_PORT` | pypiserver (pip/PyPI) | If pip enabled |
-| 5000 | `MIRRORET_DOCKER_REGISTRY_PORT` | Docker registry | If Docker enabled |
+| 5000 | `MIRRORET_DOCKER_REGISTRY_PORT` | Docker registry (listens on all interfaces) | If Docker enabled |
 | 4873 | `MIRRORET_NPM_PORT` | Verdaccio (npm) | If npm enabled |
 
-The TLS port (8443) is only opened in the firewall automatically when `--tls-self-signed`
-or `MIRRORET_TLS_CERT`/`MIRRORET_TLS_KEY` are set.
+`install.sh` opens these itself unless `--no-firewall`: always the web port,
+plus the pip/Docker/npm ports for enabled components, plus the TLS port
+**when TLS is ready** at that point of the run (`--tls-self-signed` or
+`MIRRORET_TLS_CERT`+`MIRRORET_TLS_KEY`, cert and key in place). Rules go to
+whichever firewall is **running** (ufw, then firewalld, then iptables); an
+installed-but-stopped firewall gets no rules and a warning.
+
+The on-demand cache daemon (`mirroret-cache`, `MIRRORET_CACHE_PORT` 8082)
+binds 127.0.0.1 only and is never opened; nginx is its only client.
 
 ### Firewall commands - inbound (run on the mirror server)
 
@@ -157,33 +164,43 @@ The exact hostnames depend on which distribution you run. All use HTTPS/443.
 > `nodejs`, `npm`, `podman` or `docker-distribution`, etc.) none of the above are needed.
 > See section 5 for full offline instructions.
 
-### 2b. During sync (recurring - runs via cron daily)
+### 2b. During sync (recurring - cron, nightly) and on cache misses
 
-These hosts are contacted every time the mirror syncs packages.
+These hosts are derived from `lib/targets.sh` (`apt_suites`, `rpm_repo_url`)
+for the flavors you configure. Only the rows for your targets apply. In
+hybrid/cache storage mode the same hosts are also contacted by
+`mirroret-cache` whenever a client asks for a file not yet on disk.
 
-**APT mirror:**
+**APT mirror** - port **80** by default; **443** when `MIRRORET_APT_SCHEME=https`
+(needed behind a CONNECT-only proxy):
 
-| Hostname | Port | Protocol | Purpose |
+| Flavor | Hostname | Path | Override |
 |---|---|---|---|
-| `archive.ubuntu.com` | 80 | HTTP | Ubuntu package downloads |
-| `security.ubuntu.com` | 80 | HTTP | Ubuntu security updates |
-| `deb.debian.org` | 80 | HTTP | Debian packages (if mirroring Debian) |
-| `security.debian.org` | 80 | HTTP | Debian security updates |
+| `ubuntu` | `archive.ubuntu.com` | `/ubuntu` (release, -updates, -backports) | `MIRRORET_APT_UPSTREAM_HOST` |
+| `ubuntu` | `security.ubuntu.com` | `/ubuntu` (-security) | `MIRRORET_APT_SECURITY_HOST` |
+| `ubuntu-ports` | `ports.ubuntu.com` | `/ubuntu-ports` (all suites) | `MIRRORET_APT_PORTS_HOST` |
+| `debian` | `deb.debian.org` | `/debian` (release, -updates, -backports) | `MIRRORET_APT_UPSTREAM_HOST` |
+| `debian` | `deb.debian.org` | `/debian-security` (-security) | `MIRRORET_APT_SECURITY_HOST` |
 
-> If you override the upstream mirror (e.g., a regional mirror), allow that host instead.
+> Debian security lives at `deb.debian.org/debian-security`, not
+> `security.debian.org`. If you point an override at a regional mirror,
+> allow that host instead.
 
-**RPM mirror:**
+**RPM mirror** - port **443** for every flavor:
 
-| Hostname | Port | Protocol | Purpose |
+| Flavor | Hostname | Base path | Override |
 |---|---|---|---|
-| `dl.rockylinux.org` | 443 | HTTPS | Rocky Linux packages |
-| `mirrors.rockylinux.org` | 443 | HTTPS | Rocky Linux mirror list |
-| `dl.fedoraproject.org` | 443 | HTTPS | Fedora EPEL packages |
-| `mirror.centos.org` | 80/443 | HTTP/S | CentOS packages |
-| `vault.centos.org` | 443 | HTTPS | CentOS archived releases |
+| `rocky` | `dl.rockylinux.org` | `/pub/rocky/<major>/<Repo>/<arch>/os/` | `MIRRORET_RPM_ROCKY_BASE` |
+| `almalinux` | `repo.almalinux.org` | `/almalinux/<major>/<Repo>/<arch>/os/` | `MIRRORET_RPM_ALMA_BASE` |
+| `ol` | `yum.oracle.com` | `/repo/OracleLinux/OL<major>/<repo>/<arch>/` | `MIRRORET_RPM_ORACLE_BASE` |
+| `centos` | `mirror.stream.centos.org` | `/<major>-stream/<Repo>/<arch>/os/` | `MIRRORET_RPM_CENTOS_BASE` |
+| `fedora` | `dl.fedoraproject.org` | `/pub/fedora/linux/{releases,updates}/<major>/Everything/<arch>/` | `MIRRORET_RPM_FEDORA_BASE` |
+| `epel` | `dl.fedoraproject.org` | `/pub/epel/<major>/Everything/<arch>/` (`next/` for `epel:next`) | `MIRRORET_RPM_EPEL_BASE` |
+| `rhel` | `cdn.redhat.com` | `/content/dist/rhel<major>/<major>/<arch>/<repo>/os` (TLS client cert from `/etc/pki/entitlement/`) | `MIRRORET_RPM_RHEL_CDN` |
 
-> The exact URLs depend on what is configured in `/etc/yum.repos.d/` on the mirror server.
-> Run `dnf repolist -v` to see the current upstream URLs.
+> The native engine fetches these URLs directly; no mirror-list hosts are
+> involved. Only the legacy `reposync` engine uses whatever
+> `/etc/yum.repos.d/` on the server points at (`dnf repolist -v`).
 
 **Docker registry (pull-through cache):**
 
@@ -194,9 +211,10 @@ These hosts are contacted every time the mirror syncs packages.
 | `index.docker.io` | 443 | HTTPS | Docker Hub manifest API |
 | `production.cloudflare.docker.com` | 443 | HTTPS | Docker CDN (image layer delivery) |
 
-> The registry operates as a pull-through cache. Images are fetched from Docker Hub
-> on first client request, then cached locally. `sync-docker-images.sh` pre-seeds
-> a configurable list of images.
+> In `cache` mode the registry proxies `MIRRORET_DOCKER_UPSTREAM_URL`
+> (default `https://registry-1.docker.io`); Docker Hub then redirects layer
+> downloads to the other hosts above. In `hosted` mode `sync-docker-images.sh`
+> pulls a configurable list with the local `docker`/`podman` CLI.
 
 **pip (PyPI):**
 
@@ -253,21 +271,25 @@ sudo firewall-cmd --reload
 
 ### Outbound (mirror server -> internet)
 
-| Port | Proto | Direction | Destination | When |
-|---|---|---|---|---|
-| 80 | TCP | OUT | `archive.ubuntu.com`, `security.ubuntu.com`, `deb.debian.org` | APT sync + Debian install |
-| 80/443 | TCP | OUT | `mirror.stream.centos.org`, `mirrors.centos.org` | RPM CentOS Stream sync/install |
-| 443 | TCP | OUT | `dl.rockylinux.org`, `mirrors.rockylinux.org` | RPM Rocky sync + Rocky install |
-| 443 | TCP | OUT | `repo.almalinux.org`, `mirrors.almalinux.org` | AlmaLinux sync + AlmaLinux install |
-| 443 | TCP | OUT | `cdn.redhat.com` | RHEL subscription sync + install |
-| 443 | TCP | OUT | `dl.fedoraproject.org` | RPM Fedora/EPEL sync |
-| 443 | TCP | OUT | `registry-1.docker.io`, `auth.docker.io`, `index.docker.io`, `production.cloudflare.docker.com` | Docker sync |
-| 443 | TCP | OUT | `pypi.org`, `files.pythonhosted.org` | pip sync |
-| 443 | TCP | OUT | `registry.npmjs.org` | npm sync |
-| 443 | TCP | OUT | `registry-1.docker.io`, `auth.docker.io` | Install: `docker/podman pull registry:2` (container backend) |
-| 443 | TCP | OUT | `registry.npmjs.org` | Install: `npm install -g verdaccio` |
-| 443 | TCP | OUT | `pypi.org`, `files.pythonhosted.org` | Install: `pip install pypiserver` |
-| 53 | UDP | OUT | DNS server | All hostname resolution |
+| Port | Proto | Destination | When |
+|---|---|---|---|
+| 80 (443 with `MIRRORET_APT_SCHEME=https`) | TCP | `archive.ubuntu.com`, `security.ubuntu.com` | `ubuntu` targets |
+| 80 (443 with `MIRRORET_APT_SCHEME=https`) | TCP | `ports.ubuntu.com` | `ubuntu-ports` targets |
+| 80 (443 with `MIRRORET_APT_SCHEME=https`) | TCP | `deb.debian.org` | `debian` targets |
+| 443 | TCP | `dl.rockylinux.org` | `rocky` targets |
+| 443 | TCP | `repo.almalinux.org` | `almalinux` targets |
+| 443 | TCP | `yum.oracle.com` | `ol` targets |
+| 443 | TCP | `mirror.stream.centos.org` | `centos` targets |
+| 443 | TCP | `dl.fedoraproject.org` | `fedora` / `epel` targets |
+| 443 | TCP | `cdn.redhat.com` | `rhel` targets |
+| 443 | TCP | `registry-1.docker.io`, `auth.docker.io`, `index.docker.io`, `production.cloudflare.docker.com` | Docker cache mode / pre-seed; install (`registry:2` pull, container backend) |
+| 443 | TCP | `pypi.org`, `files.pythonhosted.org` | pip sync; install (`pip install pypiserver` venv fallback) |
+| 443 | TCP | `registry.npmjs.org` | npm sync (Verdaccio uplink); install (`npm install -g verdaccio`) |
+| 80/443 | TCP | the server's own distro repos | install (`apt-get` / `dnf install nginx ...`) |
+| 53 | UDP | DNS | hostname resolution |
+
+Behind a proxy all of the above go to the proxy instead; set
+`MIRRORET_PROXY` in `/etc/mirroret/mirroret.conf` ([PROXY_AND_CA.md](PROXY_AND_CA.md)).
 
 ---
 
@@ -313,6 +335,8 @@ If the mirror server has no internet access at all:
    use `MIRRORET_DOCKER_BACKEND=native` to install the OS-native registry package
    from your pre-loaded offline repo.
 
-4. All subsequent syncs will fail (no internet). Schedule syncs on a connected
-   machine and transfer the package data to the air-gapped server manually (rsync
-   over a DMZ hop, USB transfer, etc.).
+4. Syncs need upstream, so on a fully air-gapped host they fail. Use
+   `MIRRORET_APT_MODE=mirror` on a connected machine and transfer
+   `/srv/mirroret/apt/` and `/srv/mirroret/redhat/mirror/` (rsync over a DMZ
+   hop, removable media). `hybrid` and `cache` modes are not suitable for an
+   air-gapped server: they fetch packages on demand.

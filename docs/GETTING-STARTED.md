@@ -1,21 +1,27 @@
-# Getting started: install, sync, point clients at it
+# Getting started: install, sync, verify, point clients at it
 
-Written to be followed top to bottom on a fresh or existing mirror server.
-Every step has a check. If a check fails, stop there - the next step will
-not fix it.
+Follow top to bottom on a fresh or existing mirror server. Every step has a
+check; if a check fails, stop there.
 
-Assumes the mirror server is `192.168.30.110`. Substitute yours.
+The examples use `192.168.30.110` as the mirror server. Substitute yours.
 
 ---
 
-## The short way: two scripts
+## The short way
 
-If you would rather not run the steps by hand, the repository ships the whole
-sequence as two scripts. They do exactly what sections 1-7 below describe,
-with a gate after every phase: a failed gate stops and prints the specific
-fix rather than carrying on.
+Two scripts do the sequence below with a gate after each phase.
 
-**On the mirror server**, after getting the code (section 1):
+**On the mirror server:**
+
+```bash
+git clone https://github.com/sarat1kyan/mirroret.git && cd mirroret
+sudo ./install.sh                     # first-run wizard, then install
+sudo mirroretctl sync apt
+sudo mirroretctl sync rpm
+mirroretctl verify
+```
+
+or, unattended:
 
 ```bash
 sudo ./scripts/setup-mirror-server.sh \
@@ -26,9 +32,8 @@ sudo ./scripts/setup-mirror-server.sh \
     --yes
 ```
 
-Add `--dry-run` first to see the whole plan without changing anything. It
-predicts the real run, including which upstreams your targets need and
-whether the proxy is blocking them. `--help` lists every option.
+Add `--dry-run` to see the plan without changing anything; `--help` lists
+every option.
 
 **On each client**, fetched from the mirror itself:
 
@@ -38,384 +43,338 @@ curl -fsSL -o /tmp/setup-mirror-client.sh \
 sudo bash /tmp/setup-mirror-client.sh --server 192.168.30.110
 ```
 
-That detects the distro, installs the matching config, disables the upstream
-repos and then proves the result by downloading a package the mirror
-actually carries. Everything it disables is backed up first:
+It detects the distro, installs the matching config, disables the upstream
+repos and proves the result by downloading a package pinned to the mirror's
+own index. `--rollback` puts the machine back exactly as it was.
 
-```bash
-sudo bash /tmp/setup-mirror-client.sh --rollback
-```
-
-puts the machine back exactly as it was.
-
-The rest of this document is the same sequence done by hand, which is worth
-reading once so you know what the scripts are doing and what each check
-means.
+The rest of this document is the same sequence step by step.
 
 ---
 
 ## 0. What you are about to configure
 
-Two lines decide everything:
+Two lines decide what is mirrored:
 
 ```bash
 MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
 MIRRORET_RPM_TARGETS="ol:9"
 ```
 
-These name what your **clients** run. They have nothing to do with what the
-mirror server runs - a RHEL server mirrors Ubuntu perfectly well. If you
-leave them unset, mirroret falls back to guessing from the server's own OS,
-which on a RHEL host means no APT mirroring at all.
+They name what your **clients** run, not what the server runs. Left unset,
+mirroret falls back to the server's own release, which on a RHEL host means
+no APT mirroring at all. Full model: [MULTI-DISTRO.md](MULTI-DISTRO.md).
 
-Full reference: [MULTI-DISTRO.md](MULTI-DISTRO.md).
+One more line decides how much disk it costs:
+
+```bash
+MIRRORET_APT_MODE="hybrid"     # mirror | hybrid | cache
+```
+
+`mirror` downloads every package up front (~400 GB per Ubuntu release);
+`hybrid` mirrors only the signed indices (~2 GB) and fetches packages on
+first request; `cache` fetches everything on demand. See [CACHE.md](CACHE.md).
 
 ---
 
 ## 1. Get the code
 
-The work is on a branch, not `main`.
-
-### Server has GitHub access
-
 ```bash
 cd ~
-git clone https://github.com/sarat1kyan/mirroret.git   # first time only
+git clone https://github.com/sarat1kyan/mirroret.git
 cd mirroret
-git fetch origin
-git checkout claude/package-mirror-server-audit-fhhodq
 ```
 
-Already have a clone? Update it in place:
+Already have a clone: `git pull --ff-only`.
 
-```bash
-cd ~/mirroret-main            # or wherever your clone lives
-git fetch origin
-git checkout claude/package-mirror-server-audit-fhhodq
-```
-
-### Server has NO GitHub access
-
-On a machine that does:
-
-```bash
-curl -L -o mirroret.zip \
-  https://github.com/sarat1kyan/mirroret/archive/refs/heads/claude/package-mirror-server-audit-fhhodq.zip
-```
-
-Copy it over (scp, MobaXterm SFTP pane, USB), then on the server:
-
-```bash
-cd ~
-[[ -d mirroret-main ]] && mv mirroret-main mirroret-main.prev   # keep the old tree
-unzip -o mirroret.zip
-mv mirroret-* mirroret-main 2>/dev/null || true
-cd mirroret-main
-# A zip does not preserve the execute bit. Without this, nothing runs.
-chmod +x install.sh uninstall.sh mirroretctl scripts/*.sh engines/*.py
-```
-
-Do **not** delete `mirroret-main.prev` until step 5 passes.
+Server without GitHub access: on a machine that has it,
+`git clone` then `tar czf mirroret.tgz mirroret/`, copy the tarball over and
+`tar xzf` it on the server (a tarball keeps the execute bits; a zip does not).
 
 ### Check
 
 ```bash
-ls engines/                      # must list 3 .py files
-ls lib/targets.sh                # must exist
-python3 -V                       # must print 3.6 or newer
+ls engines/            # mirroret_apt.py mirroret_cache.py mirroret_fetch.py mirroret_rpm.py
+python3 -V             # 3.6 or newer
 ```
-
-If `engines/` is missing you have the old code, or the zip extracted
-partially. Re-fetch before continuing.
 
 ---
 
 ## 2. Configure
 
+### Fresh box: let the wizard do it
+
+```bash
+sudo ./install.sh
+```
+
+With a terminal, no `/etc/mirroret/mirroret.conf` and no targets in the
+environment, the first-run wizard runs **before** preflight and package
+installation. It asks, with defaults you can accept with Enter:
+
+1. APT distros to serve (Ubuntu 24.04/22.04/20.04, Debian 12/11, or none)
+2. Storage mode: full mirror / **hybrid (recommended)** / pure cache, and an
+   optional cache size cap
+3. APT architectures (amd64, i386, arm64)
+4. RPM distros (Oracle 9/8, Rocky 9/8, EPEL 9, or none)
+5. Whether to also provide pip, npm, Docker
+6. Corporate proxy URL and, if so, whether to force HTTPS to upstream
+   (`MIRRORET_APT_SCHEME=https`, for CONNECT-only proxies)
+7. Free-disk floor for syncs (default 15 GB)
+8. Nightly sync hour (default 2)
+
+It writes `/etc/mirroret/mirroret.conf` and the install continues. Skip to
+section 3's check.
+
+### Existing box, or unattended: write the conf yourself
+
 ```bash
 sudo mkdir -p /etc/mirroret
 [[ -f /etc/mirroret/mirroret.conf ]] || \
   sudo cp config/mirroret.conf.example /etc/mirroret/mirroret.conf
-```
-
-Append your settings. Edit the target lists to match your fleet.
-
-```bash
-sudo tee -a /etc/mirroret/mirroret.conf >/dev/null <<'EOF'
+sudo tee -a /etc/mirroret/mirroret.conf >/dev/null <<'EOF2'
 
 # ---- What the CLIENTS run -------------------------------------------------
 MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
 MIRRORET_RPM_TARGETS="ol:9"
 
-# ---- Disk control -------------------------------------------------------
-# universe + multiverse are ~90% of an Ubuntu mirror. Drop this line to
-# mirror all four components (300-600 GB per flavor).
+# ---- Storage mode ---------------------------------------------------------
+MIRRORET_APT_MODE="hybrid"          # indices up front, packages on demand
+MIRRORET_CACHE_MAX_SIZE_GB="0"      # LRU cap for cached packages, 0 = none
+
+# ---- Disk control (mirror mode mostly) ------------------------------------
+# universe + multiverse are ~90% of a full Ubuntu mirror.
 MIRRORET_APT_COMPONENTS="main restricted"
 MIRRORET_RPM_NEWEST_ONLY=1
 MIRRORET_RPM_SOURCE=0
-MIRRORET_SYNC_MIN_FREE_GB=15
+MIRRORET_SYNC_MIN_FREE_GB=15        # engine default is 10; the wizard writes 15
+MIRRORET_RPM_ARCH="x86_64"          # add i686 for 32-bit multilib clients
 
-# Add i686 only if clients install 32-bit multilib (glibc.i686).
-MIRRORET_RPM_ARCH="x86_64"
-
-# ---- Proxy --------------------------------------------------------------
+# ---- Proxy ----------------------------------------------------------------
 # Set here, not only in your shell: cron and systemd read neither
-# /etc/environment nor shell rc files, so without this the nightly sync
-# fails while manual runs succeed.
-http_proxy=http://192.168.30.243:3128
-https_proxy=http://192.168.30.243:3128
-no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,192.168.0.0/16
-
-# Only if your proxy re-signs TLS. It is ADDED to the system trust store,
-# so a single corporate root is fine here.
+# /etc/environment nor shell rc files. Every generated script and the cache
+# daemon source this file and map MIRRORET_PROXY onto http_proxy/https_proxy.
+MIRRORET_PROXY="http://192.168.30.243:3128"
+#MIRRORET_NO_PROXY=".internal,10.0.0.0/8"
+#MIRRORET_APT_SCHEME=https          # proxy permits CONNECT 443 only
 #MIRRORET_CA_BUNDLE=/etc/pki/ca-trust/source/anchors/corp-root.crt
-
-# If the proxy permits CONNECT on 443 only, APT's default plain HTTP is
-# blocked. Uncomment to fetch the archives over HTTPS instead.
-#MIRRORET_APT_SCHEME=https
-EOF
+EOF2
 ```
+
+Environment variables work too and beat the file, but they go **after**
+`sudo`: `sudo MIRRORET_APT_MODE=hybrid ./install.sh`, never
+`MIRRORET_APT_MODE=hybrid sudo ./install.sh` (sudo drops it).
 
 ### Check
 
 ```bash
-grep -E '^MIRRORET_(APT|RPM)_TARGETS' /etc/mirroret/mirroret.conf
+grep -E '^MIRRORET_(APT|RPM)_TARGETS|^MIRRORET_APT_MODE' /etc/mirroret/mirroret.conf
 ```
 
 ---
 
 ## 3. Apply
 
-Preview first. This changes nothing on disk and now tells you exactly what a
-real run would do:
+Preview first. A dry run predicts the real run, including which target specs
+would be written:
 
 ```bash
-sudo ./install.sh --upgrade --dry-run
+sudo ./install.sh --dry-run             # fresh box
+sudo ./install.sh --upgrade --dry-run   # existing install
 ```
 
-Look for `APT targets:` and `RPM targets:` near the end. If either says
-`NONE`, your target lines are not being read - fix that before applying.
+Look for `APT targets:` and `RPM targets:` near the end. `NONE` means the
+target lines are not being read.
 
 Then apply:
 
 ```bash
-sudo ./install.sh --upgrade
+sudo ./install.sh                       # fresh box (non-interactive if the conf exists)
+sudo ./install.sh --upgrade             # existing install: regenerate configs,
+                                        # units, sync scripts, cron, logrotate
 ```
 
-`--upgrade` never touches mirror data. It regenerates configs, the managed
-sync scripts and the cron block. Any sync script whose `MIRRORET-MANAGED`
-marker you removed is left alone.
-
-First install on a fresh box uses `sudo ./install.sh` instead.
+`--upgrade` never touches mirror data. It refuses to run if `/srv/mirroret`
+does not exist yet.
 
 ### Check
 
 ```bash
-./mirroretctl targets
+mirroretctl targets        # every target listed with its upstream; "not synced yet"
+mirroretctl config diff    # "every requested target has a generated spec"
+mirroretctl cache status   # hybrid/cache: daemon running on 127.0.0.1:8082
 ```
 
-Every target must be listed with an upstream URL. All will say
-`not synced yet` - correct at this point.
-
-```bash
-./mirroretctl config diff
-```
-
-Must report `every requested target has a generated spec`. If it reports
-`requested but NOT generated`, the upgrade did not pick your config up.
+`mirroretctl` is on `PATH` after the first install (`/usr/local/bin/mirroretctl`).
 
 ---
 
 ## 4. First sync
 
-RPM first: it is usually the bulk of the data.
+RPM first if you mirror both; it is usually the bulk.
 
 ```bash
-sudo ./mirroretctl sync rpm
+sudo mirroretctl sync rpm
 ```
 
-Read the first 20 lines:
+First lines to read:
 
 ```
 --- repo baseos <- https://yum.oracle.com/repo/OracleLinux/OL9/baseos/latest/x86_64/
   upstream lists 8123 packages; 8123 selected (arches=noarch,x86_64 newest_only=True source=False)
-  packages: 8123 selected, 8123 to download (41.2 GB), 0 already on disk
 ```
 
-`source=False` is the one to check. If it says `True`, stop and fix
-`MIRRORET_RPM_SOURCE` - source RPMs are 400-600 MB each and OL9 appstream
-carries ~44,000 of them.
+`source=False` is the one to check; source RPMs are 400-600 MB each.
 
 Then APT:
 
 ```bash
-sudo ./mirroretctl sync apt
+sudo mirroretctl sync apt
 ```
 
 ```
 --- suite jammy <- http://archive.ubuntu.com/ubuntu
   signature: NOT verified locally (no archive keyring found)
   indices: 8 files, 6142 packages listed
-  packages: 6142 to download (58.3 GB), 0 already on disk
-  ...
+  metadata-only: skipping 6142 package(s); pool is served on demand      # hybrid
   published: dists/jammy (8 index files)
+=== integrity check ===
 ```
 
-Two lines worth understanding:
+- `signature: NOT verified locally` is expected on a host without the
+  archive keyring (any RHEL server). Clients verify the mirrored signature
+  themselves; `MIRRORET_APT_REQUIRE_SIGNATURE=1` makes it fatal on the server.
+- `metadata-only` appears in hybrid mode: no packages are downloaded ahead of
+  time. In `mirror` mode you see `packages: N to download (X GB)` instead and
+  the sync takes hours.
+- `published:` appears only once every file the suite lists (and, in mirror
+  mode, every package) is on disk. An interrupted sync leaves the previous
+  state serving.
+- The sync script ends with `scripts/verify-mirror.sh`, the same check as
+  `mirroretctl verify`.
 
-- **`signature: NOT verified locally`** is expected on a RHEL host, which has
-  no `ubuntu-archive-keyring`. Not a security gap: the archive is mirrored
-  byte-for-byte including its signature, and every client re-verifies it with
-  its own keyring - which is the check that protects the client. Set
-  `MIRRORET_APT_REQUIRE_SIGNATURE=1` to make it fatal instead.
-- **`published:`** appears only after every package the suite's indices list
-  is on disk and verified. If a sync is interrupted you will not see it, and
-  clients keep using the previous state instead of hitting 404s.
-
-Both take hours. Watch from another session:
+Watch from another shell with `mirroretctl logs tail`. Then:
 
 ```bash
-./mirroretctl logs tail
+sudo mirroretctl sync pip
+sudo mirroretctl sync npm
 ```
 
-Then the rest:
-
-```bash
-sudo ./mirroretctl sync pip
-sudo ./mirroretctl sync npm      # expect: CACHED: express (+ deps: 65)
-```
-
-If a sync aborts with `ABORT: ... would leave less than N GB free`, that is
-the disk guard doing its job before filling the volume. Reduce
-`MIRRORET_APT_COMPONENTS` or the target list, then re-run.
+`ABORT: ... would leave less than N GB free` is the `MIRRORET_SYNC_MIN_FREE_GB`
+guard. Reduce components/targets, switch to hybrid, or add disk.
 
 ### Check
 
 ```bash
-./mirroretctl targets            # every target now "published"
-./mirroretctl logs errors        # failures in recent logs
+mirroretctl targets        # every target now "published"
+mirroretctl verify         # every published Release complete on disk
+mirroretctl logs errors
 df -h /srv/mirroret
 ```
 
+`verify` reads the engine's `.mirroret-manifest.json` per suite, so a
+filtered mirror (main+restricted, amd64 only) passes; only files the
+configuration meant to mirror are required.
+
 ---
 
-## 5. Prove a client can actually use it
-
-This is the step people skip, and it is the only one that proves anything.
+## 5. Prove a client can use it
 
 ```bash
-./mirroretctl serve             # every HTTP endpoint answers
-./mirroretctl client verify     # configs vs what is really published
-./mirroretctl client simulate   # resolve AND download, as a client does
+mirroretctl serve             # every HTTP endpoint answers
+mirroretctl client verify     # configs advertise only published suites/repos
+mirroretctl client simulate   # resolve AND download with a throwaway dnf config
 ```
 
-`client verify` is the one that catches the mismatch that produces client
-404s - a config advertising a suite or repo the server has not published.
-
-Once this passes, delete the old tree if you kept one:
-
-```bash
-rm -rf ~/mirroret-main.prev ~/mirroret.zip
-```
+`client verify` catches the mismatch that produces client 404s.
 
 ---
 
 ## 6. Point clients at it
 
-`./mirroretctl client list` prints the exact URL for every generated config.
+Preferred: the published bootstrap script (top of this document). By hand,
+`mirroretctl client list` prints the URL of every generated config.
 
-### Ubuntu / Debian client
+### Ubuntu / Debian
 
 ```bash
 . /etc/os-release
 sudo curl -fsSL -o /etc/apt/sources.list.d/mirroret.list \
     "http://192.168.30.110:8080/config/${ID}-${VERSION_CODENAME}.list"
-
-# Disable the upstream entries or apt keeps going to the internet
 sudo mv /etc/apt/sources.list /etc/apt/sources.list.disabled-by-mirroret
-sudo rm -f /etc/apt/sources.list.d/ubuntu.sources    # 24.04+ / deb822 hosts
-
+sudo rm -f /etc/apt/sources.list.d/ubuntu.sources      # deb822 hosts (24.04+)
 sudo apt-get update
-apt-cache policy bash | head -5      # must name 192.168.30.110
+apt-cache policy bash | head -5                        # must name 192.168.30.110
 ```
 
-No key to import: the mirrored `Release` files carry the upstream signature,
-and the client verifies them with the keyring it already ships. A `.sources`
-(deb822) variant is generated alongside the `.list` if you prefer it.
+No key to import: the mirrored `Release` files carry the upstream signature
+and the config's `signed-by=` names the stock distro keyring. In hybrid mode
+the first `apt-get install` of a package fetches it through the mirror; the
+next client gets it from disk.
 
-### Oracle / Rocky / Alma / RHEL client
+### Oracle / Rocky / Alma / RHEL
 
 ```bash
-sudo curl -fsSL -o /etc/yum.repos.d/mirroret.repo \
-    http://192.168.30.110:8080/config/ol9.repo
-
+sudo curl -fsSL -o /etc/yum.repos.d/mirroret.repo http://192.168.30.110:8080/config/ol9.repo
 sudo dnf config-manager --set-disabled "*"
 sudo dnf config-manager --set-enabled "mirroret-*"
-sudo dnf clean all && sudo dnf repolist     # only mirroret-* enabled
-sudo dnf install -y bash                    # downloads from the mirror
+sudo dnf clean all && sudo dnf repolist
+sudo dnf install -y bash
 ```
 
-No key to import either: mirrored RPMs keep their upstream signature and the
-generated `.repo` points `gpgkey` at the vendor key already in
-`/etc/pki/rpm-gpg/`. Do **not** add `repo_gpgcheck=1` - see
-[MULTI-DISTRO.md](MULTI-DISTRO.md).
+No key to import: `gpgkey` points at the vendor key already in
+`/etc/pki/rpm-gpg/`. Do not add `repo_gpgcheck=1`.
 
-### pip / npm client
+### pip / npm / Docker
 
 ```bash
 sudo curl -fsSL -o /etc/pip.conf http://192.168.30.110:8080/config/pip.conf
 curl -fsSL -o ~/.npmrc http://192.168.30.110:8080/config/.npmrc
+sudo curl -fsSL -o /etc/docker/daemon.json http://192.168.30.110:8080/config/docker-daemon.json && sudo systemctl restart docker
 ```
+
+Details: [CLIENT-CONFIGURATION-GUIDE.md](CLIENT-CONFIGURATION-GUIDE.md).
 
 ---
 
 ## 7. Day to day
 
 ```bash
-mirroretctl                  # interactive menu, 21 options
+mirroretctl                  # interactive menu
 mirroretctl status           # services, ports, disk, last sync, cron
-mirroretctl targets          # what this box serves, and whether it synced
-mirroretctl sync status      # is a sync running right now
-mirroretctl logs errors      # what failed recently
-mirroretctl doctor           # full read-only diagnostic
-mirroretctl config diff      # config vs what is actually generated
-mirroretctl report           # ONE txt file describing everything, for sharing
+mirroretctl targets
+mirroretctl sync status
+mirroretctl cache status     # hybrid/cache: hit rate, bytes from upstream
+mirroretctl logs errors
+mirroretctl doctor
+mirroretctl report           # one redacted txt file for support
 ```
 
-Cron already runs a nightly sync and a weekly cleanup:
+Cron runs `sync-all.sh` nightly at `MIRRORET_SYNC_HOUR` and `cleanup-all.sh`
+weekly (`sudo crontab -l`). Logs rotate through `/etc/logrotate.d/mirroret`.
+
+Changing what is mirrored is always:
 
 ```bash
-sudo crontab -l
+sudo mirroretctl config edit
+sudo mirroretctl upgrade
+mirroretctl targets
+sudo mirroretctl sync apt      # or rpm
 ```
 
-Changing what is mirrored is always the same two steps:
-
-```bash
-sudo mirroretctl config edit    # edit the target lines
-sudo mirroretctl upgrade        # apply
-mirroretctl targets             # confirm
-```
-
-Adding a distro is one word in `MIRRORET_APT_TARGETS` /
-`MIRRORET_RPM_TARGETS` plus an upgrade and a sync. Removing one drops its
-spec so it stops syncing; its data stays on disk until you delete it.
+Switching storage mode is the same edit (`MIRRORET_APT_MODE`) followed by
+`upgrade`; packages already on disk stay and keep being served.
 
 ---
 
 ## When something is wrong
 
-Start here, in this order:
-
 ```bash
-mirroretctl targets        # is it even configured, and did it sync?
-mirroretctl client verify  # does what clients are told match what exists?
-mirroretctl logs errors    # what actually failed
-mirroretctl doctor         # everything else
+mirroretctl targets
+mirroretctl client verify
+mirroretctl verify
+mirroretctl logs errors
+mirroretctl doctor --net
 ```
 
-`mirroretctl report` writes one redacted text file covering the whole host -
-that is the thing to send when you need someone else to look.
-
-Specific symptoms: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-Environment problems mirroret cannot fix for you (proxy allow-list, clock
-skew, corporate CA): `../FIXME-ENVIRONMENT.md`.
+Symptoms and fixes: [TROUBLESHOOTING.md](TROUBLESHOOTING.md). Proxy and CA
+issues: [PROXY_AND_CA.md](PROXY_AND_CA.md).

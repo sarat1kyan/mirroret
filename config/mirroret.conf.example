@@ -45,19 +45,20 @@
 
 # -- Distribution / distro-specific -------------------------------------------
 
-# Ubuntu codename to mirror (e.g. focal, jammy, noble).
-# Default: auto-detected from the running system.
+# LEGACY host-OS fallbacks. Only consulted when MIRRORET_APT_TARGETS /
+# MIRRORET_RPM_TARGETS (below) are unset, in which case mirroret mirrors the
+# release the SERVER itself runs. Set the *_TARGETS lines instead.
+# Default: derived from /etc/os-release on the mirror server.
 #MIRRORET_UBUNTU_CODENAME=jammy
-
-# RHEL/Rocky major version to sync (e.g. 8, 9).
-# Default: auto-detected from the running system.
+#MIRRORET_DEBIAN_CODENAME=bookworm
 #MIRRORET_RHEL_VERSION=9
 
 # APT mirror architecture.
 # Default: amd64
 #MIRRORET_APT_ARCH=amd64
 
-# Number of apt-mirror download threads.
+# Number of apt-mirror download threads (legacy apt-mirror tool only; the
+# native engine uses MIRRORET_APT_JOBS).
 # Default: 10
 #MIRRORET_APT_THREADS=10
 
@@ -235,6 +236,32 @@
 # Default: 0
 #MIRRORET_APT_BACKPORTS=0
 
+# -- Storage mode / on-demand cache -------------------------------------------
+
+# How APT packages are stored. See docs/CACHE.md.
+# mirror - every package downloaded up front. Fully offline once synced.
+#              Roughly 400 GB per Ubuntu release (amd64, all components).
+# hybrid - (recommended) the signed index tree is mirrored (~2 GB); packages
+#              are fetched from upstream on first request and kept. apt-get
+#              update works offline; disk converges on what clients install.
+# cache  - nothing up front; indices and packages both on demand. Smallest,
+#              but a cold apt-get update needs upstream to be reachable.
+# hybrid and cache run the mirroret-cache daemon on 127.0.0.1:MIRRORET_CACHE_PORT
+# and nginx hands cache misses to it. Default: mirror
+#MIRRORET_APT_MODE=hybrid
+
+# LRU cap on cached PACKAGE files, in GB. Indices are never evicted.
+# Default: 0 (no cap). Apply a change with: sudo mirroretctl cache gc
+#MIRRORET_CACHE_MAX_SIZE_GB=0
+
+# Seconds before a cached index (InRelease, Packages, ...) is revalidated
+# upstream with a conditional GET. Default: 300
+#MIRRORET_CACHE_METADATA_TTL=300
+
+# Loopback port the cache daemon listens on. nginx is its only client; it is
+# never opened in the firewall. Default: 8082
+#MIRRORET_CACHE_PORT=8082
+
 # -- APT engine ---------------------------------------------------------------
 
 # Which tool to use for mirroring APT repositories.
@@ -270,8 +297,8 @@
 #MIRRORET_APT_LANGUAGES="en"
 
 # Mirror AppStream dep11 metadata and icons (tens of GB on Ubuntu universe).
-# Default: 0
-#MIRRORET_APT_DEP11=0
+# Default: 1 (mirrored, because stock apt asks for it). Set 0 to skip.
+#MIRRORET_APT_DEP11=1
 
 # Mirror Contents-<arch> indices, used by apt-file. Large. Default: 0
 #MIRRORET_APT_CONTENTS=0
@@ -409,13 +436,17 @@
 # Checked before the run AND between each repo/package. Default: 10 GB.
 #MIRRORET_SYNC_MIN_FREE_GB=10
 
-# Repository list to sync. Defaults vary by flavor.
-# Rocky/Alma 8: "baseos appstream extras"
-# Rocky/Alma 9: "baseos appstream"
-# RHEL: "rhel-9-for-x86_64-baseos-rpms rhel-9-for-x86_64-appstream-rpms"
-# Oracle Linux 9: "ol9_baseos_latest ol9_appstream ol9_UEKR8 ol9_developer_EPEL"
-# Oracle Linux 8: "ol8_baseos_latest ol8_appstream"
-# Fedora: "fedora updates"
+# Default repo list per flavor when MIRRORET_RPM_REPOS is unset
+# (rpm_flavor_default_repos in lib/targets.sh):
+#   rocky / almalinux 9+ : baseos appstream crb extras
+#   rocky / almalinux 8  : baseos appstream powertools extras
+#   centos (Stream)      : baseos appstream crb
+#   ol 8 / 9             : baseos appstream uek codeready epel
+#   fedora               : everything updates
+#   epel                 : everything
+#   rhel                 : baseos appstream
+# Legacy dnf ids (ol9_baseos_latest, ol9_UEKR8, rhel-9-for-x86_64-baseos-rpms)
+# are recognised and translated to the short names above.
 #MIRRORET_RPM_REPOS="baseos appstream"
 
 # -- npm extras ----------------------------------------------------------------
@@ -503,9 +534,19 @@
 
 # -- Proxy / corporate CA (needed for unattended cron syncs) -------------------
 
-# Proxy for all upstream fetches. Set these HERE (not just in your shell) so
-# the cron-driven syncs and the Verdaccio/pypiserver systemd units inherit
-# them - cron and systemd do NOT read /etc/environment or shell rc files.
+# Proxy for all upstream fetches. Set it HERE (not just in your shell) so the
+# cron-driven syncs, the cache daemon and the Verdaccio/pypiserver units
+# inherit it - cron and systemd do NOT read /etc/environment or shell rc
+# files. MIRRORET_PROXY is the operator knob (the wizard writes it); every
+# generated script maps it onto http_proxy/https_proxy when those are not
+# already set, and always excludes localhost/127.0.0.1/::1 from proxying.
+#MIRRORET_PROXY=http://proxy.example.internal:3128
+
+# Hosts and networks that must NOT go through the proxy (comma separated).
+# Loopback is added automatically. Mapped onto no_proxy.
+#MIRRORET_NO_PROXY=.internal,10.0.0.0/8,192.168.0.0/16
+
+# The conventional names also work and take precedence when set.
 #http_proxy=http://proxy.example.internal:3128
 #https_proxy=http://proxy.example.internal:3128
 #no_proxy=localhost,127.0.0.1,::1,10.0.0.0/8,192.168.0.0/16
@@ -514,15 +555,16 @@
 # it as SSL_CERT_FILE / REQUESTS_CA_BUNDLE / PIP_CERT / NODE_EXTRA_CA_CERTS /
 # CURL_CA_BUNDLE in every generated sync script, and injects
 # NODE_EXTRA_CA_CERTS into the Verdaccio unit.
-# You still need the CA in the OS store: see FIXME-ENVIRONMENT.md.
+# You still need the CA in the OS store: see docs/PROXY_AND_CA.md.
 #MIRRORET_CA_BUNDLE=/etc/pki/tls/cert.pem
 
 # -- Sync timeouts / log retention ---------------------------------------------
 
-# Wall-clock cap on a single reposync invocation. Behind a flaky proxy
-# reposync can hang for days while holding the sync lock, which silently
-# blocks every later cron run. Default: 6h
-#MIRRORET_SYNC_TIMEOUT=6h
+# Wall-clock cap on a single sync invocation. Behind a flaky proxy a sync
+# can hang for days while holding the sync lock, which silently blocks every
+# later cron run. Default: 12h for the native APT/RPM engines, 6h for the
+# legacy reposync script.
+#MIRRORET_SYNC_TIMEOUT=12h
 
 # Age out sync logs. logrotate alone cannot bound these because each run
 # writes a NEW timestamped filename. cleanup-all.sh deletes older ones.

@@ -1,10 +1,52 @@
 # Proxy and Corporate TLS Inspection
 
-This guide covers running mirroret behind an HTTP/HTTPS proxy and behind
-a TLS-inspecting middlebox that re-signs traffic with a private CA.
+## 0. The one thing to do first
 
-Everything here is **generic**: no host, IP, or vendor name is baked in.
-Where a path differs by distribution, both are listed.
+Set the proxy in `/etc/mirroret/mirroret.conf`:
+
+```bash
+MIRRORET_PROXY="http://proxy.example.internal:3128"
+#MIRRORET_NO_PROXY=".internal,10.0.0.0/8"      # loopback is excluded automatically
+#MIRRORET_APT_SCHEME=https                     # if the proxy only permits CONNECT :443
+#MIRRORET_CA_BUNDLE=/etc/pki/ca-trust/source/anchors/corp-root.crt   # TLS inspection only
+```
+
+then `sudo ./install.sh --upgrade`. The first-run wizard writes the same
+lines when you answer its proxy question.
+
+Every generated script (`sync-*.sh`, `sync-all.sh`, `cleanup-all.sh`) and the
+cache daemon's launcher (`run-cache.sh`) source the conf on each run through
+a shared preamble (`mirroret_script_preamble` in `lib/common.sh`) that:
+
+- maps `MIRRORET_PROXY` onto `http_proxy`/`https_proxy` when those are not set
+  (so plain `http_proxy=`/`https_proxy=` lines in the conf also work, and win);
+- maps `MIRRORET_NO_PROXY` onto `no_proxy` and always appends
+  `localhost,127.0.0.1,::1`, so the npm sync reaching Verdaccio and nginx
+  reaching the cache daemon never go through the proxy;
+- mirrors lower/upper-case variants so python, curl, pip, npm and dnf all see it;
+- exports `MIRRORET_CA_BUNDLE` as `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`,
+  `PIP_CERT`, `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`.
+
+The Verdaccio unit and config, the pypiserver unit and the registry service
+get a proxy drop-in / uplink proxy from the same values at install time. Do
+not edit the crontab or the generated scripts to add proxy lines: the
+managed cron block and the scripts are rewritten by `--upgrade`.
+
+For the **installer itself** (dnf/apt-get/pip/npm during `install.sh`), the
+wizard exports the proxy into its own environment after you answer. On a
+non-interactive install pass it explicitly:
+
+```bash
+sudo MIRRORET_PROXY=http://proxy.example.internal:3128 \
+     http_proxy=http://proxy.example.internal:3128 https_proxy=http://proxy.example.internal:3128 \
+     ./install.sh --non-interactive
+```
+
+(variables after `sudo`; `sudo` strips them otherwise).
+
+The rest of this document covers the host-level tools that are **not** run by
+mirroret's scripts (your interactive shell, dockerd, podman) and how to tell
+a CONNECT-only or allow-listing proxy from TLS inspection.
 
 ---
 
@@ -125,46 +167,23 @@ systemctl --user import-environment HTTP_PROXY HTTPS_PROXY NO_PROXY
 
 ### systemd services that mirroret creates
 
-`pypiserver` and `verdaccio` units run under dedicated system users.
-If they need outbound, add a drop-in:
+`pypiserver`, `verdaccio` and the registry unit receive
+`Environment=HTTP_PROXY/HTTPS_PROXY/NO_PROXY` drop-ins (and Verdaccio's
+uplink gets `http_proxy`/`https_proxy` in `config.yaml`) from the values
+present when `install.sh` runs. Set `MIRRORET_PROXY` in the conf and
+`sudo ./install.sh --upgrade` rather than writing drop-ins by hand; the
+uninstaller removes those drop-ins with the unit.
+
+### Cron-driven sync scripts and mirroret's own units
+
+Nothing to do beyond section 0: the scripts read `MIRRORET_PROXY` from the
+conf on every run, and the `pypiserver`, `verdaccio` and registry units get
+their proxy drop-in from the installer. Confirm from a clean environment:
 
 ```bash
-sudo mkdir -p /etc/systemd/system/verdaccio.service.d
-sudo install -m 0644 /dev/stdin /etc/systemd/system/verdaccio.service.d/proxy.conf <<EOF
-[Service]
-Environment="HTTP_PROXY=${http_proxy}"
-Environment="HTTPS_PROXY=${https_proxy}"
-Environment="NO_PROXY=${no_proxy}"
-EOF
-sudo systemctl daemon-reload
-sudo systemctl restart verdaccio
+sudo env -i bash -c '/srv/mirroret/scripts/sync-pip-packages.sh'
+mirroretctl doctor --net
 ```
-
-### Cron-driven sync scripts
-
-cron does **not** inherit your interactive shell. Either:
-
-```bash
-# Option A - put the env in root's crontab above the managed block:
-sudo crontab -e
-# Add the four lines at the top:
-http_proxy=http://proxy.example.internal:3128
-https_proxy=http://proxy.example.internal:3128
-no_proxy=localhost,127.0.0.1,.internal
-HTTPS_PROXY=$https_proxy
-
-# Option B - put them in /etc/environment so all cron jobs see them:
-sudo install -m 0644 /dev/stdin /etc/environment.proxy <<EOF
-http_proxy="http://proxy.example.internal:3128"
-https_proxy="http://proxy.example.internal:3128"
-no_proxy="localhost,127.0.0.1,.internal"
-EOF
-# then prepend `. /etc/environment.proxy; ` to the cron command, OR
-# wrap the script in one that sources the file first.
-```
-
-Re-run `scripts/mirroret-debug.sh --net` from a non-interactive shell
-(`env -i bash -c 'scripts/mirroret-debug.sh --net'`) to confirm.
 
 ---
 
@@ -345,8 +364,8 @@ If any step fails, the corporate CA is not yet trusted by that tool.
 | Docker (rootful) | - (read by daemon, not shell) | systemd drop-in | `/etc/docker/certs.d/<host>/ca.crt` |
 | Podman rootful | - | systemd drop-in | `/etc/containers/certs.d/<host>/ca.crt` |
 | Podman rootless | systemd-user `environment.d` | - | `~/.config/containers/certs.d/<host>/ca.crt` |
-| systemd unit | `Environment=` drop-in | unit `.d/` | OS trust store |
-| cron | `/etc/environment.proxy` or in crontab | crontab line | OS trust store |
+| mirroret units (pypiserver, verdaccio, registry) | drop-in written by `install.sh` from `MIRRORET_PROXY` | unit `.d/proxy.conf` | OS trust store / `NODE_EXTRA_CA_CERTS` |
+| mirroret sync scripts, cache daemon, cron | `MIRRORET_PROXY` in `/etc/mirroret/mirroret.conf` | - | `MIRRORET_CA_BUNDLE` |
 
 `scripts/mirroret-debug.sh` reports whether each of these is configured
 on the mirror host. Run it once before sync and once again after the
@@ -356,7 +375,8 @@ first sync attempt.
 
 ## 5. What mirroret itself does and doesn't do
 
-- The installer does **not** rewrite the OS trust store. It expects step 1 to be done by the operator.
+- The installer does **not** rewrite the OS trust store. It expects step 1 to be done by the operator. `MIRRORET_CA_BUNDLE` is passed to the engines and exported to pip/npm/curl in the generated scripts.
 - The installer **does** detect a few common signals (proxy env vars set, custom CA anchors present) in preflight and prints actionable warnings - see `lib/preflight.sh`.
-- The cron-driven sync scripts use `exec > >(tee ...)` so their exit codes are honest. A failing sync exits non-zero, so cron-mail will surface it on misconfigured proxy/CA.
-- TLS inspection that re-signs `archive.ubuntu.com` / `deb.debian.org` will also re-sign the **package metadata signatures themselves**. apt clients will reject the mirrored Release files because they're signed by Canonical/Debian, not by the corporate CA. There is no fix for this short of either bypassing the middlebox for these hosts (allow-list) or running mirroret's own re-signing flow (`MIRRORET_APT_RESIGN=1`, plus a manual `apt-ftparchive` re-signing step - not yet automated).
+- `MIRRORET_PROXY` / `MIRRORET_NO_PROXY` / `http_proxy` from the conf are honoured by every generated script and by `mirroret-cache` (section 0).
+- The sync scripts use `exec > >(tee ...)` so their exit codes are honest. A failing sync exits non-zero, so cron-mail will surface it on misconfigured proxy/CA.
+- A TLS-inspecting proxy that re-signs HTTPS to the archives does **not** by itself break APT verification: the mirrored `InRelease` is still Canonical's/Debian's signed file, and its checksums still match the packages. What breaks is the mirror server's TLS connection (fix: install the corporate CA, section 3) or, if the proxy rewrites response bodies, the download checksums (the engine refuses to publish and says which file). Only a middlebox that serves altered archive content makes clients reject `Release`; the fix there is to allow-list the archive hosts. `MIRRORET_APT_RESIGN=1` exists for operators who re-sign themselves; mirroret does not re-sign.

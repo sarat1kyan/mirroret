@@ -69,22 +69,34 @@ Each APT target mirrors three suites: `<release>`, `<release>-updates` and
 
 ### RPM flavors
 
-| flavor | upstream | repo ids |
-|---|---|---|
-| `rocky` | dl.rockylinux.org | baseos appstream crb extras devel plus highavailability resilientstorage nfv rt (8 uses `powertools` instead of `crb`) |
-| `almalinux` | repo.almalinux.org | same as rocky |
-| `ol` | yum.oracle.com | baseos appstream uek codeready epel addons kvm developer |
-| `centos` | mirror.stream.centos.org | baseos appstream crb highavailability nfv rt |
-| `fedora` | dl.fedoraproject.org | everything updates |
-| `epel` | dl.fedoraproject.org/pub/epel | everything next |
-| `rhel` | cdn.redhat.com (needs an entitlement certificate) | baseos appstream codeready supplementary |
+Each target mirrors the flavor's **default** repo ids
+(`rpm_flavor_default_repos` in `lib/targets.sh`). Every other id in the
+catalog can be requested with `MIRRORET_RPM_REPOS` (applies when a single
+RPM target is configured, or with the reposync engine).
 
-Override the repo list with `MIRRORET_RPM_REPOS`. An id that is not in the
-catalog is reported by name and skipped, rather than silently mirroring
-nothing.
+| flavor | upstream | default repo ids | also requestable via `MIRRORET_RPM_REPOS` |
+|---|---|---|---|
+| `rocky` | dl.rockylinux.org | 9+: `baseos appstream crb extras`; 8: `baseos appstream powertools extras` | `devel plus highavailability resilientstorage nfv rt` |
+| `almalinux` | repo.almalinux.org | same as rocky | same as rocky |
+| `ol` | yum.oracle.com | `baseos appstream uek codeready epel` | `uekr6 uekr7 uekr8 addons kvm developer` |
+| `centos` | mirror.stream.centos.org | `baseos appstream crb` | `highavailability nfv rt` |
+| `fedora` | dl.fedoraproject.org | `everything updates` | - |
+| `epel` | dl.fedoraproject.org/pub/epel | `everything` | `next` |
+| `rhel` | cdn.redhat.com (needs an entitlement certificate) | `baseos appstream` | `codeready supplementary` |
+
+An id that is not in the catalog is reported by name and skipped rather than
+silently mirroring nothing; a target that resolves to zero repos warns
+loudly. Legacy dnf ids are translated (`ol9_baseos_latest` -> `baseos`,
+`ol9_UEKR8` -> `uekr8`, `ol9_developer_EPEL` -> `epel`,
+`rhel-9-for-x86_64-appstream-rpms` -> `appstream`, `BaseOS` -> `baseos`).
 
 `uek` resolves to UEKR8 on OL9 and UEKR7 on OL8; ask for a specific one with
 `uekr6`/`uekr7`/`uekr8`.
+
+If `MIRRORET_RPM_REPOS` names an id outside the catalog (a subscription id
+such as `rhel-9-for-x86_64-baseos-rpms` that the alias table cannot map),
+`MIRRORET_RPM_ENGINE=auto` falls back to `reposync`, because only the host's
+own dnf knows that URL.
 
 ---
 
@@ -164,6 +176,10 @@ packages:
 
 Two Ubuntu releases do **not** cost twice one release: all releases of a
 flavor share a single `pool/`, exactly as upstream does.
+
+These are `MIRRORET_APT_MODE=mirror` figures. In `hybrid` mode an APT target
+costs roughly 2 GB of indices up front plus whatever clients actually
+install; see [CACHE.md](CACHE.md).
 
 The biggest lever is components. `universe` and `multiverse` are most of an
 Ubuntu mirror:

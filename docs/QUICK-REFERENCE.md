@@ -1,4 +1,4 @@
-# Quick Reference Card - Local Repository Server
+# Quick Reference Card
 
 ## What does this server mirror?
 
@@ -15,377 +15,122 @@ MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble debian:bookworm"
 MIRRORET_RPM_TARGETS="ol:9 rocky:9 epel:9"
 ```
 
-The mirror server's own distro is irrelevant - see docs/MULTI-DISTRO.md.
+The mirror server's own distro is irrelevant - see [MULTI-DISTRO.md](MULTI-DISTRO.md).
 
-## Sync one ecosystem
+## Most-used commands
 
-```bash
-sudo mirroretctl sync apt      # Ubuntu / Debian
-sudo mirroretctl sync rpm      # Oracle / Rocky / Alma / CentOS / EPEL / RHEL
-sudo mirroretctl sync pip
-sudo mirroretctl sync npm
-sudo mirroretctl sync all
-sudo mirroretctl sync stop     # stop whatever is running
+| Task | Command | Root |
+|---|---|---|
+| Install / first-run wizard | `sudo ./install.sh` | yes |
+| Apply a changed `/etc/mirroret/mirroret.conf` | `sudo mirroretctl upgrade` | yes |
+| What is configured, has it synced | `mirroretctl targets` | no |
+| Sync one ecosystem now | `sudo mirroretctl sync apt` (or `rpm`, `pip`, `npm`, `docker`, `all`) | yes |
+| Is a sync running | `mirroretctl sync status` | no |
+| Stop running syncs | `sudo mirroretctl sync stop` | yes |
+| Integrity check after a sync | `mirroretctl verify` | no |
+| On-demand cache health (hybrid/cache mode) | `mirroretctl cache status` | no |
+| Services, ports, disk, cron | `mirroretctl status` | no |
+| Full read-only diagnostic | `mirroretctl doctor` | no |
+| One text file for support | `mirroretctl report` | no |
+| Check generated client configs | `mirroretctl client verify` | no |
+| Resolve + download as a client would | `mirroretctl client simulate` | no |
+| Recent sync failures | `mirroretctl logs errors` | no |
+| Config vs generated scripts | `mirroretctl config diff` | no |
+| Approval queue | `mirroretctl approve list` | no |
+| Promote staged packages | `sudo mirroretctl approve all rpm` | yes |
+| Retention dry run / delete | `mirroretctl clean report` / `sudo mirroretctl clean prune` | no / yes |
+| Validate the installation | `sudo mirroretctl check` | yes |
+| Uninstall | `sudo mirroretctl uninstall --list` (preview) | yes |
+
+`install.sh` symlinks `mirroretctl` into `/usr/local/bin`, so it is on `PATH`
+after the first install. Before that, run `./mirroretctl` from the checkout.
+
+## `mirroretctl help`
+
+Output of `mirroretctl help`:
+
+```
+mirroretctl - control surface for a mirroret mirror server
+
+Usage:
+  mirroretctl                        interactive menu
+  mirroretctl menu                   interactive menu (explicitly)
+  mirroretctl <command> [args]
+
+Inspect (no root needed):
+  status                    services, ports, disk, last sync, cron
+  targets                   which distributions this server mirrors, and
+                            whether each one has actually synced
+  targets show <file>       print one target spec from /etc/mirroret/targets
+  doctor [--net] [--bundle] full read-only diagnostic
+  report [-o FILE]          write ONE txt file describing everything, for sharing
+  verify [--flavor F] [--suite S] [--json]
+                            check every published Release: each file it lists
+                            must be on disk with the right size
+  cache status|routes|size  on-demand cache: daemon stats, route table, disk use
+  sync status               which syncs are running, lock state
+  sync last                 final line of the newest sync logs
+  serve                     probe every HTTP endpoint locally
+  approve list              packages staged and waiting for approval
+  approve list rpm          full staged RPM file list
+  client list               generated client configs and their URLs
+  client show <file>        print one client config
+  client verify             check client configs for breaking mistakes
+  client simulate [pkg...]  act as a client: resolve AND download from the mirror
+  logs list|tail|show|errors
+  config show|path|diff
+  clean report              retention dry run (default; read-only)
+  service list              unit states
+
+Change state (root):
+  install [install.sh args] run the installer
+  upgrade                   re-apply config, regenerate managed scripts
+  check                     validate the installation
+  uninstall [args]          run the uninstaller (see uninstall.sh --help)
+  sync all|apt|rpm|pip|npm|docker
+  sync stop                 stop running syncs
+  approve all [pip|npm|rpm] promote staged packages (omit kind for all)
+  approve pip|npm|rpm <n>   promote packages matching a name
+  approve deny <kind> <n>   delete staged packages (decline them)
+  clean prune               retention delete
+  cache gc                  restart the cache daemon so a new size cap applies
+  config edit               edit /etc/mirroret/mirroret.conf
+  service start|stop|restart <unit>
+  service logs <unit> [n]
+
+Examples:
+  mirroretctl status
+  mirroretctl targets
+  sudo mirroretctl sync apt
+  sudo mirroretctl sync rpm
+  mirroretctl clean report
+  mirroretctl verify --flavor ubuntu
+  mirroretctl cache status
+  mirroretctl client verify
+  mirroretctl serve
+  mirroretctl approve list
+  sudo mirroretctl approve all rpm
+
+Approval mode (MIRRORET_APPROVAL_ENABLED=1) stages downloads instead of
+serving them. Nothing reaches a client until you approve it.
+
+Environment:
+  MIRRORET_CONF   config file to read (default /etc/mirroret/mirroret.conf).
+                  Handy for checking a staged config before applying it:
+                    MIRRORET_CONF=/tmp/new.conf mirroretctl config diff
 ```
 
-
-
-## Installation (One Command)
-```bash
-sudo ./mirroret-server-install.sh
-```
-
-## Important Locations
-
-| Location | Purpose |
-|----------|---------|
-| `/var/mirroret/` | Base directory |
-| `/var/mirroret/mirror/` | Downloaded packages (not for clients) |
-| `/var/mirroret/approved/` | Approved packages (served to clients) |
-| `/var/mirroret/scripts/` | All management scripts |
-| `/var/mirroret/config/` | Client configuration files |
-| `/var/mirroret/logs/` | All system logs |
-
-## Essential Commands
-
-### Server Management
-```bash
-# Check nginx status
-sudo systemctl status nginx
-
-# Restart nginx
-sudo systemctl restart nginx
-
-# View active connections
-sudo netstat -tlnp | grep 8080
-
-# Check disk usage
-df -h /var/mirroret
-```
-
-### Package Operations
-```bash
-# Manual sync packages
-/var/mirroret/scripts/sync-mirror.sh
-
-# Check available updates
-/var/mirroret/scripts/check-updates.sh
-
-# Show update comparison
-/var/mirroret/scripts/show-updates.sh
-
-# Auto-approve all packages
-/var/mirroret/scripts/approve-packages.sh --auto-approve
-
-# Manual approval (review first)
-/var/mirroret/scripts/approve-packages.sh
-
-# List all packages
-/var/mirroret/scripts/list-packages.sh
-
-# Get package details
-/var/mirroret/scripts/package-info.sh <package-name>
-```
-
-### Security Operations
-```bash
-# Detect security updates
-/var/mirroret/scripts/detect-security-updates.sh
-
-# Check CVEs for package
-/var/mirroret/scripts/check-cve.sh <package-name>
-
-# Exclude unwanted package
-/var/mirroret/scripts/exclude-package.sh <package-name>
-```
-
-### Maintenance
-```bash
-# View sync logs
-tail -f /var/mirroret/logs/sync-*.log
-
-# View nginx access logs
-tail -f /var/log/nginx/mirroret-access.log
-
-# Clean old logs (older than 30 days)
-find /var/mirroret/logs -mtime +30 -delete
-
-# Check cron schedule
-crontab -l | grep sync-mirror
-```
-
-## Client Setup Commands
-
-### Ubuntu/Debian Clients
-```bash
-# Quick setup (replace IP)
-REPO_IP="192.168.1.100"
-wget http://${REPO_IP}:8080/config/localrepo.list
-sudo mv localrepo.list /etc/apt/sources.list.d/
-sudo apt update
-
-# Disable official repos (optional)
-sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
-
-# Test installation
-sudo apt install htop
-```
-
-### RHEL/CentOS/Fedora Clients
-```bash
-# Quick setup (replace IP)
-REPO_IP="192.168.1.100"
-wget http://${REPO_IP}:8080/config/localrepo.repo
-sudo mv localrepo.repo /etc/yum.repos.d/
-sudo dnf clean all && sudo dnf makecache
-
-# Disable official repos (optional)
-sudo mkdir /etc/yum.repos.d/backup
-sudo mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/
-
-# Test installation
-sudo dnf install htop
-```
-
-## Network Information
-
-### Ports
-- **8080** - HTTP (Repository Access)
-- **22** - SSH (Management)
-
-### URLs
-- Repository Browser: `http://SERVER_IP:8080/`
-- Mirror Packages: `http://SERVER_IP:8080/mirror/`
-- Approved Packages: `http://SERVER_IP:8080/approved/`
-- Client Configs: `http://SERVER_IP:8080/config/`
-
-### Firewall Commands
-```bash
-# Ubuntu/Debian (UFW)
-sudo ufw allow from 192.168.1.0/24 to any port 8080
-
-# RHEL/CentOS (firewalld)
-sudo firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="192.168.1.0/24" port port="8080" protocol="tcp" accept'
-sudo firewall-cmd --reload
-```
-
-## Workflow Cheat Sheet
-
-### Daily Routine (5 min)
-```bash
-# 1. Check last night's sync
-tail -50 /var/mirroret/logs/sync-$(date +%Y%m%d)*.log
-
-# 2. Security check
-/var/mirroret/scripts/detect-security-updates.sh
-
-# 3. Approve if safe
-/var/mirroret/scripts/approve-packages.sh
-```
-
-### Emergency Rollback
-```bash
-# Find package in archive
-ls /var/mirroret/archive/
-
-# Rollback to specific version
-/var/mirroret/scripts/rollback-package.sh <package> <version>
-
-# Example:
-/var/mirroret/scripts/rollback-package.sh nginx 1.18.0
-```
-
-### Add New Client
-```bash
-# Copy config to client
-scp /var/mirroret/config/localrepo.list user@client:/tmp/
-
-# Or download directly on client
-wget http://SERVER_IP:8080/config/localrepo.list
-```
-
-## Troubleshooting Quick Fixes
-
-### Nginx Not Working
-```bash
-sudo nginx -t # Test config
-sudo systemctl restart nginx # Restart
-sudo systemctl status nginx # Check status
-sudo journalctl -u nginx -f # View logs
-```
-
-### Sync Failed
-```bash
-# Check logs
-tail -100 /var/mirroret/logs/sync-*.log
-
-# Test connectivity
-wget -O /dev/null http://archive.ubuntu.com/ubuntu/README
-
-# Run manual sync
-/var/mirroret/scripts/sync-mirror.sh
-```
-
-### Clients Can't Connect
-```bash
-# On server - check nginx
-sudo netstat -tlnp | grep 8080
-
-# On server - check firewall
-sudo ufw status
-
-# On client - test connection
-telnet SERVER_IP 8080
-curl -v http://SERVER_IP:8080/
-```
-
-### Out of Space
-```bash
-# Check usage
-du -sh /var/mirroret/*
-
-# Clean old logs
-find /var/mirroret/logs -mtime +30 -delete
-
-# Run cleanup (Debian/Ubuntu)
-/var/mirroret/mirror/var/clean.sh
-
-# Archive old packages
-mv /var/mirroret/archive/* /backup/
-```
-
-### Packages Not Updating
-```bash
-# Debian/Ubuntu - regenerate metadata
-cd /var/mirroret/approved/mirror
-dpkg-scanpackages . /dev/null | gzip -9c > Packages.gz
-
-# RHEL/CentOS - regenerate metadata
-createrepo --update /var/mirroret/approved/centos/9/baseos
-
-# Restart nginx
-sudo systemctl restart nginx
-```
-
-## Configuration File Locations
-
-| File | Purpose |
-|------|---------|
-| `/etc/nginx/sites-available/mirroret` | Nginx config (Debian/Ubuntu) |
-| `/etc/nginx/conf.d/mirroret.conf` | Nginx config (RHEL/CentOS) |
-| `/etc/apt/mirror.list` | apt-mirror config (Debian/Ubuntu) |
-| `/var/mirroret/config/blacklist-packages.txt` | Package blacklist |
-| `/var/mirroret/config/approved-packages.txt` | Package whitelist |
-| `/var/mirroret/config/approval-rules.conf` | Auto-approval rules |
-
-## Performance Tuning
-
-### Increase Sync Speed
-```bash
-# Edit /etc/apt/mirror.list
-set nthreads 20 # More parallel downloads
-```
-
-### Optimize Nginx
-```bash
-# Edit /etc/nginx/nginx.conf
-worker_processes auto;
-worker_connections 4096;
-```
-
-### Use Local Mirror
-```bash
-# Edit /etc/apt/mirror.list
-# Replace: http://archive.ubuntu.com
-# With: http://us.archive.ubuntu.com (or closest)
-```
-
-## Security Quick Tips
-
-### Enable HTTPS
-```bash
-# Generate certificate
-sudo openssl req -x509 -nodes -days 365 -newkey rsa:4096 \
-    -keyout /etc/nginx/ssl/repo.key \
-    -out /etc/nginx/ssl/repo.crt
-
-# Update nginx config to use SSL
-# Change listen 8080 to listen 8443 ssl
-```
-
-### Add Authentication
-```bash
-# Create password file
-sudo htpasswd -c /etc/nginx/.htpasswd repouser
-
-# Add to nginx config
-auth_basic "Restricted";
-auth_basic_user_file /etc/nginx/.htpasswd;
-```
-
-### IP Whitelist
-```bash
-# Edit nginx config, add:
-allow 192.168.1.0/24;
-deny all;
-```
-
-## Scheduled Tasks
-
-### Current Cron Jobs
-```bash
-# View cron schedule
-crontab -l
-
-# Default schedule:
-# 0 2 * * * /var/mirroret/scripts/sync-mirror.sh
-# (Daily at 2:00 AM)
-```
-
-### Modify Sync Time
-```bash
-crontab -e
-# Change hour: 0 2 * * * (2 AM) to 0 4 * * * (4 AM)
-```
-
-## Emergency Contacts & Info
-
-| Item | Value |
-|------|-------|
-| Installation Log | `/var/log/mirroret-setup.log` |
-| Sync Logs | `/var/mirroret/logs/sync-*.log` |
-| Nginx Access | `/var/log/nginx/mirroret-access.log` |
-| Nginx Errors | `/var/log/nginx/mirroret-error.log` |
-| Documentation | `/var/mirroret/README.md` |
-
-## One-Liners for Common Tasks
-
-```bash
-# Quick status check
-echo "Nginx: $(systemctl is-active nginx) | Disk: $(df -h /var/mirroret | awk 'NR==2 {print $5}') | Last sync: $(ls -lt /var/mirroret/logs/sync-*.log | head -1 | awk '{print $6,$7,$8}')"
-
-# Count packages
-echo "Mirror: $(find /var/mirroret/mirror -name '*.deb' -o -name '*.rpm' 2>/dev/null | wc -l) | Approved: $(find /var/mirroret/approved -name '*.deb' -o -name '*.rpm' 2>/dev/null | wc -l)"
-
-# Recent client IPs
-tail -1000 /var/log/nginx/mirroret-access.log | awk '{print $1}' | sort -u
-
-# Top accessed packages
-tail -1000 /var/log/nginx/mirroret-access.log | grep -oP '/[^/]+\.(deb|rpm)' | sort | uniq -c | sort -rn | head -10
-```
-
-## Getting Help
-
-1. Check logs first: `tail -f /var/mirroret/logs/*.log`
-2. Review documentation: `cat /var/mirroret/README.md`
-3. Test connectivity: `curl http://localhost:8080/`
-4. Check processes: `ps aux | grep nginx`
-
----
-
-**Print this card and keep it handy for quick reference!**
-
-**Server IP**: _______________
-**Port**: 8080
-**First Install Date**: _______________
-**Admin Contact**: _______________
+## Paths
+
+| Path | Purpose |
+|---|---|
+| `/etc/mirroret/mirroret.conf` | operator configuration (wizard-written or copied from `config/mirroret.conf.example`) |
+| `/etc/mirroret/targets/*.json` | generated target specs, one per distro release |
+| `/etc/mirroret/cache.json` | generated cache route table (hybrid/cache mode) |
+| `/srv/mirroret/apt/<flavor>/` | APT trees (`dists/` + `pool/`), served as `/<flavor>/` |
+| `/srv/mirroret/redhat/mirror/<flavor>/<major>/<repo>/` | RPM trees, served as `/redhat/<flavor>/<major>/<repo>/` |
+| `/srv/mirroret/config/` | generated client configs, served as `/config/` |
+| `/srv/mirroret/scripts/` | generated sync scripts (`sync-all.sh`, `sync-apt-repos.sh`, ...) |
+| `/srv/mirroret/logs/` | one timestamped log per sync run |
+| `/var/log/mirroret-install.log` | installer log |
+| `/etc/logrotate.d/mirroret` | managed log rotation |

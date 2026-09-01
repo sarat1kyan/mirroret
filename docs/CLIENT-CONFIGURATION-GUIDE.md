@@ -1,757 +1,279 @@
-# Complete Client Configuration Guide - All Package Types
+# Client configuration
 
-## Overview
+How a client machine is pointed at a mirroret server, for APT, RPM, pip,
+npm and Docker.
 
-This guide covers configuring clients to use your unified local repository for:
-- **APT** (Debian/Ubuntu)
-- **YUM/DNF** (RHEL/CentOS/Fedora)
-- **pip** (Python packages)
-- **Docker** (Container images)
-- **npm** (Node.js packages)
+The supported way is the published bootstrap script (section 1). Sections 2
+onwards explain what it does and how to do the same by hand. There are no
+`trusted=yes` / `gpgcheck=0` shortcuts here: mirrored packages keep their
+upstream signature and the client verifies it with the keyring it already
+has. Insecure client configs are only generated when the **server** was
+installed with `--insecure` / `MIRRORET_*_INSECURE=1`.
 
----
-
-## Prerequisites
-
-**Replace these values with your actual server details:**
-```bash
-REPO_SERVER="192.168.1.100" # Your repository server IP
-WEB_PORT="8080"
-DOCKER_PORT="5000"
-PIP_PORT="8081"
-NPM_PORT="4873"
-```
+Replace `SERVER` with the mirror's IP or hostname. The HTTP port is 8080
+unless `MIRRORET_WEB_PORT` was changed.
 
 ---
 
-## 1 Debian/Ubuntu Clients (APT)
+## 1. The bootstrap script: `setup-mirror-client.sh`
 
-### Complete Configuration Script
+The server publishes `scripts/setup-mirror-client.sh` at
+`http://SERVER:8080/config/setup-mirror-client.sh`. On each client:
+
 ```bash
-#!/bin/bash
-# Configure Debian/Ubuntu client to use local repository
-
-REPO_SERVER="192.168.1.100"
-WEB_PORT="8080"
-
-echo "Configuring APT to use local repository..."
-
-# Backup original sources
-sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup.$(date +%Y%m%d)
-sudo mkdir -p /etc/apt/sources.list.d/backup
-sudo mv /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/backup/ 2>/dev/null || true
-
-# Disable official repositories
-sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
-
-# Add local repository
-sudo tee /etc/apt/sources.list.d/mirroret.list << EOF
-# Unified Local Repository
-deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy main restricted universe multiverse
-deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy-updates main restricted universe multiverse
-deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy-security main restricted universe multiverse
-EOF
-
-# Update package cache
-sudo apt clean
-sudo apt update
-
-echo "[ok] APT configured successfully!"
-echo "Test with: sudo apt install htop"
+curl -fsSL -o /tmp/setup-mirror-client.sh \
+    http://SERVER:8080/config/setup-mirror-client.sh
+sudo bash /tmp/setup-mirror-client.sh --server SERVER
 ```
 
-### Which config file do I want?
+What it does:
 
-The server generates **one config per mirrored release**, named after it.
-List what is available:
+1. Detects the distribution and release from `/etc/os-release`.
+2. Fetches the matching published config (`<flavor>-<codename>.list` or
+   `<flavor><major>.repo`). If the server does not publish a config for this
+   exact release it lists what is available and stops rather than guessing.
+3. Backs up every file it is about to change into a timestamped directory,
+   then installs the mirror config and disables the upstream repositories.
+4. Installs `/etc/pip.conf` and the system-wide npm registry setting when the
+   server publishes `pip.conf` / `.npmrc`; configures the Docker registry
+   mirror only with `--docker`.
+5. Verifies: runs `apt-get update` / `dnf makecache`, then downloads a
+   package pinned to the version the mirror's own index lists. A 404 on
+   optional metadata is reported as a warning (apt itself ignores those);
+   a failed pinned download is fatal.
 
-```bash
-curl -s http://REPO_SERVER:8080/config/ | grep -o '[a-z0-9-]*\.\(list\|sources\)'
-# e.g. ubuntu-jammy.list  ubuntu-noble.list  debian-bookworm.list
+`--rollback` restores the most recent backup and removes the mirror config.
+
+Options (from `setup-mirror-client.sh --help`):
+
+| Flag | Meaning |
+|---|---|
+| `--server HOST[:PORT]` | mirror server (required unless `--rollback`) |
+| `--release NAME` | override the detected release (e.g. `jammy`, `9`) |
+| `--config NAME` | use this exact published config, e.g. `debian-bookworm.list` or `rocky9.repo`; overrides all detection |
+| `--keep-upstream` | install the mirror config but leave the upstream repos enabled |
+| `--no-pip` | skip `/etc/pip.conf` |
+| `--no-npm` | skip the system-wide npm registry setting |
+| `--docker` | also configure the Docker registry mirror |
+| `--rollback` | restore the most recent backup and remove the mirror config |
+| `-y`, `--yes` | non-interactive |
+| `--dry-run` | show what would change, change nothing |
+| `-h`, `--help` | usage |
+
+---
+
+## 2. Which config file is which
+
+The server generates one config per mirrored target under
+`/srv/mirroret/config/`, served at `http://SERVER:8080/config/`:
+
+```
+ubuntu-jammy.list      ubuntu-jammy.sources     # one-line and deb822 forms
+ubuntu-noble.list      ubuntu-noble.sources
+debian-bookworm.list   debian-bookworm.sources
+ol9.repo  rocky9.repo  epel9.repo
+pip.conf  .npmrc  docker-daemon.json
+setup-mirror-client.sh
 ```
 
-Pick the one matching the client's own release. `debian-client.list` is a
-copy of the first configured target, kept for older runbooks.
+`debian-client.list` and `redhat-client.repo` are copies of the first
+configured target, kept for older runbooks. List what a server publishes:
 
-Both formats are generated: `.list` (classic one-line) and `.sources`
-(deb822, the default on Ubuntu 24.04 and Debian 12). Use whichever your
-client already uses.
-
-### Manual Steps
 ```bash
-# 1. Backup current configuration
-sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
+curl -s http://SERVER:8080/config/
+mirroretctl client list        # on the server
+```
 
-# 2. Download the config for THIS client's release
+---
+
+## 3. APT (Ubuntu / Debian) by hand
+
+```bash
 . /etc/os-release
-wget -O /tmp/mirroret.list \
-    "http://REPO_SERVER:8080/config/${ID}-${VERSION_CODENAME}.list"
-sudo mv /tmp/mirroret.list /etc/apt/sources.list.d/mirroret.list
+sudo curl -fsSL -o /etc/apt/sources.list.d/mirroret.list \
+    "http://SERVER:8080/config/${ID}-${VERSION_CODENAME}.list"
 
-# 3. Disable the official repos, or apt keeps reaching the internet
-sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
-#    On deb822 hosts (Ubuntu 24.04+, Debian 12+) also:
+# Disable the upstream entries, or apt keeps reaching the internet.
+sudo mv /etc/apt/sources.list /etc/apt/sources.list.disabled-by-mirroret
 sudo rm -f /etc/apt/sources.list.d/ubuntu.sources \
-           /etc/apt/sources.list.d/debian.sources
+           /etc/apt/sources.list.d/debian.sources     # deb822 hosts
 
-# 4. Update
-sudo apt update
-
-# 5. Verify the mirror is what apt uses
-apt-cache policy bash | head -5      # must name REPO_SERVER
+sudo apt-get update
+apt-cache policy bash | head -5      # must name SERVER
 ```
 
-**No GPG key to import.** The mirrored `Release` files carry the upstream
-Ubuntu/Debian signature, so the client verifies them with the
-`ubuntu-archive-keyring` / `debian-archive-keyring` it already ships. If you
-see a config with `signed-by=...mirroret.gpg`, that install has
-`MIRRORET_APT_RESIGN=1` set and needs the mirror's key - see docs/SECURITY.md.
+Use the `.sources` file instead of `.list` if the client already uses deb822
+(Ubuntu 24.04, Debian 12 default).
 
-### apt update says "Failed to fetch ... Packages 404"
+**No key to import.** The mirrored `Release`/`InRelease` files are the
+upstream files, byte for byte, so the client verifies them with the
+`ubuntu-archive-keyring` / `debian-archive-keyring` it already ships. The
+generated config carries `signed-by=` pointing at that stock keyring and an
+`arch=` list pinned to what the mirror actually published.
 
-The config advertises a suite the server has not published yet. Run on the
+If a config carries `signed-by=/etc/apt/keyrings/mirroret.gpg` the server was
+configured with `MIRRORET_APT_RESIGN=1` and the mirror's key must be imported
+first - see [SECURITY.md](SECURITY.md).
+
+### `apt-get update` reports 404 on a `Packages` file
+
+The config advertises a suite the server has not published yet. On the
 **server**:
 
 ```bash
-mirroretctl client verify   # names the unpublished suites
+mirroretctl client verify      # names the unpublished suites
 sudo mirroretctl sync apt
 ```
 
-### Restore Original Configuration
+### Undo
+
 ```bash
-# If you need to revert
-sudo mv /etc/apt/sources.list.backup /etc/apt/sources.list
 sudo rm /etc/apt/sources.list.d/mirroret.list
-sudo apt update
+sudo mv /etc/apt/sources.list.disabled-by-mirroret /etc/apt/sources.list
+sudo apt-get update
 ```
+
+(or `setup-mirror-client.sh --rollback` if the script did the enrolment).
 
 ---
 
-## 2 RHEL/CentOS/Fedora Clients (YUM/DNF)
+## 4. RPM (Oracle / Rocky / Alma / CentOS Stream / RHEL / Fedora / EPEL) by hand
 
-### Complete Configuration Script
 ```bash
-#!/bin/bash
-# Configure RHEL/CentOS/Fedora client to use local repository
+# One file per mirrored target, named <flavor><major>.repo:
+curl -s http://SERVER:8080/config/ | grep -o '[a-z0-9]*\.repo'
+sudo curl -fsSL -o /etc/yum.repos.d/mirroret.repo http://SERVER:8080/config/ol9.repo
 
-REPO_SERVER="192.168.1.100"
-WEB_PORT="8080"
-
-echo "Configuring YUM/DNF to use local repository..."
-
-# Backup original repositories
-sudo mkdir -p /etc/yum.repos.d/backup
-sudo cp /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
-
-# Disable all official repositories
-sudo mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
-
-# Add local repository
-sudo tee /etc/yum.repos.d/mirroret.repo << EOF
-# Unified Local Repository
-
-[localrepo-baseos]
-name=Local Repository - BaseOS
-baseurl=http://${REPO_SERVER}:${WEB_PORT}/redhat/approved/rocky/9/baseos
-enabled=1
-gpgcheck=0
-priority=1
-
-[localrepo-appstream]
-name=Local Repository - AppStream
-baseurl=http://${REPO_SERVER}:${WEB_PORT}/redhat/approved/rocky/9/appstream
-enabled=1
-gpgcheck=0
-priority=1
-
-[localrepo-extras]
-name=Local Repository - Extras
-baseurl=http://${REPO_SERVER}:${WEB_PORT}/redhat/approved/rocky/9/extras
-enabled=1
-gpgcheck=0
-priority=1
-EOF
-
-# Clear cache and update
-if command -v dnf &> /dev/null; then
-    sudo dnf clean all
-    sudo dnf makecache
-    sudo dnf repolist
-else
-    sudo yum clean all
-    sudo yum makecache
-    sudo yum repolist
-fi
-
-echo "[ok] YUM/DNF configured successfully!"
-echo "Test with: sudo dnf install htop"
-```
-
-### Manual Steps
-```bash
-# 1. Backup current repos
-sudo mkdir -p /etc/yum.repos.d/backup
-sudo cp /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/
-
-# 2. Download the config for THIS client's distro + major version.
-#    One file per mirrored target, named <flavor><major>.repo:
-#      ol9.repo  rocky9.repo  almalinux9.repo  epel9.repo  rhel9.repo
-curl -s http://REPO_SERVER:8080/config/ | grep -o '[a-z0-9]*\.repo'
-wget -O /tmp/mirroret.repo http://REPO_SERVER:8080/config/ol9.repo
-sudo mv /tmp/mirroret.repo /etc/yum.repos.d/mirroret.repo
-
-# 3. Disable the official repos, or dnf keeps reaching the internet
+# Disable the upstream repos, or dnf keeps reaching the internet.
 sudo dnf config-manager --set-disabled "*"
 sudo dnf config-manager --set-enabled "mirroret-*"
 
-# 4. Update
-sudo dnf clean all && sudo dnf makecache
-
-# 5. Verify - only mirroret-* should be enabled
-sudo dnf repolist
-sudo dnf --disablerepo='*' --enablerepo='mirroret-*' install -y bash
+sudo dnf clean all && sudo dnf repolist     # only mirroret-* enabled
+sudo dnf install -y bash                    # downloads from the mirror
 ```
 
-**No GPG key to import.** Mirrored RPMs keep their upstream signature, and
-the generated `.repo` points `gpgkey` at the vendor key already present in
-`/etc/pki/rpm-gpg/`.
+**No key to import.** Mirrored RPMs keep their vendor signature and the
+generated `.repo` sets `gpgcheck=1` with `gpgkey=` pointing at the vendor key
+already present in `/etc/pki/rpm-gpg/` (`RPM-GPG-KEY-oracle`,
+`RPM-GPG-KEY-Rocky-9`, ...). Only when the server sets
+`MIRRORET_RPM_GPGKEY_URL` does the config point at a URL instead.
 
 **Do not add `repo_gpgcheck=1`.** A filtered mirror (an arch subset, or the
 default newest-only) has locally rebuilt `repomd.xml`, so upstream's
-signature on it no longer applies. `gpgcheck=1` still verifies every
-package's vendor signature, which is the check that matters.
+detached signature on it does not apply. Package signatures are untouched.
 
-### dnf says "Cannot download repomd.xml"
+### `dnf` says "Cannot download repomd.xml"
 
-That repo has not been published yet. Run on the **server**:
+That repo has not been published yet. On the **server**:
 
 ```bash
-mirroretctl client verify   # names the repos with no metadata
+mirroretctl client verify
 sudo mirroretctl sync rpm
 ```
 
-### Restore Original Configuration
+### Undo
+
 ```bash
-# If you need to revert
-sudo mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/
 sudo rm /etc/yum.repos.d/mirroret.repo
-sudo dnf clean all && sudo dnf makecache
-```
-
----
-
-## 3 Python pip Configuration
-
-### Method 1: Global Configuration (Recommended)
-```bash
-#!/bin/bash
-# Configure pip to use local repository
-
-REPO_SERVER="192.168.1.100"
-PIP_PORT="8081"
-
-echo "Configuring pip to use local repository..."
-
-# Create pip config directory
-mkdir -p ~/.pip
-
-# Create pip configuration
-cat > ~/.pip/pip.conf << EOF
-[global]
-index-url = http://${REPO_SERVER}:${PIP_PORT}/simple/
-trusted-host = ${REPO_SERVER}
-
-[install]
-trusted-host = ${REPO_SERVER}
-EOF
-
-# System-wide configuration (optional, requires sudo)
-sudo mkdir -p /etc/pip
-sudo tee /etc/pip/pip.conf << EOF
-[global]
-index-url = http://${REPO_SERVER}:${PIP_PORT}/simple/
-trusted-host = ${REPO_SERVER}
-EOF
-
-echo "[ok] pip configured successfully!"
-echo "Test with: pip install requests"
-```
-
-### Method 2: Per-Command Usage
-```bash
-# Install package using local repository
-pip install --index-url http://REPO_SERVER:8081/simple/ \
-    --trusted-host REPO_SERVER \
-    requests
-
-# Install with requirements file
-pip install -r requirements.txt \
-    --index-url http://REPO_SERVER:8081/simple/ \
-    --trusted-host REPO_SERVER
-```
-
-### Method 3: Environment Variable
-```bash
-# Add to ~/.bashrc or ~/.profile
-export PIP_INDEX_URL=http://REPO_SERVER:8081/simple/
-export PIP_TRUSTED_HOST=REPO_SERVER
-
-# Reload
-source ~/.bashrc
-
-# Now pip will automatically use local repo
-pip install flask
-```
-
-### Verify Configuration
-```bash
-# Show pip configuration
-pip config list
-
-# Test search (if supported by pypiserver)
-pip search requests
-
-# Install test package
-pip install requests
-```
-
----
-
-## 4 Docker Registry Configuration
-
-### Method 1: Daemon Configuration (Recommended)
-```bash
-#!/bin/bash
-# Configure Docker to use local registry
-
-REPO_SERVER="192.168.1.100"
-DOCKER_PORT="5000"
-
-echo "Configuring Docker to use local registry..."
-
-# Backup existing daemon.json
-if [ -f /etc/docker/daemon.json ]; then
-    sudo cp /etc/docker/daemon.json /etc/docker/daemon.json.backup
-fi
-
-# Create/update daemon.json
-sudo tee /etc/docker/daemon.json << EOF
-{
-  "insecure-registries": ["${REPO_SERVER}:${DOCKER_PORT}"],
-  "registry-mirrors": ["http://${REPO_SERVER}:${DOCKER_PORT}"]
-}
-EOF
-
-# Restart Docker
-sudo systemctl restart docker
-
-# Wait for Docker to start
-sleep 3
-
-echo "[ok] Docker configured successfully!"
-echo "Test with: docker pull ${REPO_SERVER}:${DOCKER_PORT}/ubuntu:22.04"
-```
-
-### Pulling Images from Local Registry
-```bash
-# Pull from local registry
-docker pull REPO_SERVER:5000/ubuntu:22.04
-docker pull REPO_SERVER:5000/nginx:latest
-docker pull REPO_SERVER:5000/python:3.11
-
-# Tag and push your own images
-docker tag my-app:latest REPO_SERVER:5000/my-app:latest
-docker push REPO_SERVER:5000/my-app:latest
-
-# List images in registry
-curl -X GET http://REPO_SERVER:5000/v2/_catalog
-
-# List tags for an image
-curl -X GET http://REPO_SERVER:5000/v2/ubuntu/tags/list
-```
-
-### Docker Compose Configuration
-```yaml
-version: '3.8'
-
-services:
-  app:
-    image: REPO_SERVER:5000/ubuntu:22.04
-    # ... rest of configuration
-```
-
-### Verify Docker Registry
-```bash
-# Check registry is accessible
-curl http://REPO_SERVER:5000/v2/
-
-# Should return: {}
-
-# List all images
-curl http://REPO_SERVER:5000/v2/_catalog
-```
-
----
-
-## 5 npm Registry Configuration
-
-### Method 1: Global Configuration (Recommended)
-```bash
-#!/bin/bash
-# Configure npm to use local registry
-
-REPO_SERVER="192.168.1.100"
-NPM_PORT="4873"
-
-echo "Configuring npm to use local registry..."
-
-# Set registry globally
-npm set registry http://${REPO_SERVER}:${NPM_PORT}/
-
-# Create .npmrc in home directory
-cat > ~/.npmrc << EOF
-registry=http://${REPO_SERVER}:${NPM_PORT}/
-EOF
-
-# Verify configuration
-npm config get registry
-
-echo "[ok] npm configured successfully!"
-echo "Test with: npm install express"
-```
-
-### Method 2: Project-Specific Configuration
-```bash
-# Create .npmrc in project directory
-cd /path/to/your/project
-
-cat > .npmrc << EOF
-registry=http://REPO_SERVER:4873/
-EOF
-
-# Now npm install will use local registry
-npm install
-```
-
-### Method 3: Per-Command Usage
-```bash
-# Install package using local registry
-npm install --registry http://REPO_SERVER:4873/ express
-
-# Install all dependencies
-npm install --registry http://REPO_SERVER:4873/
-```
-
-### Publishing to Local Registry
-```bash
-# Create user (first time only)
-npm adduser --registry http://REPO_SERVER:4873/
-
-# Publish package
-npm publish --registry http://REPO_SERVER:4873/
-```
-
-### Verify npm Registry
-```bash
-# Check current registry
-npm config get registry
-
-# Search for package
-npm search express --registry http://REPO_SERVER:4873/
-
-# View package info
-npm view express --registry http://REPO_SERVER:4873/
-```
-
----
-
-## Complete Client Setup Script (All Package Types)
-
-```bash
-#!/bin/bash
-#######################################################################
-# Complete Client Configuration Script
-# Configures ALL package managers to use local repository
-#######################################################################
-
-REPO_SERVER="192.168.1.100" # CHANGE THIS
-WEB_PORT="8080"
-DOCKER_PORT="5000"
-PIP_PORT="8081"
-NPM_PORT="4873"
-
-# Colors
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-echo "========================================================"
-echo " Unified Repository Client Configuration"
-echo "========================================================"
-echo ""
-
-# Detect OS
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$ID
-fi
-
-# Configure APT (Debian/Ubuntu)
-if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
-    echo -e "${BLUE}[1/5] Configuring APT...${NC}"
-    sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup 2>/dev/null || true
-    sudo sed -i 's/^deb/# deb/g' /etc/apt/sources.list
-    sudo tee /etc/apt/sources.list.d/mirroret.list << EOF
-deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy main restricted universe multiverse
-deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy-updates main restricted universe multiverse
-deb [trusted=yes] http://${REPO_SERVER}:${WEB_PORT}/debian/approved/mirror jammy-security main restricted universe multiverse
-EOF
-    sudo apt update
-    echo -e "${GREEN}[ok] APT configured${NC}"
-fi
-
-# Configure YUM/DNF (RHEL/CentOS/Fedora)
-if [[ "$OS" == "centos" || "$OS" == "rhel" || "$OS" == "fedora" || "$OS" == "rocky" ]]; then
-    echo -e "${BLUE}[1/5] Configuring YUM/DNF...${NC}"
-    sudo mkdir -p /etc/yum.repos.d/backup
-    sudo mv /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
-    sudo tee /etc/yum.repos.d/mirroret.repo << EOF
-[localrepo-baseos]
-name=Local Repository - BaseOS
-baseurl=http://${REPO_SERVER}:${WEB_PORT}/redhat/approved/rocky/9/baseos
-enabled=1
-gpgcheck=0
-
-[localrepo-appstream]
-name=Local Repository - AppStream
-baseurl=http://${REPO_SERVER}:${WEB_PORT}/redhat/approved/rocky/9/appstream
-enabled=1
-gpgcheck=0
-EOF
-    if command -v dnf &> /dev/null; then
-        sudo dnf clean all && sudo dnf makecache
-    else
-        sudo yum clean all && sudo yum makecache
-    fi
-    echo -e "${GREEN}[ok] YUM/DNF configured${NC}"
-fi
-
-# Configure pip
-echo -e "${BLUE}[2/5] Configuring pip...${NC}"
-mkdir -p ~/.pip
-cat > ~/.pip/pip.conf << EOF
-[global]
-index-url = http://${REPO_SERVER}:${PIP_PORT}/simple/
-trusted-host = ${REPO_SERVER}
-EOF
-echo -e "${GREEN}[ok] pip configured${NC}"
-
-# Configure Docker
-echo -e "${BLUE}[3/5] Configuring Docker...${NC}"
-if command -v docker &> /dev/null; then
-    sudo tee /etc/docker/daemon.json << EOF
-{
-  "insecure-registries": ["${REPO_SERVER}:${DOCKER_PORT}"],
-  "registry-mirrors": ["http://${REPO_SERVER}:${DOCKER_PORT}"]
-}
-EOF
-    sudo systemctl restart docker 2>/dev/null || true
-    echo -e "${GREEN}[ok] Docker configured${NC}"
-else
-    echo -e "${GREEN}[skip] Docker not installed, skipping${NC}"
-fi
-
-# Configure npm
-echo -e "${BLUE}[4/5] Configuring npm...${NC}"
-if command -v npm &> /dev/null; then
-    npm set registry http://${REPO_SERVER}:${NPM_PORT}/
-    echo -e "${GREEN}[ok] npm configured${NC}"
-else
-    echo -e "${GREEN}[skip] npm not installed, skipping${NC}"
-fi
-
-# Verify configuration
-echo -e "${BLUE}[5/5] Verifying configuration...${NC}"
-echo ""
-echo "Package Manager Configurations:"
-echo " * APT/YUM: Configured to use ${REPO_SERVER}:${WEB_PORT}"
-echo " * pip: http://${REPO_SERVER}:${PIP_PORT}"
-echo " * Docker: ${REPO_SERVER}:${DOCKER_PORT}"
-echo " * npm: http://${REPO_SERVER}:${NPM_PORT}"
-echo ""
-echo "========================================================"
-echo -e "${GREEN} Configuration Complete!${NC}"
-echo "========================================================"
-```
-
----
-
-## Verification & Testing
-
-### Test APT (Debian/Ubuntu)
-```bash
-# Check configured sources
-apt-cache policy
-
-# Search for package
-apt-cache search nginx
-
-# Install test package
-sudo apt install htop
-
-# Verify package came from local repo
-apt-cache madison htop
-```
-
-### Test YUM/DNF (RHEL/CentOS)
-```bash
-# List configured repos
-sudo dnf repolist
-
-# Search for package
-sudo dnf search nginx
-
-# Install test package
-sudo dnf install htop
-
-# Verify package source
-sudo dnf info htop
-```
-
-### Test pip
-```bash
-# Show configuration
-pip config list
-
-# Install test package
-pip install requests
-
-# Show package info
-pip show requests
-```
-
-### Test Docker
-```bash
-# Check daemon configuration
-docker info | grep -A 5 "Registry"
-
-# Pull from local registry
-docker pull ${REPO_SERVER}:5000/ubuntu:22.04
-
-# List local images
-docker images
-```
-
-### Test npm
-```bash
-# Show configuration
-npm config get registry
-
-# Install test package
-npm install express
-
-# Show package info
-npm view express
-```
-
----
-
-## Switching Back to Official Repositories
-
-### APT (Debian/Ubuntu)
-```bash
-sudo mv /etc/apt/sources.list.backup /etc/apt/sources.list
-sudo rm /etc/apt/sources.list.d/mirroret.list
-sudo apt update
-```
-
-### YUM/DNF (RHEL/CentOS)
-```bash
-sudo mv /etc/yum.repos.d/backup/*.repo /etc/yum.repos.d/
-sudo rm /etc/yum.repos.d/mirroret.repo
-sudo dnf clean all && sudo dnf makecache
-```
-
-### pip
-```bash
-rm ~/.pip/pip.conf
-# pip will now use default PyPI
-```
-
-### Docker
-```bash
-sudo mv /etc/docker/daemon.json.backup /etc/docker/daemon.json
-sudo systemctl restart docker
-```
-
-### npm
-```bash
-npm config delete registry
-# npm will now use default registry
-```
-
----
-
-## Troubleshooting
-
-### APT Issues
-```bash
-# Clear cache
-sudo apt clean
-
-# Update with verbose output
-sudo apt update -o Debug::Acquire::http=true
-
-# Check repo accessibility
-curl http://REPO_SERVER:8080/debian/approved/mirror/
-```
-
-### YUM/DNF Issues
-```bash
-# Clear cache
+sudo dnf config-manager --set-enabled "*"   # or restore your backup of /etc/yum.repos.d
 sudo dnf clean all
-
-# Verbose update
-sudo dnf makecache --verbose
-
-# Check repo accessibility
-curl http://REPO_SERVER:8080/redhat/approved/rocky/9/baseos/
 ```
 
-### pip Issues
-```bash
-# Verbose install
-pip install -v requests
+---
 
-# Check index
-curl http://REPO_SERVER:8081/simple/
+## 5. pip
 
-# Test connectivity
-pip install --index-url http://REPO_SERVER:8081/simple/ --trusted-host REPO_SERVER requests
+The generated `pip.conf`:
+
+```ini
+[global]
+index-url = http://SERVER:8081/simple/
+trusted-host = SERVER
 ```
 
-### Docker Issues
+`trusted-host` is required by pip for any plain-HTTP index and does not
+disable anything that HTTP provides. Install it system-wide:
+
 ```bash
-# Check daemon
-sudo systemctl status docker
+sudo curl -fsSL -o /etc/pip.conf http://SERVER:8080/config/pip.conf
+pip3 download --no-deps -d /tmp/t requests    # proves the index answers
+```
 
-# Check registry
-curl http://REPO_SERVER:5000/v2/
+Per command instead: `pip install --index-url http://SERVER:8081/simple/ --trusted-host SERVER <pkg>`.
 
-# Restart Docker
+---
+
+## 6. npm
+
+The generated `.npmrc` is one line:
+
+```
+registry=http://SERVER:4873/
+```
+
+npm does not read `/etc/npmrc`. The system-wide file is
+`$(npm prefix -g)/etc/npmrc`, which is what the bootstrap script writes.
+Per user:
+
+```bash
+npm config set registry http://SERVER:4873/
+npm view express version        # must answer through the mirror
+```
+
+With approval mode on the server, packages nobody approved return 404
+instead of being fetched from npmjs - see [OPERATIONS.md](OPERATIONS.md).
+
+---
+
+## 7. Docker
+
+The generated `docker-daemon.json` depends on the server's mode:
+
+| Server state | Content |
+|---|---|
+| cache mode, no TLS | `{"registry-mirrors": ["http://SERVER:5000"], "insecure-registries": ["SERVER:5000"]}` |
+| cache mode, TLS ready | `{"registry-mirrors": ["https://SERVER:8443"]}` |
+| hosted mode, no TLS | `{"insecure-registries": ["SERVER:5000"]}` |
+| hosted mode, TLS ready | `{}` |
+
+`insecure-registries` appears without TLS because dockerd refuses an
+`http://` mirror otherwise; it is not a mirroret shortcut. Apply:
+
+```bash
+sudo curl -fsSL -o /etc/docker/daemon.json http://SERVER:8080/config/docker-daemon.json
 sudo systemctl restart docker
+docker pull alpine        # cache mode: pulled through the mirror
 ```
 
-### npm Issues
+Hosted mode has no mirror; pull explicitly with `docker pull SERVER:5000/<image>`.
+The bootstrap script does this step only with `--docker`.
+
+---
+
+## 8. Locking a client to the mirror
+
+The scripts above disable the upstream sources. To additionally refuse
+packages from any other origin on an APT client:
+
+```
+# /etc/apt/preferences.d/mirroret-only
+Package: *
+Pin: origin "SERVER"
+Pin-Priority: 1000
+
+Package: *
+Pin: origin *
+Pin-Priority: -1
+```
+
+---
+
+## 9. Checking from the server side
+
 ```bash
-# Clear cache
-npm cache clean --force
-
-# Check registry
-curl http://REPO_SERVER:4873/
-
-# Verbose install
-npm install express --verbose
+mirroretctl client list        # every generated config and its URL
+mirroretctl client show ubuntu-noble.list
+mirroretctl client verify      # config advertises only published suites/repos
+mirroretctl client simulate    # resolve AND download with a throwaway dnf config
+mirroretctl serve              # every HTTP endpoint answers locally
 ```
-
-This completes the client configuration guide for all package types!

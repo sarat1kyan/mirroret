@@ -6,9 +6,8 @@ wrong answer almost everywhere else, because of the arithmetic:
 
 | What | Disk |
 |---|---|
-| Ubuntu noble, `main` + `restricted`, amd64 | ~400 GB |
-| ...plus jammy | ~800 GB |
-| ...plus i386 | ~850 GB |
+| One Ubuntu release, full mirror (`mirror` mode) | hundreds of GB - see the sizing table in [MULTI-DISTRO.md](MULTI-DISTRO.md#how-much-disk) |
+| The signed index tree of that release (`hybrid` mode up front) | ~2 GB |
 | What a fleet of 40 machines actually installs | 10-30 GB |
 
 The gap is disk rent on files nobody will ever ask for.
@@ -54,6 +53,15 @@ revalidated on a TTL, and if upstream goes away the last known-good copy is
 still served — but a machine that has never talked to this mirror before
 cannot bootstrap while the WAN is down.
 
+In pure `cache` mode nothing rewrites `dists/` on a schedule, so nginx sends
+every `/<flavor>/dists/` request through the daemon (a regex location that
+takes precedence over the on-disk lookup). The daemon applies
+`MIRRORET_CACHE_METADATA_TTL` and a conditional GET, so an `InRelease` served
+from disk can never be pinned to day one and security updates keep appearing.
+Only the immutable `pool/` is served straight off disk. In `hybrid` mode the
+indices are refreshed by the nightly `sync-apt-repos.sh` instead, so nginx
+serves `dists/` off disk and only pool misses reach the daemon.
+
 ## Switching modes
 
 ```bash
@@ -66,6 +74,17 @@ sudo mirroretctl sync apt
 Switching to `hybrid` or `cache` does **not** delete packages already on
 disk. They stay and continue to be served as cache hits. Switching back to
 `mirror` and running a sync backfills whatever is missing.
+
+The storage mode is baked into the generated `sync-apt-repos.sh`
+(`--metadata-only` for hybrid and cache) and into the target specs
+(`metadata_only`), which is why the `--upgrade` step is required after
+changing it.
+
+Each published suite carries a `.mirroret-manifest.json` written by the
+engine, listing exactly which `Release` entries this configuration mirrors.
+`mirroretctl verify` checks only those, so a hybrid tree (indices present,
+pool empty) and a filtered mirror both pass; a missing index or a wrong-size
+file fails.
 
 ## Does this weaken security?
 
@@ -94,7 +113,9 @@ client ──> nginx :8080 ──> file on disk?
 ```
 
 nginx answers every hit itself with `try_files`, so once the cache is warm
-Python is not in the request path at all.
+Python is not in the request path at all (except for `dists/` in pure
+`cache` mode, as above). The daemon's launcher is
+`/srv/mirroret/scripts/run-cache.sh`; its unit is `mirroret-cache.service`.
 
 ### What the daemon handles
 
@@ -171,17 +192,23 @@ mirroretctl cache routes
 journalctl -u mirroret-cache -n 50
 ```
 
-**Everything 502s behind a corporate proxy.** The daemon reaches upstream the
-same way the sync scripts do, through `MIRRORET_PROXY` in
-`/etc/mirroret/mirroret.conf`. A proxy that only permits `CONNECT` to :443
-will refuse plain HTTP to the archives, so also set:
+**Everything 502s behind a corporate proxy.** The daemon reaches upstream
+the same way the sync scripts do: its launcher sources
+`/etc/mirroret/mirroret.conf` through the shared script preamble, which maps
+`MIRRORET_PROXY` onto `http_proxy`/`https_proxy` (when those are not already
+set), honours `MIRRORET_NO_PROXY`, and always excludes
+`localhost,127.0.0.1,::1` so nginx -> daemon traffic never goes to the proxy.
+Plain `http_proxy`/`https_proxy` in the conf work too. A proxy that only
+permits `CONNECT` to :443 refuses plain HTTP to the archives, so also set:
 
 ```bash
 MIRRORET_APT_SCHEME="https"
 ```
 
 and re-run `sudo ./install.sh --upgrade` so both the mirror and the cache
-pick up the change.
+route table pick up the change. `mirroretctl cache status` shows
+`upstream fetch` and `errors` counters; `journalctl -u mirroret-cache` shows
+the proxy's answer.
 
 **A sync in hybrid mode reports "downloaded 0".** That is correct — hybrid
 deliberately downloads no packages. The line to check is

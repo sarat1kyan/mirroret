@@ -1,10 +1,12 @@
-# Rollback Guide
+# Rollback
 
-## Overview
+`install.sh` backs up every system file it is about to modify into
+`${MIRRORET_BACKUP_BASE}/<backup-id>/` (default `/var/backups/mirroret/`)
+before writing. `--rollback` copies those files back.
 
-mirroret creates timestamped backups before modifying any system file. If an installation goes wrong, you can restore the previous state.
-
-Backups are stored in `/var/backups/mirroret/<timestamp>/`.
+Rollback restores **configuration files** only. It does not touch mirror
+data, remove services or delete directories; for that use the uninstaller
+([UNINSTALL.md](UNINSTALL.md)).
 
 ---
 
@@ -14,116 +16,79 @@ Backups are stored in `/var/backups/mirroret/<timestamp>/`.
 sudo ./install.sh --list-backups
 ```
 
-Example output:
-
-```
-  20260601-020000 (12 files)
-  20260604-143022 (8 files)
-```
-
----
+One line per backup id (`YYYYMMDD-HHMMSS`) with the number of manifest
+entries.
 
 ## Rolling back
 
 ```bash
-# Roll back to a specific backup:
 sudo ./install.sh --rollback 20260601-020000
 ```
 
-The rollback process:
-1. Reads the backup manifest
-2. Copies each backed-up file back to its original location
-3. Skips files that did not exist at backup time (recorded as MISSING)
-4. Attempts to reload affected services (nginx, pypiserver, verdaccio)
-5. Reports how many files were restored, skipped, or failed
+The rollback:
 
-Rollback is **best-effort**. Individual failures are logged but do not abort the process.
+1. reads `backup.manifest` in the backup directory;
+2. copies each `OK` entry back to its original path;
+3. skips entries recorded as `MISSING` (the file did not exist at backup time);
+4. runs `systemctl daemon-reload`, then reloads (or restarts) nginx and
+   restarts `pypiserver` and `verdaccio`;
+5. reports restored / skipped / failed counts.
 
----
+Individual failures are logged and do not abort the run. Preview with
+`sudo DRY_RUN=1 ./install.sh --rollback <id>`.
 
-## Creating a backup without installing
+## Backup without installing
 
 ```bash
 sudo ./install.sh --backup-only
 ```
 
-This backs up all current config files without making any changes. Useful before manual edits.
-
----
-
 ## What is backed up
 
-Before each installation run, the following files are backed up (if they exist):
+At the start of every install / `--upgrade` run (`_backup_existing_configs`
+in `install.sh`):
 
 - `/etc/apt/mirror.list`
-- `/etc/nginx/sites-available/mirroret*`
-- `/etc/nginx/conf.d/mirroret*.conf`
+- `/etc/nginx/sites-available/mirroret-unified`, `/etc/nginx/sites-available/mirroret`
+- `/etc/nginx/conf.d/mirroret-unified.conf`, `/etc/nginx/conf.d/mirroret.conf`
 - `/etc/systemd/system/pypiserver.service`
 - `/etc/systemd/system/verdaccio.service`
 - `/etc/docker/registry/config.yml`
+- `/etc/docker-distribution/registry/config.yml`
 - `/etc/verdaccio/config.yaml`
 
----
+In addition, `lib/nginx.sh` backs up the vhost file (and its
+`sites-enabled` symlink on Debian) immediately before rewriting it, and
+rolls back to the same backup automatically if `nginx -t` fails after the
+write.
 
-## Manual backup
+Not backed up, because they are regenerated from `/etc/mirroret/mirroret.conf`
+on every run: target specs (`/etc/mirroret/targets/`), `cache.json`, the
+sync scripts under `/srv/mirroret/scripts/`, client configs under
+`/srv/mirroret/config/`, the cron block and `/etc/logrotate.d/mirroret`.
+Re-running `sudo ./install.sh --upgrade` recreates them.
 
-To back up a specific file manually:
-
-```bash
-cp /etc/nginx/conf.d/mirroret-unified.conf \
-   /var/backups/mirroret/manual-$(date +%Y%m%d-%H%M%S)/etc/nginx/conf.d/mirroret-unified.conf
-```
-
----
-
-## Dry-run rollback
-
-To preview what a rollback would do without making changes:
-
-```bash
-DRY_RUN=1 sudo ./install.sh --rollback 20260601-020000
-```
-
----
-
-## Backup directory structure
+## Layout
 
 ```
 /var/backups/mirroret/
 +-- 20260601-020000/
-    +-- backup.manifest (list of OK/MISSING files)
+    +-- backup.manifest          one "OK <path>" or "MISSING <path>" per line
     +-- etc/
-        +-- apt/
-        | +-- mirror.list
-        +-- nginx/
-        | +-- conf.d/
-        | +-- mirroret-unified.conf
-        +-- systemd/
-        | +-- system/
-        | +-- pypiserver.service
-        | +-- verdaccio.service
-        +-- verdaccio/
-            +-- config.yaml
+        +-- nginx/conf.d/mirroret-unified.conf
+        +-- systemd/system/pypiserver.service
+        +-- systemd/system/verdaccio.service
+        +-- verdaccio/config.yaml
+        ...
 ```
 
----
+## After a rollback
 
-## After rollback
+```bash
+sudo nginx -t
+systemctl status nginx pypiserver verdaccio
+sudo ./install.sh --check
+```
 
-After a rollback you should:
-
-1. Verify the restored configs:
-
-   ```bash
-   nginx -t
-   systemctl status pypiserver
-   systemctl status verdaccio
-   ```
-
-2. Run validation:
-
-   ```bash
-   sudo ./install.sh --check
-   ```
-
-3. Investigate the original failure before re-installing.
+Then find out why the install that was rolled back failed
+(`/var/log/mirroret-install.log`, `mirroretctl doctor`) before re-running it.

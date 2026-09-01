@@ -21,8 +21,10 @@ These components always use native OS services regardless of the Docker registry
 | Component | How installed | Systemd unit |
 |---|---|---|
 | nginx | distro package (`nginx`) | `nginx` |
-| pypiserver | distro package or pip venv | `pypiserver` |
+| pypiserver | distro package or pip venv (`/opt/mirroret-pypiserver`) | `pypiserver` |
 | Verdaccio | `npm install -g verdaccio` | `verdaccio` |
+| APT / RPM mirroring | `engines/*.py`, stdlib Python only, copied to `/srv/mirroret/engines/` | none (cron-driven `sync-*.sh`) |
+| on-demand cache (`MIRRORET_APT_MODE=hybrid\|cache`) | `engines/mirroret_cache.py` via `/srv/mirroret/scripts/run-cache.sh` | `mirroret-cache` (127.0.0.1:8082) |
 
 ---
 
@@ -91,44 +93,25 @@ If the package is not in the repos or not installed, it falls back to the
 
 ---
 
-## APT mirror: native tools on Debian 12+
+## APT mirroring
 
-`apt-mirror` was removed from Debian 12 (Bookworm). mirroret supports two alternatives:
+The default (`MIRRORET_APT_MIRROR_TOOL=auto`) is the native engine,
+`engines/mirroret_apt.py`: plain Python 3, no `apt-mirror`, no `debmirror`,
+works on any host including RHEL, and mirrors several flavors side by side.
+Nothing in this section is needed for it.
 
-### debmirror
+### Legacy tools: apt-mirror / debmirror
 
-```bash
-sudo MIRRORET_APT_MIRROR_TOOL=debmirror ./install.sh
-```
-
-Installs `debmirror` via `apt-get` and generates a sync script at
-`/srv/mirroret/scripts/sync-apt-debmirror.sh`.
-
-debmirror requires the Ubuntu archive keyring to verify package signatures:
-
-```bash
-sudo apt-get install -y ubuntu-keyring
-```
-
-Run the initial sync manually after install:
-
-```bash
-sudo /srv/mirroret/scripts/sync-apt-debmirror.sh
-```
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#debmirror-gpg) for GPG key issues.
-
-### apt-mirror2 (Python drop-in replacement)
-
-`apt-mirror2` is config-file-compatible with `apt-mirror` and installable via pip.
-
-```bash
-sudo MIRRORET_APT_MIRROR_TOOL=apt-mirror sudo ./install.sh
-```
-
-If `apt-mirror` is not found in the distro repos, mirroret automatically installs
-`apt-mirror2` into `/opt/mirroret-apt-mirror2/` and symlinks it to
-`/usr/local/bin/apt-mirror2`. The same `mirror.list` config is used.
+`MIRRORET_APT_MIRROR_TOOL=apt-mirror` or `=debmirror` remain available for
+existing single-flavor trees on Debian/Ubuntu hosts. They publish metadata
+before packages and cannot mirror more than one flavor. `apt-mirror` was
+removed from Debian 12; when it is missing mirroret installs `apt-mirror2`
+into `/opt/mirroret-apt-mirror2/` (symlinked as `/usr/local/bin/apt-mirror2`).
+`debmirror` needs the archive keyring on the server
+(`ubuntu-keyring` / `debian-archive-keyring`) and generates
+`/srv/mirroret/scripts/sync-apt-debmirror.sh`. To move to the native engine,
+set `MIRRORET_APT_MIRROR_TOOL=auto` plus `MIRRORET_APT_TARGETS` and run
+`sudo ./install.sh --upgrade`; see [MULTI-DISTRO.md](MULTI-DISTRO.md#migrating-from-a-single-flavor-install).
 
 ---
 
@@ -138,17 +121,17 @@ If `apt-mirror` is not found in the distro repos, mirroret automatically install
 
 ```bash
 sudo MIRRORET_DOCKER_BACKEND=native \
-     MIRRORET_GPG_AUTO=1 \
+     MIRRORET_RPM_TARGETS="rocky:9 epel:9" \
      MIRRORET_TLS_SELF_SIGNED=1 \
      ./install.sh
 ```
 
-### Debian 12 - apt-mirror not in repos
+### Debian 12 - hybrid APT mirror, no container runtime
 
 ```bash
 sudo MIRRORET_DOCKER_BACKEND=native \
-     MIRRORET_APT_MIRROR_TOOL=debmirror \
-     MIRRORET_GPG_AUTO=1 \
+     MIRRORET_APT_TARGETS="debian:bookworm ubuntu:noble" \
+     MIRRORET_APT_MODE=hybrid \
      MIRRORET_TLS_SELF_SIGNED=1 \
      ./install.sh
 ```
@@ -158,8 +141,8 @@ sudo MIRRORET_DOCKER_BACKEND=native \
 ```bash
 sudo MIRRORET_SERVER_IP=10.0.1.5 \
      MIRRORET_FIREWALL_SOURCE=10.0.0.0/8 \
-     MIRRORET_GPG_AUTO=1 \
-     ./install.sh --no-docker --no-npm
+     MIRRORET_APT_TARGETS="ubuntu:jammy ubuntu:noble" \
+     ./install.sh --no-rpm --no-docker --no-npm
 ```
 
 ### Using a config file
@@ -167,16 +150,17 @@ sudo MIRRORET_SERVER_IP=10.0.1.5 \
 ```bash
 # /etc/mirroret/mirroret.conf
 MIRRORET_SERVER_IP=192.168.10.10
+MIRRORET_APT_TARGETS="ubuntu:noble debian:bookworm"
+MIRRORET_RPM_TARGETS="ol:9"
+MIRRORET_APT_MODE=hybrid
 MIRRORET_DOCKER_BACKEND=native
-MIRRORET_APT_MIRROR_TOOL=debmirror
-MIRRORET_GPG_AUTO=1
 MIRRORET_TLS_SELF_SIGNED=1
 MIRRORET_APPROVAL_ENABLED=1
 MIRRORET_FIREWALL_SOURCE=192.168.10.0/24
 ```
 
 ```bash
-sudo ./install.sh --config /etc/mirroret/mirroret.conf
+sudo ./install.sh          # /etc/mirroret/mirroret.conf is loaded automatically
 ```
 
 ---
@@ -186,8 +170,9 @@ sudo ./install.sh --config /etc/mirroret/mirroret.conf
 After a native install, all services are managed by systemd:
 
 ```bash
-# Status of all mirroret services:
-systemctl status nginx pypiserver verdaccio
+# Status of all mirroret services (mirroret-cache exists in hybrid/cache mode):
+systemctl status nginx pypiserver verdaccio mirroret-cache
+mirroretctl service list
 
 # Native Docker registry (RHEL/Rocky):
 systemctl status docker-distribution
@@ -196,13 +181,13 @@ systemctl status docker-distribution
 systemctl status docker-registry
 
 # Enable auto-start after reboot (done automatically by install.sh):
-systemctl enable nginx pypiserver verdaccio docker-distribution
+systemctl enable nginx pypiserver verdaccio mirroret-cache docker-distribution
 
 # Restart all:
-systemctl restart nginx pypiserver verdaccio
+systemctl restart nginx pypiserver verdaccio mirroret-cache
 
 # Combined log view:
-journalctl -u nginx -u pypiserver -u verdaccio -u docker-distribution -n 100 --no-pager
+journalctl -u nginx -u pypiserver -u verdaccio -u mirroret-cache -u docker-distribution -n 100 --no-pager
 ```
 
 ---
@@ -219,3 +204,7 @@ journalctl -u nginx -u pypiserver -u verdaccio -u docker-distribution -n 100 --n
 
 - **pypiserver:** installed from the distro package (`python3-pypiserver`) or via
   pip into `/opt/mirroret-pypiserver/`. Neither path requires containers.
+
+- **mirroret-cache:** a plain Python process under systemd, root, bound to
+  loopback, sandboxed with `ProtectSystem=full` and `ReadWritePaths` limited
+  to the mirror tree. No container.
