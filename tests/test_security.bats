@@ -242,3 +242,26 @@ _client_fn() {
     grep -q 'assert_config_secure "\$tmp" apt' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
     grep -q 'assert_config_secure "\$tmp" rpm' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
 }
+
+# -- Firewall: a source restriction must actually restrict --------------------
+
+@test "firewall: iptables source restriction adds a DROP so the limit is real" {
+    source "${SCRIPT_DIR}/lib/firewall.sh"
+    DRY_RUN=1
+    run _configure_iptables "10.0.0.0/8" 8080
+    [ "$status" -eq 0 ]
+    # ACCEPT from the allowed subnet...
+    [[ "$output" == *"-s 10.0.0.0/8"* ]]
+    [[ "$output" == *"--dport 8080"* ]]
+    # ...and a DROP for the same port from everything else, or the ACCEPT is a
+    # no-op whenever the chain's policy is already ACCEPT.
+    [[ "$output" == *"--dport 8080 -j DROP"* ]]
+}
+
+@test "firewall: opening to all sources warns loudly" {
+    source "${SCRIPT_DIR}/lib/firewall.sh"
+    DRY_RUN=1
+    run _configure_iptables "" 8080
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"open to ANY source"* ]]
+}

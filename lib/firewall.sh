@@ -80,13 +80,35 @@ _configure_iptables() {
     for port in "${ports[@]}"; do
         if [[ -n "$source_cidr" ]]; then
             xrun iptables -A INPUT -s "$source_cidr" -p tcp --dport "$port" -j ACCEPT
-            success "iptables: allowed TCP ${port} from ${source_cidr}"
+            # The ACCEPT above only restricts if everything else is dropped. On
+            # a box whose INPUT policy is ACCEPT (common), without this the
+            # "restriction" lets every other source reach the port. A targeted
+            # DROP for this port from any other source makes the limit real
+            # without changing the chain's default policy (which could lock the
+            # operator out of SSH).
+            xrun iptables -A INPUT -p tcp --dport "$port" -j DROP
+            success "iptables: allowed TCP ${port} from ${source_cidr} only (others dropped)"
         else
             xrun iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
-            success "iptables: allowed TCP ${port} from any source"
+            warn "iptables: TCP ${port} is open to ANY source (no MIRRORET_FIREWALL_SOURCE set)."
         fi
     done
-    warn "iptables rules added but not persisted. Run 'iptables-save' to persist them."
+    # Best-effort persistence so the rules survive a reboot.
+    if check_command netfilter-persistent; then
+        xrun netfilter-persistent save
+    elif [[ -d /etc/iptables ]] && check_command iptables-save; then
+        # shellcheck disable=SC2024
+        if [[ "${DRY_RUN}" == "1" ]]; then
+            info "[DRY-RUN] would run: iptables-save > /etc/iptables/rules.v4"
+        else
+            iptables-save > /etc/iptables/rules.v4 2>/dev/null \
+                && success "iptables rules persisted to /etc/iptables/rules.v4" \
+                || warn "Could not persist iptables rules; run 'iptables-save' yourself."
+        fi
+    else
+        warn "iptables rules added but NOT persisted (no netfilter-persistent)."
+        warn "They will be lost on reboot - persist them with iptables-save."
+    fi
 }
 
 # list_required_ports - print all ports required by the configured components.
