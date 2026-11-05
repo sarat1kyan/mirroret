@@ -248,7 +248,20 @@
 #              but a cold apt-get update needs upstream to be reachable.
 # hybrid and cache run the mirroret-cache daemon on 127.0.0.1:MIRRORET_CACHE_PORT
 # and nginx hands cache misses to it. Default: mirror
+# In hybrid/cache the FULL component set is published (not just
+# MIRRORET_APT_COMPONENTS), so a client never gets a false "not found"; the
+# generated client config widens to match. Metadata is revalidated on a TTL in
+# hybrid too, so new upstream releases appear without waiting for a sync.
 #MIRRORET_APT_MODE=hybrid
+
+# How RPM packages are stored. Independent of MIRRORET_APT_MODE.
+# mirror - every package downloaded up front (native or reposync engine).
+# hybrid / cache - publish upstream's signed repodata verbatim (full package
+#              list, repo_gpgcheck=1 stays usable) and fetch each .rpm on
+#              demand via the cache daemon. REQUIRES the native engine
+#              (MIRRORET_RPM_ENGINE=native) and catalog repo ids
+#              (e.g. MIRRORET_RPM_TARGETS="rocky:9"). Default: mirror
+#MIRRORET_RPM_MODE=hybrid
 
 # LRU cap on cached PACKAGE files, in GB. Indices are never evicted.
 # Default: 0 (no cap). Apply a change with: sudo mirroretctl cache gc

@@ -366,14 +366,17 @@ PY
         _nginx_apt_locations /srv/mirroret /legacy"
     [[ "$output" == *'location ~ ^/ubuntu/dists/ {'* ]]
     [[ "$output" == *'try_files $uri @mirroret_cache'* ]]
-    # hybrid must NOT proxy dists (the nightly sync rewrites it)
+    # hybrid now ALSO revalidates dists through the daemon: the nightly sync
+    # only refreshes indices once a day, so between syncs a new upstream
+    # release was invisible. The daemon's TTL + conditional GET makes updates
+    # appear within metadata_ttl without waiting for the sync.
     run bash -c "source '${SCRIPT_DIR}/lib/logging.sh'; source '${SCRIPT_DIR}/lib/common.sh'
         source '${SCRIPT_DIR}/lib/distro.sh'; source '${SCRIPT_DIR}/lib/targets.sh'
         source '${SCRIPT_DIR}/lib/cache.sh'; source '${SCRIPT_DIR}/lib/nginx.sh'
         export MIRRORET_APT_MODE=hybrid MIRRORET_APT_TARGETS='ubuntu:noble'
         generate_target_specs >/dev/null 2>&1
         _nginx_apt_locations /srv/mirroret /legacy"
-    [[ "$output" != *'location ~ ^/ubuntu/dists/'* ]]
+    [[ "$output" == *'location ~ ^/ubuntu/dists/'* ]]
 }
 
 @test "nginx: legacy fallback honours the flavor prefix and hides engines/backups" {

@@ -96,8 +96,17 @@ sudo ./scripts/setup-mirror-server.sh --apt-targets "ubuntu:noble" --yes
 
 `hybrid` and `cache` run the `mirroret-cache` daemon on `127.0.0.1:8082`;
 nginx serves hits itself and hands misses to it. Signature verification is
-unchanged: clients still verify the upstream `Release`. Details, sizing and
-tuning: [docs/CACHE.md](docs/CACHE.md).
+unchanged: clients still verify the upstream `Release`. In `hybrid`/`cache`
+the **full** component set is published (not just `MIRRORET_APT_COMPONENTS`),
+so a client never gets a false "not found", and metadata is revalidated on a
+TTL so new upstream releases appear without waiting for the nightly sync.
+Details, sizing and tuning: [docs/CACHE.md](docs/CACHE.md).
+
+RPM has the same on-demand option via `MIRRORET_RPM_MODE=hybrid|cache`
+(independent of `MIRRORET_APT_MODE`): the mirror publishes upstream's signed
+repodata verbatim and the daemon fetches each `.rpm` on first request.
+Requires the native engine and catalog repo ids
+(`MIRRORET_RPM_TARGETS="rocky:9"`).
 
 ### After installation
 
@@ -422,9 +431,12 @@ mirroret/
   `docker` or `podman` CLI.
 - With approval mode on, Verdaccio's npmjs uplink is disabled: unapproved
   npm packages return 404 instead of being fetched live.
-- A filtered RPM mirror (arch subset, or the default newest-only) has locally
-  rebuilt `repomd.xml`, so clients cannot use `repo_gpgcheck=1`. `gpgcheck=1`
-  still verifies the vendor package signatures.
+- A filtered RPM mirror (arch subset, or the default newest-only) in `mirror`
+  mode has locally rebuilt `repomd.xml`, so clients cannot use
+  `repo_gpgcheck=1`. `gpgcheck=1` still verifies the vendor package
+  signatures. `MIRRORET_RPM_MODE=hybrid|cache` serves upstream's signed
+  repodata verbatim instead, so `repo_gpgcheck=1` is restored and the full
+  package list is available (packages fetched on demand).
 - Mirroring RHEL from `cdn.redhat.com` needs this host's entitlement
   certificate (`/etc/pki/entitlement/*.pem`, picked up automatically).
 - A TLS-inspecting proxy that re-signs the upstream archive breaks the
