@@ -172,6 +172,22 @@ teardown() {
     [ "$a" = "${MIRRORET_BASE_DIR}/apt/ubuntu" ]
 }
 
+@test "targets: all_components is true for a hybrid APT spec" {
+    run bash -c "export MIRRORET_APT_MODE=hybrid; source '${SCRIPT_DIR}/lib/targets.sh'; \
+        write_apt_target_spec ubuntu noble amd64 \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"all_components\"])'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "True" ]
+}
+
+@test "targets: all_components is false for a mirror-mode APT spec" {
+    run bash -c "export MIRRORET_APT_MODE=mirror; source '${SCRIPT_DIR}/lib/targets.sh'; \
+        write_apt_target_spec ubuntu noble amd64 \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"all_components\"])'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "False" ]
+}
+
 @test "targets: generated specs are valid JSON with the fields engines need" {
     MIRRORET_APT_TARGETS="ubuntu:jammy"
     MIRRORET_RPM_TARGETS="ol:9 rocky:9 epel:9"

@@ -499,6 +499,7 @@ write_apt_target_spec() {
   "contents": $(_json_bool "${MIRRORET_APT_CONTENTS:-0}"),
   "delete": $(_json_bool "${MIRRORET_APT_DELETE:-1}"),
   "metadata_only": $(_json_bool "$([[ "${MIRRORET_APT_MODE:-mirror}" == "hybrid" || "${MIRRORET_APT_MODE:-mirror}" == "cache" ]] && echo 1 || echo 0)"),
+  "all_components": $(_json_bool "$([[ "${MIRRORET_APT_MODE:-mirror}" == "hybrid" || "${MIRRORET_APT_MODE:-mirror}" == "cache" ]] && echo 1 || echo 0)"),
   "min_free_gb": $(_json_number "${MIRRORET_SYNC_MIN_FREE_GB:-10}" 10),
   "suites": [${suites_json}]
 }
