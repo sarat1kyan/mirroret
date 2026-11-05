@@ -93,3 +93,13 @@ teardown() {
     generate_docker_client_config "${TMPDIR_TEST}/daemon.json"
     grep -q "${MIRRORET_SERVER_IP}:${MIRRORET_DOCKER_REGISTRY_PORT}" "${TMPDIR_TEST}/daemon.json"
 }
+
+@test "docker: container backend binds :port inside the container (host restricted via -p)" {
+    # Binding 127.0.0.1 INSIDE a container breaks -p forwarding, so the
+    # container registry must bind all interfaces internally; the loopback
+    # restriction is the -p 127.0.0.1:port:port mapping.
+    MIRRORET_DOCKER_BIND=loopback
+    _emit_registry_config "${TMPDIR_TEST}/c.yml" container
+    grep -qE 'addr: :5000' "${TMPDIR_TEST}/c.yml"
+    ! grep -qE 'addr: 127\.0\.0\.1:5000' "${TMPDIR_TEST}/c.yml"
+}

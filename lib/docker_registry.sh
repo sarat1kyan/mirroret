@@ -259,6 +259,19 @@ _emit_registry_config() {
     local root_dir="${base_dir}/docker/registry"
     [[ "${backend}" == "container" ]] && root_dir="/var/lib/registry"
 
+    # Bind address depends on the backend. The NATIVE registry runs directly
+    # on the host, so its bind IS the exposure boundary: loopback by default.
+    # The CONTAINER registry must bind all interfaces INSIDE the container
+    # (binding the container's 127.0.0.1 makes the `-p 127.0.0.1:port:port`
+    # host mapping unreachable); the loopback restriction there is the -p
+    # mapping, not the in-container bind.
+    local http_addr
+    if [[ "${backend}" == "container" ]]; then
+        http_addr=":${registry_port}"
+    else
+        http_addr="$(_docker_bind_addr)"
+    fi
+
     [[ "${DRY_RUN:-0}" == "1" ]] || mkdir -p "$(dirname "${conf_file}")"
 
     {
@@ -278,7 +291,7 @@ storage:
   filesystem:
     rootdirectory: ${root_dir}
 http:
-  addr: $(_docker_bind_addr)
+  addr: ${http_addr}
   headers:
     X-Content-Type-Options: [nosniff]
 HEAD
