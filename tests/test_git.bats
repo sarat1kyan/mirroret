@@ -94,3 +94,20 @@ _mk_source_repo() {
     [ "$status" -eq 0 ]
     [ -f "${store}/HEAD" ]
 }
+
+@test "git: generated sync script is valid and refreshes every mirror" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    _git_ensure_mirror "${MIRRORET_BASE_DIR}" example.com "o/r"
+
+    DRY_RUN=0 write_git_sync_script "${MIRRORET_BASE_DIR}/scripts/sync-git-repos.sh"
+    bash -n "${MIRRORET_BASE_DIR}/scripts/sync-git-repos.sh"
+    grep -q 'update-server-info' "${MIRRORET_BASE_DIR}/scripts/sync-git-repos.sh"
+
+    # New upstream commit, then run the generated script: it must come across.
+    ( cd "${src}" && echo more >> file.txt && git commit -qam second )
+    bash "${MIRRORET_BASE_DIR}/scripts/sync-git-repos.sh" >/dev/null 2>&1
+    git clone -q "${MIRRORET_BASE_DIR}/git/example.com/o/r" "${TMPDIR_TEST}/clone"
+    [ "$(wc -l < "${TMPDIR_TEST}/clone/file.txt")" -eq 2 ]
+}

@@ -108,3 +108,61 @@ _git_host_allowed() {
     done
     return 1
 }
+
+# write_git_sync_script <output_file> - generate the nightly refresh script.
+# Self-contained (sources nothing from lib/): it walks the mirror store for
+# bare repos (dirs containing HEAD) and runs `remote update --prune` +
+# `update-server-info` on each, so dumb-HTTP clones see new upstream commits.
+write_git_sync_script() {
+    local output_file="$1"
+    local base_dir="${MIRRORET_BASE_DIR}"
+
+    if [[ "${DRY_RUN:-0}" == "1" ]]; then
+        info "[DRY-RUN] would write Git sync script to: ${output_file}"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "${output_file}")"
+    cat > "${output_file}" <<SYNC_EOF
+#!/usr/bin/env bash
+set -Euo pipefail
+${MIRRORET_MANAGED_MARKER:-# mirroret-managed}
+# Refresh every mirrored git repo under the store and rebuild its dumb-HTTP
+# index so clients cloning over plain HTTP see the latest refs.
+
+$(mirroret_script_preamble)
+
+GIT_ROOT="${base_dir}/git"
+[[ -d "\${GIT_ROOT}" ]] || { echo "No git mirrors to refresh."; exit 0; }
+
+failed=0
+while IFS= read -r head; do
+    repo="\$(dirname "\${head}")"
+    echo "--- git remote update: \${repo#\${GIT_ROOT}/}"
+    if git -C "\${repo}" remote update --prune && git -C "\${repo}" update-server-info; then
+        echo "OK"
+    else
+        echo "FAILED: \${repo}"
+        failed=\$(( failed + 1 ))
+    fi
+done < <(find "\${GIT_ROOT}" -type f -name HEAD -maxdepth 6 2>/dev/null)
+
+echo "=== git sync done (failures: \${failed}) ==="
+exit "\${failed}"
+SYNC_EOF
+    chmod +x "${output_file}"
+    success "Git sync script: ${output_file}"
+}
+
+# configure_git_mirroring - top-level entry: write the sync script when git is
+# enabled. (Pre-seeding specific repos is done with `mirroretctl git add`.)
+configure_git_mirroring() {
+    [[ "${MIRRORET_ENABLE_GIT:-0}" == "1" ]] || return 0
+    if ! check_command git; then
+        warn "MIRRORET_ENABLE_GIT=1 but 'git' is not installed; skipping git mirroring."
+        return 0
+    fi
+    section "Configuring Git mirroring"
+    mkdir -p "${MIRRORET_BASE_DIR}/git" 2>/dev/null || true
+    write_git_sync_script "${MIRRORET_BASE_DIR}/scripts/sync-git-repos.sh"
+}

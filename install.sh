@@ -66,6 +66,8 @@ source "${SCRIPT_DIR}/lib/gpg.sh"
 source "${SCRIPT_DIR}/lib/approval.sh"
 # shellcheck source=lib/cache.sh
 source "${SCRIPT_DIR}/lib/cache.sh"
+# shellcheck source=lib/git.sh
+source "${SCRIPT_DIR}/lib/git.sh"
 # shellcheck source=lib/wizard.sh
 source "${SCRIPT_DIR}/lib/wizard.sh"
 # shellcheck source=lib/uninstall.sh
@@ -774,6 +776,9 @@ write_master_sync_script() {
     [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && pip_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-pip-packages.sh"
     [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && npm_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-npm-packages.sh"
 
+    local git_sync_cmd=""
+    [[ "${MIRRORET_ENABLE_GIT:-0}" == "1" ]] && git_sync_cmd="${MIRRORET_BASE_DIR}/scripts/sync-git-repos.sh"
+
     # We do NOT use 'set -e' for the script body: we WANT the master to
     # run every step even if an earlier one fails, and we exit with the
     # accumulated failure count.
@@ -850,6 +855,7 @@ _run_step "rpm" "${rpm_sync_cmd}"
 _run_step "pip" "${pip_sync_cmd}"
 _run_step "Docker" "${docker_sync_cmd}"
 _run_step "npm" "${npm_sync_cmd}"
+_run_step "git" "${git_sync_cmd}"
 
 echo "=== Mirroret sync completed: \$(date) (failures: \${FAILED}) ==="
 exit "\${FAILED}"
@@ -1386,6 +1392,9 @@ main() {
     if [[ "${MIRRORET_ENABLE_APT}" == "1" ]]; then
         configure_cache
     fi
+
+    # Git pull-through mirror (opt-in via MIRRORET_ENABLE_GIT=1).
+    configure_git_mirroring
 
     # Configure SELinux contexts on RHEL.
     if [[ "${DISTRO_TYPE}" == "rhel" ]]; then
