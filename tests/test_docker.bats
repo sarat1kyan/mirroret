@@ -60,3 +60,21 @@ teardown() {
     _emit_registry_config "${TMPDIR_TEST}/registry2.yml"
     grep -qE 'addr: :5000' "${TMPDIR_TEST}/registry2.yml"
 }
+
+@test "docker: firewall does not open the registry port in loopback bind mode" {
+    source "${SCRIPT_DIR}/lib/firewall.sh"
+    MIRRORET_ENABLE_DOCKER=1
+    MIRRORET_DOCKER_BIND=loopback
+    run list_required_ports
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Docker registry"* ]]
+}
+
+@test "docker: firewall opens the registry port with MIRRORET_DOCKER_BIND=all" {
+    source "${SCRIPT_DIR}/lib/firewall.sh"
+    MIRRORET_ENABLE_DOCKER=1
+    MIRRORET_DOCKER_BIND=all
+    run list_required_ports
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"${MIRRORET_DOCKER_REGISTRY_PORT} Docker registry"* ]]
+}

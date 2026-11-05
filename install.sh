@@ -1409,7 +1409,7 @@ main() {
         local ports=("${MIRRORET_WEB_PORT}")
         is_tls_ready && ports+=("${MIRRORET_TLS_PORT}")
         [[ "${MIRRORET_ENABLE_PIP}" == "1" ]] && ports+=("${MIRRORET_PIP_PORT}")
-        [[ "${MIRRORET_ENABLE_DOCKER}" == "1" ]] && ports+=("${MIRRORET_DOCKER_REGISTRY_PORT}")
+        [[ "${MIRRORET_ENABLE_DOCKER}" == "1" && "${MIRRORET_DOCKER_BIND:-loopback}" == "all" ]] && ports+=("${MIRRORET_DOCKER_REGISTRY_PORT}")
         [[ "${MIRRORET_ENABLE_NPM}" == "1" ]] && ports+=("${MIRRORET_NPM_PORT}")
         configure_firewall "${ports[@]}"
     fi

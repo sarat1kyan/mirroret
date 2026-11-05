@@ -97,7 +97,10 @@ list_required_ports() {
     if [[ "${MIRRORET_ENABLE_PIP:-1}" == "1" ]]; then
         echo " TCP ${MIRRORET_PIP_PORT:-8081} pypiserver (pip index)"
     fi
-    if [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" ]]; then
+    # The registry binds loopback and is fronted by nginx /v2/ on the web
+    # port, so its own port is only opened when the operator forces an
+    # all-interfaces bind.
+    if [[ "${MIRRORET_ENABLE_DOCKER:-1}" == "1" && "${MIRRORET_DOCKER_BIND:-loopback}" == "all" ]]; then
         echo " TCP ${MIRRORET_DOCKER_REGISTRY_PORT:-5000} Docker registry"
     fi
     if [[ "${MIRRORET_ENABLE_NPM:-1}" == "1" ]]; then
