@@ -888,6 +888,20 @@ generate_rpm_client_configs() {
                 printf 'enabled=1\n'
                 printf '%s\n' "${gpg_check_line}"
                 [[ -n "${gpg_key_line}" ]] && printf '%s\n' "${gpg_key_line}"
+                # repo_gpgcheck=1 verifies the repository METADATA signature.
+                # It works ONLY when upstream's signed repomd.xml(.asc) is
+                # served verbatim - the metadata-only (hybrid/cache) case. A
+                # filtered mirror rebuilds repomd and cannot support it (hence
+                # the "deliberately absent" note above, which still holds for
+                # mirror mode). Emit it per repo, and only when the signature
+                # is actually published, so a repo whose upstream ships no
+                # .asc does not make every client dnf call fail.
+                if [[ "${insecure}" != "1" ]] \
+                    && declare -F rpm_mode_is_metadata_only >/dev/null 2>&1 \
+                    && rpm_mode_is_metadata_only \
+                    && [[ -f "${MIRRORET_BASE_DIR}/redhat/mirror/${flavor}/${major}/${repo}/repodata/repomd.xml.asc" ]]; then
+                    printf 'repo_gpgcheck=1\n'
+                fi
                 printf '\n'
             done
             printf '# -- Client setup --------------------------------------------\n'

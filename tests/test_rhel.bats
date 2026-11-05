@@ -220,6 +220,7 @@ teardown() {
 @test "rpm hybrid requires the native engine" {
     # metadata-only exists only on the native Python engine; reposync has no
     # equivalent, so hybrid/cache must hard-error rather than silently mirror.
+    source "${SCRIPT_DIR}/lib/targets.sh"
     source "${SCRIPT_DIR}/lib/cache.sh"
     mock_os_release "rocky" "9.3"; detect_distro_from_mock
     MIRRORET_RPM_MODE=hybrid
@@ -230,6 +231,7 @@ teardown() {
 }
 
 @test "rpm mirror mode allows reposync" {
+    source "${SCRIPT_DIR}/lib/targets.sh"
     source "${SCRIPT_DIR}/lib/cache.sh"
     mock_os_release "rocky" "9.3"; detect_distro_from_mock
     MIRRORET_RPM_MODE=mirror
@@ -237,4 +239,57 @@ teardown() {
     # Dry-run: must NOT die on the engine check (it may warn about tooling).
     run configure_rpm_mirroring "testbk"
     [[ "$output" != *"requires the native engine"* ]]
+}
+
+# -- RPM client repo_gpgcheck (metadata-only) ---------------------------------
+
+# _write_rpm_spec <path> - a minimal native RPM target spec with repo 'baseos'.
+_write_rpm_spec() {
+    printf '{"id":"rocky9","kind":"rpm","flavor":"rocky","version":"9",'
+    printf '"dest":"%s/redhat/mirror/rocky/9","arches":["x86_64","noarch"],' "${MIRRORET_BASE_DIR}"
+    printf '"repos":[{"id":"baseos","url":"https://dl.rockylinux.org/x"}]}\n'
+}
+
+@test "rpm client: repo_gpgcheck=1 in metadata-only mode when signed repodata is served" {
+    source "${SCRIPT_DIR}/lib/targets.sh"
+    source "${SCRIPT_DIR}/lib/cache.sh"
+    mock_os_release "rocky" "9.3"; detect_distro_from_mock
+    DRY_RUN=0
+    MIRRORET_RPM_MODE=hybrid
+    local spec="${MIRRORET_BASE_DIR}/rocky9.json"
+    _write_rpm_spec > "${spec}"
+    MIRRORET_RPM_SPECS=("${spec}")
+    local d="${MIRRORET_BASE_DIR}/redhat/mirror/rocky/9/baseos/repodata"
+    mkdir -p "${d}"; printf 'SIG\n' > "${d}/repomd.xml.asc"
+    generate_rpm_client_configs "${MIRRORET_BASE_DIR}/config"
+    grep -q 'repo_gpgcheck=1' "${MIRRORET_BASE_DIR}/config/rocky9.repo"
+}
+
+@test "rpm client: no repo_gpgcheck in mirror mode" {
+    source "${SCRIPT_DIR}/lib/targets.sh"
+    source "${SCRIPT_DIR}/lib/cache.sh"
+    mock_os_release "rocky" "9.3"; detect_distro_from_mock
+    DRY_RUN=0
+    MIRRORET_RPM_MODE=mirror
+    local spec="${MIRRORET_BASE_DIR}/rocky9.json"
+    _write_rpm_spec > "${spec}"
+    MIRRORET_RPM_SPECS=("${spec}")
+    local d="${MIRRORET_BASE_DIR}/redhat/mirror/rocky/9/baseos/repodata"
+    mkdir -p "${d}"; printf 'SIG\n' > "${d}/repomd.xml.asc"
+    generate_rpm_client_configs "${MIRRORET_BASE_DIR}/config"
+    ! grep -qE '^repo_gpgcheck=' "${MIRRORET_BASE_DIR}/config/rocky9.repo"
+}
+
+@test "rpm client: no repo_gpgcheck in metadata-only when the repo has no signature" {
+    source "${SCRIPT_DIR}/lib/targets.sh"
+    source "${SCRIPT_DIR}/lib/cache.sh"
+    mock_os_release "rocky" "9.3"; detect_distro_from_mock
+    DRY_RUN=0
+    MIRRORET_RPM_MODE=hybrid
+    local spec="${MIRRORET_BASE_DIR}/rocky9.json"
+    _write_rpm_spec > "${spec}"
+    MIRRORET_RPM_SPECS=("${spec}")
+    # No repomd.xml.asc published -> repo_gpgcheck must stay off.
+    generate_rpm_client_configs "${MIRRORET_BASE_DIR}/config"
+    ! grep -qE '^repo_gpgcheck=' "${MIRRORET_BASE_DIR}/config/rocky9.repo"
 }
