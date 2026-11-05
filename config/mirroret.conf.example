@@ -197,9 +197,18 @@
 #MIRRORET_DOCKER_UPSTREAM_URL=https://registry-1.docker.io
 
 # Path to a file listing images to pre-seed in hosted mode
-# (one per line, # for comments).
+# (one per line, # for comments). Add images with:
+#   sudo mirroretctl docker add <image>
 # When unset, a small built-in default list is used.
 #MIRRORET_DOCKER_IMAGES_FILE=/etc/mirroret/docker-images.txt
+
+# Where the registry listens.
+# loopback (default) - binds 127.0.0.1; clients reach images through nginx
+#              /v2/ on MIRRORET_WEB_PORT (the same host:port as APT/RPM). The
+#              raw registry port is NOT exposed and NOT opened in the firewall.
+# all        - binds 0.0.0.0 and opens the registry port in the firewall.
+#              Only needed if clients must hit the raw registry port directly.
+#MIRRORET_DOCKER_BIND=loopback
 
 # -- APT mirror tool / flavor / upstream --------------------------------------
 

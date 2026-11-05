@@ -202,7 +202,7 @@ mirroretctl doctor
 | RPM (Oracle, Rocky, Alma, CentOS Stream, RHEL, Fedora, EPEL) | nginx | 8080 | `<flavor><major>.repo` |
 | pip | pypiserver | 8081 | `pip.conf` |
 | npm | Verdaccio | 4873 | `.npmrc` |
-| Docker images | docker-distribution / docker-registry / registry:2 | 5000 (all interfaces) | `docker-daemon.json` |
+| Docker images | docker-distribution / docker-registry / registry:2 | 127.0.0.1:5000 behind nginx `/v2/` (web port); `0.0.0.0:5000` with `MIRRORET_DOCKER_BIND=all` | `docker-daemon.json` |
 | HTTPS (optional) | nginx TLS | 8443 | `--tls-self-signed` or your own cert |
 | on-demand cache (hybrid/cache) | `mirroret-cache` | 127.0.0.1:8082 | internal; not exposed |
 
