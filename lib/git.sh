@@ -17,21 +17,30 @@ MIRRORET_GIT_ALLOWED_HOSTS="${MIRRORET_GIT_ALLOWED_HOSTS:-github.com gitlab.com 
 # an https URL and passed to the git CLI, so a `..` (escape the store), a
 # shell metacharacter, or a leading dash (an argument injected as a git flag,
 # e.g. --upload-pack=) must all be refused.
+# _git_segments_ok <path> - every '/'-separated segment is a plain name.
+# Runs in a subshell with `set -f` so a segment like '*' cannot be glob-
+# expanded against the cwd during validation (that would make the result
+# depend on where the caller happens to stand).
+_git_segments_ok() {
+    ( set -f; local IFS='/' seg
+      for seg in $1; do
+          [[ -n "${seg}" ]] || exit 1
+          [[ "${seg}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || exit 1
+          [[ "${seg}" == ".." || "${seg}" == "." ]] && exit 1
+      done
+      exit 0 )
+}
+
 _git_valid_repo() {
     local host="$1" path="$2"
     [[ -n "${host}" && -n "${path}" ]] || return 1
     [[ "${host}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || return 1
-    # Strip a single trailing .git before validating the segments.
+    # Strip a single trailing .git, then re-check non-empty: a bare ".git"
+    # would otherwise strip to "" and validate, cloning the upstream host root.
     path="${path%.git}"
+    [[ -n "${path}" ]] || return 1
     [[ "${path}" != /* && "${path}" != */ ]] || return 1
-    local seg
-    local IFS='/'
-    for seg in ${path}; do
-        [[ -n "${seg}" ]] || return 1
-        [[ "${seg}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
-        [[ "${seg}" == ".." || "${seg}" == "." ]] && return 1
-    done
-    return 0
+    _git_segments_ok "${path}"
 }
 
 # _git_mirror_url <host> <path> - the upstream URL to clone from.
@@ -50,9 +59,19 @@ _git_store_dir() {
     printf '%s/git/%s/%s' "${base}" "${host}" "${path}"
 }
 
-# _git_is_mirror <dir> - true if dir is a usable bare mirror (has HEAD).
+# _git_is_mirror <dir> - true only if dir is a COMPLETE, serveable mirror.
+# A dumb-HTTP clone fetches info/refs first, so a repo with HEAD but no
+# info/refs (update-server-info never ran, or failed) is not serveable and
+# must not count as complete - otherwise ensure short-circuits and never
+# repairs it.
 _git_is_mirror() {
-    [[ -f "$1/HEAD" ]]
+    [[ -f "$1/HEAD" && -f "$1/info/refs" ]]
+}
+
+# _git_is_cloned <dir> - the object store exists (a clone ran), even if the
+# dumb-HTTP index is missing. Used to repair rather than re-clone.
+_git_is_cloned() {
+    [[ -f "$1/HEAD" && -d "$1/objects" ]]
 }
 
 # _git_ensure_mirror <base> <host> <path> - clone the bare mirror if it is not
@@ -73,7 +92,14 @@ _git_ensure_mirror() {
     if _git_is_mirror "${dir}"; then
         return 0
     fi
-    # A leftover non-mirror dir (crashed previous clone) must go.
+    # Cloned but the dumb-HTTP index is missing (update-server-info failed or
+    # was interrupted). Repair in place rather than re-clone the whole repo.
+    if _git_is_cloned "${dir}"; then
+        if git -C "${dir}" update-server-info && _git_is_mirror "${dir}"; then
+            return 0
+        fi
+    fi
+    # A leftover non-mirror dir (crashed/partial previous clone) must go.
     [[ -e "${dir}" ]] && rm -rf "${dir}"
     url="${MIRRORET_GIT_UPSTREAM_OVERRIDE:-$(_git_mirror_url "${host}" "${path}")}"
     local tmp="${dir}.mirroret-tmp.$$"
@@ -86,7 +112,18 @@ _git_ensure_mirror() {
         error "git clone --mirror failed for ${url}"
         return 1
     fi
-    git -C "${tmp}" update-server-info
+    # The dumb-HTTP index MUST exist before the repo goes live, or a client's
+    # first fetch (info/refs) 404s. A failure here aborts rather than
+    # publishing an uncloneable mirror.
+    if ! git -C "${tmp}" update-server-info; then
+        rm -rf "${tmp}"
+        error "git update-server-info failed for ${url}"
+        return 1
+    fi
+    # Replace, never nest: `mv tmp dir` into an existing non-empty dir would
+    # put tmp INSIDE it. The dir is already gone from the rm above in the
+    # normal path; remove again to close the window a concurrent writer opened.
+    rm -rf "${dir}"
     mv "${tmp}" "${dir}"
     return 0
 }
@@ -138,6 +175,9 @@ GIT_ROOT="${base_dir}/git"
 failed=0
 while IFS= read -r head; do
     repo="\$(dirname "\${head}")"
+    # Only real bare repos: a HEAD beside an objects/ dir. This skips a stray
+    # HEAD (e.g. a reflog logs/HEAD) that would otherwise be run as a repo.
+    [[ -d "\${repo}/objects" ]] || continue
     echo "--- git remote update: \${repo#\${GIT_ROOT}/}"
     if git -C "\${repo}" remote update --prune && git -C "\${repo}" update-server-info; then
         echo "OK"
@@ -145,7 +185,7 @@ while IFS= read -r head; do
         echo "FAILED: \${repo}"
         failed=\$(( failed + 1 ))
     fi
-done < <(find "\${GIT_ROOT}" -type f -name HEAD -maxdepth 6 2>/dev/null)
+done < <(find "\${GIT_ROOT}" -name HEAD -type f 2>/dev/null)
 
 echo "=== git sync done (failures: \${failed}) ==="
 exit "\${failed}"

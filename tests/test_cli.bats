@@ -639,3 +639,17 @@ EOF
     run bash "${CTL}" git add 'evil$(touch /tmp/pwn)/r'
     [ "$status" -ne 0 ]
 }
+
+@test "git add: replaces a leftover non-mirror dir without nesting" {
+    local src="${TMPDIR}/src"
+    git init -q -b main "${src}"
+    ( cd "${src}" && echo hi > a.txt && git -c user.email=t@t -c user.name=t add a.txt && git -c user.email=t@t -c user.name=t commit -q -m init )
+    local dir="${MIRRORET_BASE_DIR}/git/example.com/o/r"
+    mkdir -p "${dir}"; echo junk > "${dir}/junk.txt"
+    export MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    run bash "${CTL}" git add example.com/o/r
+    [ "$status" -eq 0 ]
+    [ -f "${dir}/HEAD" ]
+    [ ! -e "${dir}/junk.txt" ]
+    [ -z "$(find "${dir}" -name '*.mirroret-tmp.*' -print -quit)" ]
+}

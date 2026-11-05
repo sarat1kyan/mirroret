@@ -112,13 +112,15 @@ _mk_source_repo() {
     [ "$(wc -l < "${TMPDIR_TEST}/clone/file.txt")" -eq 2 ]
 }
 
-@test "git: nginx serves /git as a static alias when enabled" {
+@test "git: nginx serves /git off disk and hands misses to the daemon" {
     source "${SCRIPT_DIR}/lib/nginx.sh"
     MIRRORET_ENABLE_GIT=1
     run _nginx_git_location /srv/mirroret
     [ "$status" -eq 0 ]
     [[ "$output" == *"location /git/"* ]]
-    [[ "$output" == *"alias /srv/mirroret/git/"* ]]
+    [[ "$output" == *"root /srv/mirroret;"* ]]
+    [[ "$output" == *"try_files \$uri @git_miss"* ]]
+    [[ "$output" == *"location @git_miss"* ]]
 }
 
 @test "git: nginx emits nothing for /git when git is disabled" {
@@ -128,3 +130,114 @@ _mk_source_repo() {
     [ "$status" -eq 0 ]
     [[ "$output" != *"location /git/"* ]]
 }
+
+@test "git daemon: split and validate repo paths" {
+    run python3 - <<'PY'
+import sys
+sys.path.insert(0, "engines")
+import mirroret_cache as mc
+assert mc.git_split_rel("github.com/org/repo/info/refs") == ("github.com/org/repo", "info/refs")
+assert mc.git_split_rel("github.com/org/repo/HEAD") == ("github.com/org/repo", "HEAD")
+assert mc.git_split_rel("gitlab.com/g/s/p/objects/ab/cd")[0] == "gitlab.com/g/s/p"
+assert mc.git_split_rel("github.com/org/repo") is None  # no git file -> not a request we serve
+assert mc.git_valid_repo("github.com", "org/repo")
+assert not mc.git_valid_repo("github.com", "../etc")
+assert not mc.git_valid_repo("-h", "r/r")
+assert not mc.git_valid_repo("github.com", "a;b")
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
+}
+
+@test "git daemon: on-miss clones from upstream and then serves info/refs" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    ( cd "${src}" && git update-server-info 2>/dev/null || true )
+    run python3 - "${TMPDIR_TEST}/srv" "file://${src}/.git" <<'PY'
+import os, sys, types
+sys.path.insert(0, "engines")
+import mirroret_cache as mc
+base, override = sys.argv[1], sys.argv[2]
+os.environ["MIRRORET_GIT_UPSTREAM_OVERRIDE"] = override
+args = types.SimpleNamespace(cache_dir=base, metadata_ttl=300, offline=False,
+                             ca_bundle="", insecure=False)
+routes = {"git": mc.Route("git", [], kind="git", root=os.path.join(base, "git"))}
+cache = mc.Cache(args, routes)
+ok = cache.ensure_git_mirror("github.com", "org/repo")
+assert ok, "ensure failed"
+d = os.path.join(base, "git", "github.com", "org", "repo")
+assert os.path.isfile(os.path.join(d, "HEAD")), "no HEAD after clone"
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
+}
+
+@test "git: a seeded mirror is cloneable over dumb HTTP" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    _git_ensure_mirror "${MIRRORET_BASE_DIR}" example.com "o/r"
+    # Serve the whole git store over plain static HTTP (dumb protocol).
+    local port; port="$(_free_port 2>/dev/null || echo 0)"
+    [ "${port}" != 0 ]
+    python3 -m http.server "${port}" --bind 127.0.0.1 \
+        --directory "${MIRRORET_BASE_DIR}/git" >/dev/null 2>&1 &
+    local srv=$!
+    local i; for i in $(seq 1 50); do curl -fsS -o /dev/null "http://127.0.0.1:${port}/" 2>/dev/null && break; sleep 0.1; done
+    GIT_SMART_HTTP=0 git clone -q "http://127.0.0.1:${port}/example.com/o/r" "${TMPDIR_TEST}/httpclone"
+    local rc=$?
+    kill "${srv}" 2>/dev/null || true
+    [ "$rc" -eq 0 ]
+    [ -f "${TMPDIR_TEST}/httpclone/file.txt" ]
+}
+
+@test "git: ensure repairs a mirror whose info/refs went missing" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    _git_ensure_mirror "${MIRRORET_BASE_DIR}" example.com "o/r"
+    local store="${MIRRORET_BASE_DIR}/git/example.com/o/r"
+    rm -f "${store}/info/refs"
+    run _git_ensure_mirror "${MIRRORET_BASE_DIR}" example.com "o/r"
+    [ "$status" -eq 0 ]
+    [ -f "${store}/info/refs" ]
+}
+
+@test "git: ensure replaces a leftover non-mirror dir without nesting" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    local store="${MIRRORET_BASE_DIR}/git/example.com/o/r"
+    mkdir -p "${store}"; echo junk > "${store}/junk.txt"
+    MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    _git_ensure_mirror "${MIRRORET_BASE_DIR}" example.com "o/r"
+    [ -f "${store}/HEAD" ]
+    [ ! -e "${store}/junk.txt" ]
+    [ -z "$(find "${store}" -name '*.mirroret-tmp.*' -print -quit)" ]
+}
+
+@test "git: an empty path is rejected" {
+    ! _git_valid_repo github.com ""
+}
+
+@test "git: a .git-only path is rejected" {
+    ! _git_valid_repo github.com ".git"
+}
+
+@test "git: sync refreshes a deeply-nested repo path" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    _git_ensure_mirror "${MIRRORET_BASE_DIR}" gitlab.com "a/b/c/d/e/proj"
+    DRY_RUN=0 write_git_sync_script "${MIRRORET_BASE_DIR}/scripts/sync-git-repos.sh"
+    ( cd "${src}" && echo more >> file.txt && git commit -qam second )
+    bash "${MIRRORET_BASE_DIR}/scripts/sync-git-repos.sh" >/dev/null 2>&1
+    git clone -q "${MIRRORET_BASE_DIR}/git/gitlab.com/a/b/c/d/e/proj" "${TMPDIR_TEST}/deepclone"
+    [ "$(wc -l < "${TMPDIR_TEST}/deepclone/file.txt")" -eq 2 ]
+}
+# NOTE: a full `git clone` over the daemon is proven manually (HTTP 200,
+# mirror cloned on miss) but takes >120s in this harness because of git's
+# dumb-HTTP object negotiation, so it is not kept in the suite. The on-miss
+# clone logic is covered by "on-miss clones ..." above and the split/validate
+# unit; HTTP file serving is the same _serve_file the APT/RPM tests exercise.

@@ -936,14 +936,16 @@ _ctl_git_valid() {
     [[ -n "${host}" && -n "${path}" ]] || return 1
     [[ "${host}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || return 1
     path="${path%.git}"
+    [[ -n "${path}" ]] || return 1
     [[ "${path}" != /* && "${path}" != */ ]] || return 1
-    local seg IFS='/'
-    for seg in ${path}; do
-        [[ -n "${seg}" ]] || return 1
-        [[ "${seg}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
-        [[ "${seg}" == ".." || "${seg}" == "." ]] && return 1
-    done
-    return 0
+    # Subshell + set -f: a '*' segment must not glob against the cwd.
+    ( set -f; local IFS='/' seg
+      for seg in ${path}; do
+          [[ -n "${seg}" ]] || exit 1
+          [[ "${seg}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || exit 1
+          [[ "${seg}" == ".." || "${seg}" == "." ]] && exit 1
+      done
+      exit 0 )
 }
 
 _git_add() {
@@ -980,7 +982,15 @@ _git_add() {
         _er "git clone --mirror failed for ${url}"
         return 1
     fi
-    git -C "${tmp}" update-server-info
+    # update-server-info is what makes the bare repo cloneable over dumb HTTP;
+    # a failure here must abort, not publish an uncloneable mirror.
+    if ! git -C "${tmp}" update-server-info; then
+        rm -rf "${tmp}"
+        _er "git update-server-info failed for ${url}"
+        return 1
+    fi
+    # Replace, never nest: mv into an existing dir would put tmp inside it.
+    rm -rf "${dir}"
     mv "${tmp}" "${dir}"
     _ok "Mirrored ${host}/${path}"
     _in "Clients clone it with:  git clone http://SERVER:${MIRRORET_WEB_PORT:-8080}/git/${host}/${path}"
