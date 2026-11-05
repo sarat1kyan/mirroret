@@ -539,6 +539,30 @@ DEBMIRROR_SCRIPT
 
 # -- Client config generation -------------------------------------------------
 
+# _apt_manifest_components <flavor> <codename> - the component list the engine
+# actually published for this suite, read from its manifest. Empty when no
+# manifest exists (e.g. before the first sync), so callers can fall back.
+_apt_manifest_components() {
+    local flavor="$1" codename="$2"
+    local dir
+    if declare -F apt_flavor_dir >/dev/null 2>&1; then
+        dir="$(apt_flavor_dir "${flavor}")"
+    else
+        dir="${flavor}"
+    fi
+    local manifest="${MIRRORET_BASE_DIR}/apt/${dir}/dists/${codename}/.mirroret-manifest.json"
+    [[ -f "${manifest}" ]] || return 0
+    python3 - "${manifest}" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        comps = json.load(fh).get("components") or []
+except Exception:
+    comps = []
+print(" ".join(c for c in comps if isinstance(c, str)))
+PY
+}
+
 # generate_apt_client_config <output_file>
 # Writes an APT sources.list entry for clients.
 #
@@ -564,6 +588,18 @@ generate_apt_client_config() {
 
     local components
     components="$(_apt_components "${flavor}")"
+    # In hybrid/cache the engine publishes the suite's FULL component set, so
+    # the client config must list the same components or apt cannot resolve a
+    # package in a component the operator did not name. The authoritative list
+    # is the engine's published manifest (written from the signed Release);
+    # fall back to the configured components when no manifest exists yet.
+    case "${MIRRORET_APT_MODE:-mirror}" in
+        hybrid|cache)
+            local _mc
+            _mc="$(_apt_manifest_components "${flavor}" "${codename}")"
+            [[ -n "${_mc}" ]] && components="${_mc}"
+            ;;
+    esac
 
     local base_path="${MIRRORET_APT_NGINX_PREFIX:-/${flavor}}"
 

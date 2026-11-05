@@ -221,6 +221,31 @@ _code() { curl -sS -o /dev/null -m 10 -w '%{http_code}' "$1"; }
         grep -q 'apt_nginx_prefix\|MIRRORET_APT_NGINX_PREFIX' "${SCRIPT_DIR}/lib/nginx.sh"
 }
 
+@test "client path: hybrid client config advertises the published component set" {
+    # The engine publishes a full index in hybrid; the client config must list
+    # the same components or apt still cannot resolve a universe package.
+    mock_os_release "ubuntu" "24.04" "noble"; detect_distro_from_mock
+    MIRRORET_APT_MODE=hybrid
+    MIRRORET_APT_COMPONENTS=main
+    local mdir="${MIRRORET_BASE_DIR}/apt/ubuntu/dists/noble"
+    mkdir -p "${mdir}"
+    printf '{"components": ["main", "universe"]}\n' > "${mdir}/.mirroret-manifest.json"
+    generate_apt_client_config "${MIRRORET_BASE_DIR}/config/sources.list"
+    grep -qE '^deb .* noble main universe$' "${MIRRORET_BASE_DIR}/config/sources.list"
+}
+
+@test "client path: mirror mode keeps the configured narrow component list" {
+    mock_os_release "ubuntu" "24.04" "noble"; detect_distro_from_mock
+    MIRRORET_APT_MODE=mirror
+    MIRRORET_APT_COMPONENTS=main
+    local mdir="${MIRRORET_BASE_DIR}/apt/ubuntu/dists/noble"
+    mkdir -p "${mdir}"
+    printf '{"components": ["main", "universe"]}\n' > "${mdir}/.mirroret-manifest.json"
+    generate_apt_client_config "${MIRRORET_BASE_DIR}/config/sources.list"
+    grep -qE '^deb .* noble main$' "${MIRRORET_BASE_DIR}/config/sources.list"
+    ! grep -qE 'noble main universe' "${MIRRORET_BASE_DIR}/config/sources.list"
+}
+
 # -- Paths clients must NOT be able to reach ------------------------------------
 
 @test "client path: logs and scripts are denied in the nginx config" {
