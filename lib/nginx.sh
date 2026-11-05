@@ -80,6 +80,8 @@ ${apt_locations}
 
 $(_nginx_rpm_location "${base_dir}")
 
+$(_nginx_git_location "${base_dir}")
+
     location /config {
         alias ${base_dir}/config;
         autoindex on;
@@ -173,6 +175,22 @@ PROXY_EOF
 # Emits an nginx location block for each APT flavor this server mirrors.
 # Native-engine trees live at <base>/apt/<flavor>/{dists,pool}; a legacy
 # apt-mirror/debmirror tree lives wherever MIRRORET_APT_DATA_PATH points.
+# _nginx_git_location <base_dir> - the /git/ location block.
+#
+# Git mirrors are bare repos with `git update-server-info` run, so a read-only
+# clone works over the dumb HTTP protocol against a plain static alias - no
+# git-http-backend / fcgiwrap. Emits nothing when git is disabled.
+_nginx_git_location() {
+    local base_dir="$1"
+    [[ "${MIRRORET_ENABLE_GIT:-0}" == "1" ]] || return 0
+    printf '    # Git pull-through mirror (dumb HTTP; clients: git clone %s/git/<host>/<path>).\n' \
+        "http://SERVER"
+    printf '    location /git/ {\n'
+    printf '        alias %s/git/;\n' "${base_dir}"
+    printf '        autoindex on;\n'
+    printf '    }\n'
+}
+
 # _nginx_rpm_location <base_dir> - the /redhat/ location block.
 #
 # In mirror mode: a plain alias onto the mirror tree. In hybrid/cache: rewrite

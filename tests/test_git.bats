@@ -111,3 +111,20 @@ _mk_source_repo() {
     git clone -q "${MIRRORET_BASE_DIR}/git/example.com/o/r" "${TMPDIR_TEST}/clone"
     [ "$(wc -l < "${TMPDIR_TEST}/clone/file.txt")" -eq 2 ]
 }
+
+@test "git: nginx serves /git as a static alias when enabled" {
+    source "${SCRIPT_DIR}/lib/nginx.sh"
+    MIRRORET_ENABLE_GIT=1
+    run _nginx_git_location /srv/mirroret
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"location /git/"* ]]
+    [[ "$output" == *"alias /srv/mirroret/git/"* ]]
+}
+
+@test "git: nginx emits nothing for /git when git is disabled" {
+    source "${SCRIPT_DIR}/lib/nginx.sh"
+    MIRRORET_ENABLE_GIT=0
+    run _nginx_git_location /srv/mirroret
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"location /git/"* ]]
+}
