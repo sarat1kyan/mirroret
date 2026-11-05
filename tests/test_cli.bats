@@ -606,3 +606,19 @@ EOF
     [ "$status" -eq 0 ]
     [[ "$output" == *"no RPMs in staging"* ]]
 }
+
+@test "docker add: a valid image is appended once (idempotent)" {
+    export MIRRORET_DOCKER_IMAGES_FILE="${TMPDIR}/docker-images.txt"
+    run bash "${CTL}" docker add ubuntu:22.04
+    [ "$status" -eq 0 ]
+    run bash "${CTL}" docker add ubuntu:22.04
+    [ "$status" -eq 0 ]
+    [ "$(grep -c '^ubuntu:22.04$' "${MIRRORET_DOCKER_IMAGES_FILE}")" -eq 1 ]
+}
+
+@test "docker add: an image with shell metacharacters is refused" {
+    export MIRRORET_DOCKER_IMAGES_FILE="${TMPDIR}/docker-images.txt"
+    run bash "${CTL}" docker add 'evil$(touch /tmp/pwn)'
+    [ "$status" -ne 0 ]
+    [ ! -f "${MIRRORET_DOCKER_IMAGES_FILE}" ] || ! grep -q 'evil' "${MIRRORET_DOCKER_IMAGES_FILE}"
+}

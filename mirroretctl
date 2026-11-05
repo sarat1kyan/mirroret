@@ -913,6 +913,50 @@ cmd_verify() {
 
 # ------------------------------------------------------------------- cache ----
 
+# cmd_docker - manage the Docker image pre-seed list.
+#   docker add <image>   validate and append an image reference to the list
+cmd_docker() {
+    local what="${1:-}"
+    [[ $# -gt 0 ]] && shift
+    case "${what}" in
+        add) _docker_add "$@" ;;
+        *)
+            _er "usage: mirroretctl docker add <image>"
+            return 2
+            ;;
+    esac
+}
+
+# _docker_add <image> - append a validated image to the pre-seed list.
+_docker_add() {
+    local image="${1:-}"
+    if [[ -z "${image}" ]]; then
+        _er "usage: mirroretctl docker add <image>"
+        return 2
+    fi
+    # Same whitelist the sync-script generator uses: anything else is shell
+    # that would run as root when the list is spliced into the generated
+    # script, so refuse it here too.
+    if [[ ! "${image}" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]; then
+        _er "refusing invalid image reference: ${image}"
+        _in "Allowed: letters, digits, and . _ / : @ - (e.g. nginx:stable)"
+        return 2
+    fi
+    local file="${MIRRORET_DOCKER_IMAGES_FILE:-/etc/mirroret/docker-images.txt}"
+    mkdir -p "$(dirname "${file}")" 2>/dev/null || true
+    if [[ ! -f "${file}" ]]; then
+        printf '# mirroret Docker image list - one image reference per line.\n' > "${file}" \
+            || { _er "cannot write ${file}"; return 1; }
+    fi
+    if grep -qxF "${image}" "${file}" 2>/dev/null; then
+        _in "Already listed: ${image}"
+    else
+        printf '%s\n' "${image}" >> "${file}" || { _er "cannot write ${file}"; return 1; }
+        _ok "Added ${image} to ${file}"
+    fi
+    _in "Seed it now with:  sudo mirroretctl sync docker   (hosted mode only)"
+}
+
 # cmd_cache - inspect the on-demand cache: whether it is running, what it
 # routes, how well it is working, and how much disk it is holding.
 cmd_cache() {
@@ -1406,6 +1450,7 @@ Inspect (no root needed):
                             check every published Release: each file it lists
                             must be on disk with the right size
   cache status|routes|size  on-demand cache: daemon stats, route table, disk use
+  docker add <image>        add an image to the Docker pre-seed list
   sync status               which syncs are running, lock state
   sync last                 final line of the newest sync logs
   serve                     probe every HTTP endpoint locally
@@ -1499,6 +1544,7 @@ main() {
         menu)                cmd_menu ;;
         verify)              cmd_verify "$@" ;;
         cache)               cmd_cache "$@" ;;
+        docker)              cmd_docker "$@" ;;
         help|-h|--help)      cmd_help ;;
         *)
             _er "Unknown command: ${cmd}"
