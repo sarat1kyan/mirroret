@@ -653,3 +653,14 @@ EOF
     [ ! -e "${dir}/junk.txt" ]
     [ -z "$(find "${dir}" -name '*.mirroret-tmp.*' -print -quit)" ]
 }
+
+@test "config: a crafted MIRRORET_CONF path cannot inject a command" {
+    # A conf file whose NAME carries a shell payload (no '/' in the payload,
+    # so the touch target is a bare name resolved against CWD). The old
+    # _conf_val interpolated the path into bash -c and ran it.
+    local conf="${TMPDIR}/x'; touch PWNED; echo '.conf"
+    : > "${conf}"
+    export MIRRORET_CONF="${conf}"
+    ( cd "${TMPDIR}" && bash "${CTL}" config diff >/dev/null 2>&1 || true )
+    [ ! -f "${TMPDIR}/PWNED" ]
+}

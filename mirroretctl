@@ -1334,7 +1334,11 @@ _conf_val() {
     local conf="$1" key="$2"
     [[ -f "$conf" ]] || { printf '%s' "${!key:-}"; return 0; }
     local v
-    v="$(bash -c "set +u; source '${conf}' >/dev/null 2>&1; printf '%s' \"\${${key}:-}\"" 2>/dev/null)"
+    # The conf path and the key are passed as ARGV positionals, never
+    # interpolated into the script string: a MIRRORET_CONF path containing a
+    # quote or $(...) would otherwise run as root here. `source "$1"` reads the
+    # path as data; `${!2}` is an indirect lookup of the requested key.
+    v="$(bash -c 'set +u; source "$1" >/dev/null 2>&1; printf "%s" "${!2:-}"' _ "$conf" "$key" 2>/dev/null)"
     printf '%s' "${v:-${!key:-}}"
 }
 
