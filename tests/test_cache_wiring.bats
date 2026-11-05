@@ -294,7 +294,16 @@ print('ok')"
     [ "$status" -eq 0 ]
     [[ "$output" == *"try_files \$uri @mirroret_cache"* ]]
     [[ "$output" == *"rewrite ^/redhat/(.*)\$ /redhat/mirror/\$1"* ]]
-    [[ "$output" == *"location ~ ^/redhat/mirror/.*/repodata/"* ]]
+    # The repodata revalidation regex must match the CLIENT-facing path
+    # (/redhat/<flavor>/<major>/<repo>/repodata/...), because nginx evaluates
+    # regex locations against the request URI BEFORE the rewrite runs. A regex
+    # anchored on /redhat/mirror/ (the post-rewrite path) never fires, so
+    # metadata would be served stale off disk forever.
+    local regex
+    regex="$(printf '%s\n' "$output" | sed -n 's/.*location ~ \(\^[^ ]*\) {.*/\1/p' | head -1)"
+    [ -n "${regex}" ]
+    run python3 -c "import re,sys; sys.exit(0 if re.search(r'${regex}', '/redhat/ol/9/baseos/repodata/repomd.xml') else 1)"
+    [ "$status" -eq 0 ]
 }
 
 @test "nginx: RPM mirror mode keeps the plain /redhat alias" {

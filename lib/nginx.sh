@@ -186,8 +186,14 @@ _nginx_rpm_location() {
     if declare -F rpm_cache_mode_enabled >/dev/null 2>&1 && rpm_cache_mode_enabled; then
         local proxy_block
         proxy_block="$(_nginx_cache_proxy_directives)"
+        # The regex is anchored on the CLIENT path (/redhat/.../repodata/),
+        # not the post-rewrite /redhat/mirror/ path: nginx matches regex
+        # locations against the request URI before any rewrite runs, so an
+        # /redhat/mirror/ anchor would never fire and repodata would be served
+        # stale off disk, bypassing the daemon's TTL. The rewrite inside then
+        # maps it onto the on-disk tree for the proxied request.
         printf '    # RPM metadata is revalidated through the daemon on a TTL.\n'
-        printf '    location ~ ^/redhat/mirror/.*/repodata/ {\n'
+        printf '    location ~ ^/redhat/.*/repodata/ {\n'
         printf '        rewrite ^/redhat/(.*)$ /redhat/mirror/$1 break;\n'
         printf '%s' "${proxy_block}"
         printf '    }\n'
