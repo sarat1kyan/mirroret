@@ -50,6 +50,55 @@ _git_store_dir() {
     printf '%s/git/%s/%s' "${base}" "${host}" "${path}"
 }
 
+# _git_is_mirror <dir> - true if dir is a usable bare mirror (has HEAD).
+_git_is_mirror() {
+    [[ -f "$1/HEAD" ]]
+}
+
+# _git_ensure_mirror <base> <host> <path> - clone the bare mirror if it is not
+# already present (or is a crashed partial). Idempotent; a present, valid
+# mirror is left untouched (freshness is _git_update_mirror's job).
+#
+# The clone goes to a temp dir and is renamed into place only on success, so
+# an interrupted clone never leaves a half-mirror that nginx would serve as
+# complete. MIRRORET_GIT_UPSTREAM_OVERRIDE lets tests point at a local repo.
+_git_ensure_mirror() {
+    local base="$1" host="$2" path="$3"
+    if ! _git_valid_repo "${host}" "${path}"; then
+        error "Refusing invalid git repo: ${host}/${path}"
+        return 2
+    fi
+    local dir url
+    dir="$(_git_store_dir "${base}" "${host}" "${path}")"
+    if _git_is_mirror "${dir}"; then
+        return 0
+    fi
+    # A leftover non-mirror dir (crashed previous clone) must go.
+    [[ -e "${dir}" ]] && rm -rf "${dir}"
+    url="${MIRRORET_GIT_UPSTREAM_OVERRIDE:-$(_git_mirror_url "${host}" "${path}")}"
+    local tmp="${dir}.mirroret-tmp.$$"
+    rm -rf "${tmp}"
+    mkdir -p "$(dirname "${dir}")"
+    # --mirror = a bare clone of every ref. -- stops any URL that slipped the
+    # validator from being read as an option (defence in depth).
+    if ! git clone --quiet --mirror -- "${url}" "${tmp}"; then
+        rm -rf "${tmp}"
+        error "git clone --mirror failed for ${url}"
+        return 1
+    fi
+    git -C "${tmp}" update-server-info
+    mv "${tmp}" "${dir}"
+    return 0
+}
+
+# _git_update_mirror <dir> - refresh a bare mirror and its dumb-HTTP index.
+_git_update_mirror() {
+    local dir="$1"
+    _git_is_mirror "${dir}" || { error "not a git mirror: ${dir}"; return 1; }
+    git -C "${dir}" remote update --prune || return 1
+    git -C "${dir}" update-server-info
+}
+
 # _git_host_allowed <host> - true if host is in MIRRORET_GIT_ALLOWED_HOSTS.
 # The on-miss path only clones from an allowed host; `git add` may override.
 _git_host_allowed() {

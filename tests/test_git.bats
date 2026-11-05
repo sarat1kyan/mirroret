@@ -47,3 +47,50 @@ teardown() {
     run _git_store_dir "/srv" github.com "org/repo.git"
     [ "$output" = "/srv/git/github.com/org/repo" ]
 }
+
+# _mk_source_repo <dir> - a tiny real repo with one commit on branch main.
+_mk_source_repo() {
+    local d="$1"
+    git init -q -b main "$d"
+    ( cd "$d" && echo hello > file.txt && git add file.txt && git commit -q -m init )
+}
+
+@test "git: ensure_mirror clones a bare mirror that is cloneable" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    # Clone from the local path (upstream override).
+    MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    run _git_ensure_mirror "${MIRRORET_BASE_DIR}" example.com "o/r"
+    [ "$status" -eq 0 ]
+    local store="${MIRRORET_BASE_DIR}/git/example.com/o/r"
+    [ -f "${store}/HEAD" ]
+    [ -f "${store}/info/refs" ]
+    # A client can clone it.
+    git clone -q "${store}" "${TMPDIR_TEST}/clone"
+    [ -f "${TMPDIR_TEST}/clone/file.txt" ]
+}
+
+@test "git: update_mirror brings across a new upstream commit" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    _git_ensure_mirror "${MIRRORET_BASE_DIR}" example.com "o/r"
+    ( cd "${src}" && echo more >> file.txt && git commit -qam second )
+    run _git_update_mirror "${MIRRORET_BASE_DIR}/git/example.com/o/r"
+    [ "$status" -eq 0 ]
+    git clone -q "${MIRRORET_BASE_DIR}/git/example.com/o/r" "${TMPDIR_TEST}/clone"
+    [ "$(wc -l < "${TMPDIR_TEST}/clone/file.txt")" -eq 2 ]
+}
+
+@test "git: an interrupted clone is not left as a complete-looking mirror" {
+    # A pre-existing empty store dir (a crashed previous clone) must not be
+    # treated as a valid mirror; ensure_mirror repairs it.
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    local store="${MIRRORET_BASE_DIR}/git/example.com/o/r"
+    mkdir -p "${store}"   # empty, no HEAD
+    MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    run _git_ensure_mirror "${MIRRORET_BASE_DIR}" example.com "o/r"
+    [ "$status" -eq 0 ]
+    [ -f "${store}/HEAD" ]
+}
