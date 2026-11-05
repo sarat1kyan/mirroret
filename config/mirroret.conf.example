@@ -245,6 +245,19 @@
 # Default: 0
 #MIRRORET_APT_BACKPORTS=0
 
+# -- Git pull-through mirror ---------------------------------------------------
+
+# Mirror public upstream git repositories so clients can clone them from the
+# LAN (offline-capable once seeded). Opt-in.
+#   sudo mirroretctl git add github.com/<org>/<repo>
+#   client: git clone http://SERVER:8080/git/github.com/<org>/<repo>
+# A nightly sync-git-repos.sh refreshes every mirror. Read-only, public repos
+# only (dumb HTTP). Requires the 'git' package on the server.
+#MIRRORET_ENABLE_GIT=0
+
+# Upstream hosts the mirror is allowed to clone from. Space-separated.
+#MIRRORET_GIT_ALLOWED_HOSTS="github.com gitlab.com bitbucket.org codeberg.org git.sr.ht"
+
 # -- Storage mode / on-demand cache -------------------------------------------
 
 # How APT packages are stored. See docs/CACHE.md.

@@ -10,6 +10,17 @@ repo from the LAN mirror — fast, and usable when the client has no direct
 internet. The owner chose "mirror upstream repos, fetch on miss, cache,"
 server always online.
 
+## Status note (2026-11-05)
+
+Shipped: dumb-HTTP serving, `mirroretctl git add`, atomic ensure/update of
+bare mirrors, the nightly `sync-git-repos.sh`, and nginx `/git/`. **Deferred
+to a follow-up (Phase 3.1): the daemon on-miss auto-clone** below — a request
+for an un-seeded repo does not yet trigger an automatic clone; seed it with
+`mirroretctl git add` (or add it to the store) first. Reason: making the
+Python cache daemon run `git` safely (request-path splitting, concurrency,
+host-allowlist, partial-clone handling) warrants its own design pass rather
+than a bolt-on. Everything else in this document is implemented and tested.
+
 ## Approach: dumb-HTTP bare mirrors
 
 A read-only clone works over plain HTTP against a bare repo that has had
