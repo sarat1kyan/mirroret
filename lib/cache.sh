@@ -166,6 +166,12 @@ generate_cache_config() {
         done
     done
 
+    # Git pull-through: one route for the whole /git/ tree. No upstream URL
+    # (the daemon clones per-repo from the request path), so a '-' placeholder.
+    if [[ "${MIRRORET_ENABLE_GIT:-0}" == "1" ]]; then
+        printf 'git\tgit\t%s\t-\n' "${base_dir}/git" >> "$tmp"
+    fi
+
     if [[ ! -s "$tmp" ]]; then
         warn "Could not derive any cache routes from the configured targets."
         warn "Set MIRRORET_APT_TARGETS / MIRRORET_RPM_TARGETS and re-run --upgrade."
@@ -186,11 +192,15 @@ for line in open(src):
     if not line:
         continue
     kind, name, root, upstream = (line.split("\t") + ["", "", "", ""])[:4]
-    if not name or not upstream:
+    if not name:
         continue
     entry = routes.setdefault(
         name, {"upstreams": [], "kind": kind or "apt", "root": root}
     )
+    # A git route has no upstream URL ('-' placeholder): the daemon clones
+    # per-repo from the request path. Everything else needs at least one.
+    if kind == "git" or upstream in ("", "-"):
+        continue
     # Ordered de-duplication: the first upstream seen is the main archive,
     # any distinct one after it (a separately hosted security archive)
     # becomes a fallback candidate tried in order.
@@ -292,8 +302,9 @@ UNIT
 configure_cache() {
     validate_cache_mode
     validate_rpm_mode
-    if ! cache_mode_enabled && ! rpm_cache_mode_enabled; then
-        debug "mirror mode for both APT and RPM: no cache daemon needed."
+    if ! cache_mode_enabled && ! rpm_cache_mode_enabled \
+            && [[ "${MIRRORET_ENABLE_GIT:-0}" != "1" ]]; then
+        debug "mirror mode for both APT and RPM and git off: no cache daemon needed."
         # Switching back to full-mirror mode must also stop the daemon that
         # an earlier hybrid/cache install left enabled.
         if [[ "${DRY_RUN:-0}" != "1" ]] && [[ -f "${MIRRORET_CACHE_UNIT}" ]]; then

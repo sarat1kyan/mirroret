@@ -444,3 +444,20 @@ print('ok')"
     [ "$status" -eq 0 ]
     [[ "$output" == *"not used"* ]]
 }
+
+@test "cache routes: a git route is emitted and accepted by the daemon" {
+    MIRRORET_ENABLE_GIT=1 MIRRORET_APT_TARGETS="ubuntu:noble" \
+        generate_cache_config "${TMPDIR_TEST}/cache.json"
+    run python3 - "${TMPDIR_TEST}/cache.json" "${MIRRORET_BASE_DIR}" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))["routes"]
+assert "git" in d, sorted(d)
+assert d["git"]["kind"] == "git", d["git"]
+assert d["git"]["root"] == sys.argv[2] + "/git", d["git"]
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    run python3 "$(cache_engine)" --check --config "${TMPDIR_TEST}/cache.json" \
+        --cache-dir "${MIRRORET_BASE_DIR}"
+    [ "$status" -eq 0 ]
+}

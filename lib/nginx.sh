@@ -183,11 +183,18 @@ PROXY_EOF
 _nginx_git_location() {
     local base_dir="$1"
     [[ "${MIRRORET_ENABLE_GIT:-0}" == "1" ]] || return 0
-    printf '    # Git pull-through mirror (dumb HTTP; clients: git clone %s/git/<host>/<path>).\n' \
-        "http://SERVER"
+    local proxy_block
+    proxy_block="$(_nginx_cache_proxy_directives)"
+    printf '    # Git pull-through mirror (dumb HTTP; clients: git clone http://SERVER/git/<host>/<path>).\n'
+    printf '    # Hits are served off disk; a miss (a repo never cloned) is handed to\n'
+    printf '    # the daemon, which clones it from an allowed upstream and then serves it.\n'
     printf '    location /git/ {\n'
-    printf '        alias %s/git/;\n' "${base_dir}"
+    printf '        root %s;\n' "${base_dir}"
+    printf '        try_files $uri @git_miss;\n'
     printf '        autoindex on;\n'
+    printf '    }\n'
+    printf '    location @git_miss {\n'
+    printf '%s' "${proxy_block}"
     printf '    }\n'
 }
 

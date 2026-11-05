@@ -46,6 +46,7 @@ import os
 import re
 import shutil
 import socketserver
+import subprocess
 import sys
 import tempfile
 import threading
@@ -122,6 +123,41 @@ def is_immutable(rel_path: str) -> bool:
     return rel_path.endswith(_PACKAGE_SUFFIXES)
 
 
+_GIT_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")
+_GIT_SEG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_GIT_BOUNDARIES = (
+    "/info/refs", "/git-upload-pack", "/git-receive-pack",
+    "/HEAD", "/objects/", "/packed-refs", "/info/",
+)
+
+
+def git_valid_repo(host: str, path: str) -> bool:
+    """Strict whitelist for a git host + repo path. Blocks traversal, shell
+    metacharacters and leading-dash flag injection, because host and path are
+    passed to the git CLI as an https URL."""
+    if not host or not path:
+        return False
+    if not _GIT_HOST_RE.match(host):
+        return False
+    for seg in path.split("/"):
+        if not seg or seg in (".", "..") or not _GIT_SEG_RE.match(seg):
+            return False
+    return True
+
+
+def git_split_rel(rel):
+    """Split a dumb-HTTP request path into (repo_root, in_repo_file). Returns
+    None when the path carries no git request suffix."""
+    best = None
+    for marker in _GIT_BOUNDARIES:
+        i = rel.find(marker)
+        if i > 0 and (best is None or i < best):
+            best = i
+    if best is None:
+        return None
+    return rel[:best], rel[best + 1:]
+
+
 def guess_content_type(path: str) -> str:
     if path.endswith((".deb", ".udeb", ".ddeb")):
         return "application/vnd.debian.binary-package"
@@ -165,8 +201,9 @@ class Route:
 
     @property
     def upstream(self):
-        """The primary upstream, for logging and status output."""
-        return self.upstreams[0]
+        """The primary upstream, for logging and status output. A git route
+        has no fixed upstream (it clones per-repo on demand)."""
+        return self.upstreams[0] if self.upstreams else "(git: on-demand clone)"
 
     def candidate_urls(self, rel: str):
         quoted = urllib.parse.quote(rel)
@@ -199,26 +236,29 @@ def load_routes(path: str) -> dict:
             spec = {"upstream": spec}
         # "upstreams" (a list) is the general form; "upstream" (a string) is
         # the common single-archive shorthand.
+        kind = spec.get("kind", "apt")
         upstreams = spec.get("upstreams")
         if upstreams is None:
             single = spec.get("upstream")
             upstreams = [single] if single else []
         if isinstance(upstreams, str):
             upstreams = [upstreams]
-        if not upstreams:
-            raise SystemExit(
-                "ERROR: route '%s' in %s has no 'upstream' URL." % (name, path)
-            )
-        for url in upstreams:
-            if not isinstance(url, str) or not url.startswith(
-                ("http://", "https://")
-            ):
+        # A git route clones its upstream per-repo from the request path (and
+        # an allowed-host list), so it carries no fixed upstream URL.
+        if kind != "git":
+            if not upstreams:
                 raise SystemExit(
-                    "ERROR: route '%s' upstream must be an http(s) URL, got %r"
-                    % (name, url)
+                    "ERROR: route '%s' in %s has no 'upstream' URL." % (name, path)
                 )
-        routes[name] = Route(name, upstreams, spec.get("kind", "apt"),
-                             root=spec.get("root"))
+            for url in upstreams:
+                if not isinstance(url, str) or not url.startswith(
+                    ("http://", "https://")
+                ):
+                    raise SystemExit(
+                        "ERROR: route '%s' upstream must be an http(s) URL, got %r"
+                        % (name, url)
+                    )
+        routes[name] = Route(name, upstreams, kind, root=spec.get("root"))
     return routes
 
 
@@ -314,6 +354,15 @@ class Cache:
         self._reval_lock = threading.Lock()
         self._reval_inflight = {}
         self._evict_lock = threading.Lock()
+        self._git_locks_lock = threading.Lock()
+        self._git_locks = {}
+        self.git_allowed_hosts = set(
+            os.environ.get(
+                "MIRRORET_GIT_ALLOWED_HOSTS",
+                "github.com gitlab.com bitbucket.org codeberg.org git.sr.ht",
+            ).split()
+        )
+        self.git_override = os.environ.get("MIRRORET_GIT_UPSTREAM_OVERRIDE", "")
 
     # -- paths ---------------------------------------------------------------
 
@@ -664,6 +713,53 @@ class Cache:
                     pass
         return removed
 
+    # -- git on-miss ---------------------------------------------------------
+
+    def ensure_git_mirror(self, host: str, path: str) -> bool:
+        """Clone the bare mirror for <host>/<path> if not already present.
+
+        Validates the ref, restricts to allowed hosts (unless an override is
+        set), clones under a per-repo lock to a temp dir, and renames into
+        place so an interrupted clone never looks complete."""
+        if not git_valid_repo(host, path):
+            return False
+        path = path[:-4] if path.endswith(".git") else path
+        store = os.path.join(self.cache_dir, "git", host, path)
+        if os.path.isfile(os.path.join(store, "HEAD")):
+            return True
+        if not self.git_override and host not in self.git_allowed_hosts:
+            return False
+        key = "%s/%s" % (host, path)
+        with self._git_locks_lock:
+            lock = self._git_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._git_locks[key] = lock
+        with lock:
+            if os.path.isfile(os.path.join(store, "HEAD")):
+                return True
+            if os.path.exists(store):
+                shutil.rmtree(store, ignore_errors=True)
+            url = self.git_override or ("https://%s/%s" % (host, path))
+            tmp = "%s.mirroret-tmp.%d" % (store, os.getpid())
+            shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                os.makedirs(os.path.dirname(store), exist_ok=True)
+                subprocess.run(
+                    ["git", "clone", "--quiet", "--mirror", "--", url, tmp],
+                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                subprocess.run(
+                    ["git", "-C", tmp, "update-server-info"],
+                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                os.replace(tmp, store)
+                return True
+            except (OSError, subprocess.CalledProcessError) as exc:
+                shutil.rmtree(tmp, ignore_errors=True)
+                log("git: clone failed for %s: %s" % (url, exc))
+                return False
+
     # -- eviction ------------------------------------------------------------
 
     def evict_if_needed(self) -> dict:
@@ -884,6 +980,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         route, rel, disk_path = resolved
 
+        if route.kind == "git":
+            self._handle_git(route, rel, disk_path)
+            return
+
         cached = os.path.isfile(disk_path)
 
         if cached and cache.is_fresh(disk_path, rel):
@@ -919,6 +1019,29 @@ class Handler(BaseHTTPRequestHandler):
         cache.stats.bump("misses")
         entry = cache.fetch(route, rel, disk_path)
         self._stream_inflight(entry, rel)
+
+    def _handle_git(self, route, rel, disk_path) -> None:
+        """Serve a git dumb-HTTP request, cloning the mirror on first miss."""
+        cache = self.cache
+        if os.path.isfile(disk_path):
+            cache.stats.bump("hits")
+            self._serve_file(disk_path, rel)
+            return
+        split = git_split_rel(rel)
+        if split is None:
+            self._send_simple(404, b"not a git request path\n")
+            return
+        repo_root, _infile = split
+        parts = repo_root.split("/", 1)
+        if len(parts) != 2:
+            self._send_simple(404, b"bad git repo path\n")
+            return
+        host, path = parts
+        cache.stats.bump("misses")
+        if cache.ensure_git_mirror(host, path) and os.path.isfile(disk_path):
+            self._serve_file(disk_path, rel)
+        else:
+            self._send_simple(404, b"git repo not available\n")
 
     def _handle_control(self) -> None:
         cache = self.cache

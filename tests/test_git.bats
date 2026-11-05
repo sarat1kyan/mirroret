@@ -112,13 +112,56 @@ _mk_source_repo() {
     [ "$(wc -l < "${TMPDIR_TEST}/clone/file.txt")" -eq 2 ]
 }
 
-@test "git: nginx serves /git as a static alias when enabled" {
+@test "git: nginx serves /git off disk and hands misses to the daemon" {
     source "${SCRIPT_DIR}/lib/nginx.sh"
     MIRRORET_ENABLE_GIT=1
     run _nginx_git_location /srv/mirroret
     [ "$status" -eq 0 ]
     [[ "$output" == *"location /git/"* ]]
-    [[ "$output" == *"alias /srv/mirroret/git/"* ]]
+    [[ "$output" == *"root /srv/mirroret;"* ]]
+    [[ "$output" == *"try_files \$uri @git_miss"* ]]
+    [[ "$output" == *"location @git_miss"* ]]
+}
+
+@test "git daemon: split and validate repo paths" {
+    run python3 - <<'PY'
+import sys
+sys.path.insert(0, "engines")
+import mirroret_cache as mc
+assert mc.git_split_rel("github.com/org/repo/info/refs") == ("github.com/org/repo", "info/refs")
+assert mc.git_split_rel("github.com/org/repo/HEAD") == ("github.com/org/repo", "HEAD")
+assert mc.git_split_rel("gitlab.com/g/s/p/objects/ab/cd")[0] == "gitlab.com/g/s/p"
+assert mc.git_split_rel("github.com/org/repo") is None
+assert mc.git_valid_repo("github.com", "org/repo")
+assert not mc.git_valid_repo("github.com", "../etc")
+assert not mc.git_valid_repo("-h", "r/r")
+assert not mc.git_valid_repo("github.com", "a;b")
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
+}
+
+@test "git daemon: on-miss clones from upstream and then serves" {
+    local src="${TMPDIR_TEST}/src"
+    _mk_source_repo "${src}"
+    ( cd "${src}" && git update-server-info 2>/dev/null || true )
+    run python3 - "${TMPDIR_TEST}/srv" "file://${src}/.git" <<'PY'
+import os, sys, types
+sys.path.insert(0, "engines")
+import mirroret_cache as mc
+base, override = sys.argv[1], sys.argv[2]
+os.environ["MIRRORET_GIT_UPSTREAM_OVERRIDE"] = override
+args = types.SimpleNamespace(cache_dir=base, metadata_ttl=300, offline=False,
+                             ca_bundle="", insecure=False)
+routes = {"git": mc.Route("git", [], kind="git", root=os.path.join(base, "git"))}
+cache = mc.Cache(args, routes)
+assert cache.ensure_git_mirror("github.com", "org/repo"), "ensure failed"
+assert os.path.isfile(os.path.join(base, "git", "github.com", "org", "repo", "HEAD"))
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
 }
 
 @test "git: nginx emits nothing for /git when git is disabled" {
