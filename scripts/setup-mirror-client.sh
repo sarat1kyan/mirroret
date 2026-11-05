@@ -58,6 +58,8 @@ Options:
   --no-pip               skip /etc/pip.conf
   --no-npm               skip the system-wide npm registry setting
   --docker               also configure the Docker registry mirror
+  --insecure             allow a config that disables signature checking
+                         (trusted=yes / gpgcheck=0); lab use only
   --rollback             restore the most recent backup and remove the
                          mirror config
   -y, --yes              non-interactive
@@ -76,6 +78,7 @@ while [[ $# -gt 0 ]]; do
         --no-npm)        DO_NPM=0 ;;
         --docker)        DO_DOCKER=1 ;;
         --rollback)      ROLLBACK=1 ;;
+        --insecure)      ALLOW_INSECURE=1 ;;
         -y|--yes)        ASSUME_YES=1 ;;
         --dry-run)       DRY_RUN=1 ;;
         -h|--help)       usage; exit 0 ;;
@@ -356,6 +359,35 @@ available_configs() {
         | sort -u
 }
 
+# _config_is_insecure <file> <apt|rpm> - true if the config disables signature
+# checking (trusted=yes for apt, gpgcheck=0 for rpm). Pure; no side effects.
+_config_is_insecure() {
+    local file="$1" kind="$2"
+    case "$kind" in
+        apt) grep -qiE 'trusted[[:space:]]*=[[:space:]]*yes' "$file" ;;
+        rpm) grep -qE '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*0([[:space:]]|$)' "$file" ;;
+        *)   return 1 ;;
+    esac
+}
+
+# assert_config_secure <file> <apt|rpm> - refuse a signature-disabling config
+# unless the operator explicitly passed --insecure. This is the client's only
+# defence if the server (or a man-in-the-middle on the plain-HTTP enrollment
+# path) hands back a config with verification turned off: without it, one
+# malicious response silently disables APT/RPM signature checking and then
+# feeds arbitrary unsigned packages.
+assert_config_secure() {
+    local file="$1" kind="$2"
+    [[ "${ALLOW_INSECURE:-0}" == "1" ]] && return 0
+    if _config_is_insecure "$file" "$kind"; then
+        die "Refusing a ${kind} config that disables signature checking." \
+            "The server returned a config with verification OFF (trusted=yes /" \
+            "gpgcheck=0). If this is a deliberate lab setup, re-run with" \
+            "--insecure. Otherwise the server or the network path may be" \
+            "compromised - do NOT install this."
+    fi
+}
+
 fetch_or_die() {
     local name="$1" dest="$2"
     local code
@@ -448,6 +480,7 @@ setup_apt() {
         [[ -e "$f" ]] && save "$f"
     done
 
+    assert_config_secure "$tmp" apt
     run install -m 0644 "$tmp" /etc/apt/sources.list.d/mirroret.list
     rm -f "$tmp"
     ok "installed /etc/apt/sources.list.d/mirroret.list"
@@ -692,6 +725,7 @@ setup_rpm() {
         [[ -e "$f" ]] && save "$f"
     done
 
+    assert_config_secure "$tmp" rpm
     run install -m 0644 "$tmp" /etc/yum.repos.d/mirroret.repo
     rm -f "$tmp"
     ok "installed /etc/yum.repos.d/mirroret.repo"

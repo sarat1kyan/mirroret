@@ -200,3 +200,45 @@ print('ok')"
     "
     grep -q "trusted-host" "${TMPDIR}/insecure_pip.conf"
 }
+
+# -- Client refuses signature-disabling configs (enrollment hardening) --------
+
+_client_fn() {
+    # Extract the real _config_is_insecure from setup-mirror-client.sh so the
+    # test exercises the shipped logic, not a copy.
+    sed -n '/^_config_is_insecure()/,/^}/p' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+}
+
+@test "client: a trusted=yes APT config is detected as insecure" {
+    local f="${TMPDIR}/c.list"
+    printf 'deb [trusted=yes] http://s:8080/ubuntu jammy main\n' > "$f"
+    run bash -c "$(_client_fn); _config_is_insecure '$f' apt"
+    [ "$status" -eq 0 ]
+}
+
+@test "client: a normal signed APT config is NOT flagged insecure" {
+    local f="${TMPDIR}/c.list"
+    printf 'deb http://s:8080/ubuntu jammy main\n' > "$f"
+    run bash -c "$(_client_fn); _config_is_insecure '$f' apt"
+    [ "$status" -ne 0 ]
+}
+
+@test "client: a gpgcheck=0 RPM config is detected as insecure" {
+    local f="${TMPDIR}/c.repo"
+    printf '[m]\nbaseurl=http://s:8080/redhat/ol/9/baseos\ngpgcheck=0\n' > "$f"
+    run bash -c "$(_client_fn); _config_is_insecure '$f' rpm"
+    [ "$status" -eq 0 ]
+}
+
+@test "client: a gpgcheck=1 RPM config is NOT flagged insecure" {
+    local f="${TMPDIR}/c.repo"
+    printf '[m]\nbaseurl=http://s:8080/redhat/ol/9/baseos\ngpgcheck=1\n' > "$f"
+    run bash -c "$(_client_fn); _config_is_insecure '$f' rpm"
+    [ "$status" -ne 0 ]
+}
+
+@test "client: the guard is wired before both config installs" {
+    # assert_config_secure must run before each install -m of a fetched config.
+    grep -q 'assert_config_secure "\$tmp" apt' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+    grep -q 'assert_config_secure "\$tmp" rpm' "${SCRIPT_DIR}/scripts/setup-mirror-client.sh"
+}
