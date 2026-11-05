@@ -265,3 +265,23 @@ _client_fn() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"open to ANY source"* ]]
 }
+
+# -- Client bootstrap integrity (published checksum) --------------------------
+
+@test "security: _sha256_file produces a checksum the standard tools verify" {
+    local f="${TMPDIR}/boot.sh"
+    printf 'echo hello\n' > "$f"
+    _sha256_file "$f" > "${f}.sha256"
+    run bash -c "cd '$(dirname "$f")' && { sha256sum -c '$(basename "$f").sha256' 2>/dev/null || shasum -c '$(basename "$f").sha256'; }"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *OK* ]]
+}
+
+@test "security: a tampered bootstrap fails its published checksum" {
+    local f="${TMPDIR}/boot.sh"
+    printf 'echo hello\n' > "$f"
+    _sha256_file "$f" > "${f}.sha256"
+    printf 'echo PWNED\n' > "$f"   # attacker swaps the script
+    run bash -c "cd '$(dirname "$f")' && { sha256sum -c '$(basename "$f").sha256' 2>/dev/null || shasum -c '$(basename "$f").sha256'; }"
+    [ "$status" -ne 0 ]
+}

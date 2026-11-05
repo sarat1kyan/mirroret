@@ -1098,7 +1098,14 @@ generate_all_client_configs() {
             else
                 install -m 0755 "${SCRIPT_DIR}/scripts/${client_script}" \
                     "${config_dir}/${client_script}"
-                info "  ${config_dir}/${client_script} (client bootstrap)"
+                # Publish a checksum beside the bootstrap so a client can
+                # verify it before running it (and an operator can compare it
+                # out-of-band). Over plain HTTP this catches corruption and a
+                # naive swap; a determined MITM needs TLS to defeat - enrol
+                # over https:// when TLS is configured.
+                _sha256_file "${config_dir}/${client_script}" \
+                    > "${config_dir}/${client_script}.sha256" 2>/dev/null || true
+                info "  ${config_dir}/${client_script} (client bootstrap + .sha256)"
             fi
         fi
     done
@@ -1153,9 +1160,14 @@ print_summary() {
     fi
     echo " 2. Check the published tree is complete:"
     echo "      mirroretctl verify"
-    echo " 3. Enrol a client (run ON the client):"
-    echo "      curl -fsSL -o /tmp/s.sh http://${MIRRORET_SERVER_IP}:${MIRRORET_WEB_PORT}/config/setup-mirror-client.sh"
+    local enrol_base="http://${MIRRORET_SERVER_IP}:${MIRRORET_WEB_PORT}"
+    is_tls_ready && enrol_base="https://${MIRRORET_SERVER_IP}:${MIRRORET_TLS_PORT}"
+    echo " 3. Enrol a client (run ON the client) - fetch, verify, then run:"
+    echo "      curl -fsSL -o /tmp/s.sh ${enrol_base}/config/setup-mirror-client.sh"
+    echo "      curl -fsSL -o /tmp/s.sh.sha256 ${enrol_base}/config/setup-mirror-client.sh.sha256"
+    echo "      ( cd /tmp && sha256sum -c s.sh.sha256 ) || { echo 'CHECKSUM FAILED - do not run'; exit 1; }"
     echo "      sudo bash /tmp/s.sh --server ${MIRRORET_SERVER_IP}"
+    is_tls_ready || echo "      (enrolment is over plain HTTP; configure TLS for MITM protection)"
     echo " 4. Anything else: mirroretctl help   (or just: sudo mirroretctl)"
     echo ""
     list_required_ports

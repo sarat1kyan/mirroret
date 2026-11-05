@@ -330,3 +330,17 @@ confirm_yes() {
     read -r -p "${prompt} [Y/n] " reply
     [[ -z "$reply" || "${reply}" =~ ^[Yy]$ ]]
 }
+
+# _sha256_file <file> - print "<hex>  <basename>", portable across sha256sum
+# (Linux) and shasum -a 256 (macOS/minimal). Used to publish a checksum beside
+# the client bootstrap script so an operator can verify it before running it.
+_sha256_file() {
+    local f="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        ( cd "$(dirname "$f")" && sha256sum "$(basename "$f")" )
+    elif command -v shasum >/dev/null 2>&1; then
+        ( cd "$(dirname "$f")" && shasum -a 256 "$(basename "$f")" )
+    else
+        return 1
+    fi
+}
