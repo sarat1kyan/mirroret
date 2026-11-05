@@ -913,6 +913,79 @@ cmd_verify() {
 
 # ------------------------------------------------------------------- cache ----
 
+# cmd_git - manage the git pull-through mirror.
+#   git add <host>/<path>   clone a public repo into the mirror store
+#
+# Standalone (mirroretctl sources no lib/), so the repo validation is
+# duplicated from lib/git.sh. Keep the two in sync.
+cmd_git() {
+    local what="${1:-}"
+    [[ $# -gt 0 ]] && shift
+    case "${what}" in
+        add) _git_add "$@" ;;
+        *)
+            _er "usage: mirroretctl git add <host>/<path>"
+            return 2
+            ;;
+    esac
+}
+
+# _ctl_git_valid <host> <path> - same whitelist as lib/git.sh _git_valid_repo.
+_ctl_git_valid() {
+    local host="$1" path="$2"
+    [[ -n "${host}" && -n "${path}" ]] || return 1
+    [[ "${host}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || return 1
+    path="${path%.git}"
+    [[ "${path}" != /* && "${path}" != */ ]] || return 1
+    local seg IFS='/'
+    for seg in ${path}; do
+        [[ -n "${seg}" ]] || return 1
+        [[ "${seg}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+        [[ "${seg}" == ".." || "${seg}" == "." ]] && return 1
+    done
+    return 0
+}
+
+_git_add() {
+    local repo="${1:-}"
+    if [[ -z "${repo}" ]]; then
+        _er "usage: mirroretctl git add <host>/<path>  (e.g. github.com/torvalds/linux)"
+        return 2
+    fi
+    if ! check_command git 2>/dev/null && ! command -v git >/dev/null 2>&1; then
+        _er "git is not installed on this server."
+        return 1
+    fi
+    local host="${repo%%/*}" path="${repo#*/}"
+    if ! _ctl_git_valid "${host}" "${path}"; then
+        _er "refusing invalid repo reference: ${repo}"
+        _in "Form: <host>/<path>, chars [A-Za-z0-9._/-] only (e.g. github.com/org/repo)"
+        return 2
+    fi
+    path="${path%.git}"
+    local base="${MIRRORET_BASE_DIR:-/srv/mirroret}"
+    local dir="${base}/git/${host}/${path}"
+    if [[ -f "${dir}/HEAD" ]]; then
+        _in "Already mirrored: ${host}/${path}"
+        _in "Refresh it with:  sudo mirroretctl sync  (or run sync-git-repos.sh)"
+        return 0
+    fi
+    local url="${MIRRORET_GIT_UPSTREAM_OVERRIDE:-https://${host}/${path}}"
+    local tmp="${dir}.mirroret-tmp.$$"
+    rm -rf "${tmp}"
+    mkdir -p "$(dirname "${dir}")" 2>/dev/null || true
+    _in "Cloning ${url} ..."
+    if ! git clone --quiet --mirror -- "${url}" "${tmp}"; then
+        rm -rf "${tmp}"
+        _er "git clone --mirror failed for ${url}"
+        return 1
+    fi
+    git -C "${tmp}" update-server-info
+    mv "${tmp}" "${dir}"
+    _ok "Mirrored ${host}/${path}"
+    _in "Clients clone it with:  git clone http://SERVER:${MIRRORET_WEB_PORT:-8080}/git/${host}/${path}"
+}
+
 # cmd_docker - manage the Docker image pre-seed list.
 #   docker add <image>   validate and append an image reference to the list
 cmd_docker() {
@@ -1451,6 +1524,7 @@ Inspect (no root needed):
                             must be on disk with the right size
   cache status|routes|size  on-demand cache: daemon stats, route table, disk use
   docker add <image>        add an image to the Docker pre-seed list
+  git add <host>/<path>     mirror a public git repo for LAN clones
   sync status               which syncs are running, lock state
   sync last                 final line of the newest sync logs
   serve                     probe every HTTP endpoint locally
@@ -1545,6 +1619,7 @@ main() {
         verify)              cmd_verify "$@" ;;
         cache)               cmd_cache "$@" ;;
         docker)              cmd_docker "$@" ;;
+        git)                 cmd_git "$@" ;;
         help|-h|--help)      cmd_help ;;
         *)
             _er "Unknown command: ${cmd}"

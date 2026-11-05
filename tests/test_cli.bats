@@ -622,3 +622,20 @@ EOF
     [ "$status" -ne 0 ]
     [ ! -f "${MIRRORET_DOCKER_IMAGES_FILE}" ] || ! grep -q 'evil' "${MIRRORET_DOCKER_IMAGES_FILE}"
 }
+
+@test "git add: seeds a cloneable mirror from an allowed repo" {
+    local src="${TMPDIR}/src"
+    git init -q -b main "${src}"
+    ( cd "${src}" && echo hi > a.txt && git -c user.email=t@t -c user.name=t add a.txt && git -c user.email=t@t -c user.name=t commit -q -m init )
+    export MIRRORET_GIT_UPSTREAM_OVERRIDE="file://${src}"
+    run bash "${CTL}" git add example.com/o/r
+    [ "$status" -eq 0 ]
+    [ -f "${MIRRORET_BASE_DIR}/git/example.com/o/r/HEAD" ]
+    git clone -q "${MIRRORET_BASE_DIR}/git/example.com/o/r" "${TMPDIR}/clone"
+    [ -f "${TMPDIR}/clone/a.txt" ]
+}
+
+@test "git add: a shell-metachar repo is refused" {
+    run bash "${CTL}" git add 'evil$(touch /tmp/pwn)/r'
+    [ "$status" -ne 0 ]
+}
