@@ -124,12 +124,18 @@ from the mirror itself:
 
 ```bash
 curl -fsSL -o /tmp/setup-mirror-client.sh http://SERVER:8080/config/setup-mirror-client.sh
+curl -fsSL -o /tmp/setup-mirror-client.sh.sha256 http://SERVER:8080/config/setup-mirror-client.sh.sha256
+( cd /tmp && sha256sum -c setup-mirror-client.sh.sha256 ) || { echo "CHECKSUM FAILED"; exit 1; }
 sudo bash /tmp/setup-mirror-client.sh --server SERVER     # --rollback undoes it
 ```
 
 It detects the distro, installs the matching published config, disables the
 upstream repos and proves the result by downloading a package pinned to the
-mirror's own index. Or hand out the files under `/srv/mirroret/config/`
+mirror's own index. The client **refuses** a config that disables signature
+checking (`trusted=yes` / `gpgcheck=0`) unless you pass `--insecure`, so a
+compromised or MITM'd server cannot silently turn verification off. Enrol over
+the HTTPS listener (`--tls-self-signed` or your own cert) for MITM protection;
+over plain HTTP, verify the published `.sha256` before running the script. Or hand out the files under `/srv/mirroret/config/`
 yourself ([docs/CLIENT-CONFIGURATION-GUIDE.md](docs/CLIENT-CONFIGURATION-GUIDE.md)).
 
 A nightly `sync-all.sh` cron entry and a weekly `cleanup-all.sh` are
