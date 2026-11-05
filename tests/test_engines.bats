@@ -470,6 +470,38 @@ Contents-amd64.gz 500" \
     [ -f "${TMPDIR_TEST}/mirror/baseos/Packages/tzdata-2025a-1.el9.noarch.rpm" ]
 }
 
+@test "rpm engine: metadata-only publishes verbatim repodata and no packages" {
+    # Hybrid/cache RPM: serve the full upstream package list (so nothing is
+    # false-not-found and repo_gpgcheck stays usable) while the daemon fetches
+    # each .rpm on demand.
+    _mk_rpm_fixture "${TMPDIR_TEST}/up"
+    local url
+    url="$(serve_fixture "${TMPDIR_TEST}/up")"
+
+    run python3 "$(rpm_engine)" --dest "${TMPDIR_TEST}/mirror" \
+        --repo baseos="${url}" --arch x86_64 --arch noarch --min-free-gb 0 \
+        --metadata-only
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"kept verbatim"* ]]
+    # repomd.xml is byte-for-byte upstream's (so its signature would verify).
+    cmp "${TMPDIR_TEST}/up/repodata/repomd.xml" \
+        "${TMPDIR_TEST}/mirror/baseos/repodata/repomd.xml"
+    # No package payloads were downloaded.
+    [ -z "$(find "${TMPDIR_TEST}/mirror" -name '*.rpm' -print -quit)" ]
+}
+
+@test "rpm engine: metadata-only publishes the detached signature when present" {
+    _mk_rpm_fixture "${TMPDIR_TEST}/up"
+    printf 'FAKE SIGNATURE\n' > "${TMPDIR_TEST}/up/repodata/repomd.xml.asc"
+    local url
+    url="$(serve_fixture "${TMPDIR_TEST}/up")"
+
+    python3 "$(rpm_engine)" --dest "${TMPDIR_TEST}/mirror" \
+        --repo baseos="${url}" --arch x86_64 --arch noarch --min-free-gb 0 \
+        --metadata-only >/dev/null
+    [ -f "${TMPDIR_TEST}/mirror/baseos/repodata/repomd.xml.asc" ]
+}
+
 @test "rpm engine: i686 is mirrored when asked for (32-bit multilib)" {
     _mk_rpm_fixture "${TMPDIR_TEST}/up"
     local url

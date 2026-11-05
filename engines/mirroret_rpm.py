@@ -433,6 +433,14 @@ class RpmRepoMirror(object):
         self.args = args
         self.arches = set(spec.get("arches") or ["x86_64", "noarch"])
         self.newest_only = bool(spec.get("newest_only", True))
+        # metadata-only (hybrid/cache): publish the upstream repodata verbatim
+        # - full, signed package list - and download no .rpm payloads. The
+        # pull-through cache fetches each package on first request. Because the
+        # published metadata describes the WHOLE upstream, nothing is a false
+        # "not found" and repo_gpgcheck=1 keeps working on clients.
+        self.metadata_only = bool(
+            getattr(args, "metadata_only", False) or spec.get("metadata_only")
+        )
         self.include_source = bool(spec.get("sources", False))
         self.dest = os.path.join(os.path.abspath(spec["dest"]), self.repo_id)
         self.floor = DiskFloor(spec["dest"], spec.get("min_free_gb",
@@ -819,11 +827,17 @@ class RpmRepoMirror(object):
             # every package upstream advertises was selected, upstream's own
             # signed repodata describes the mirror exactly and is kept.
             self.filtered = len(packages) != seen
+            # metadata-only serves upstream's repodata verbatim regardless of
+            # any arch/newest filter: the daemon fetches whatever a client
+            # installs, so the published list must stay the complete, signed
+            # upstream one (and thus never "filtered").
+            if self.metadata_only:
+                self.filtered = False
             log("  upstream lists %d packages; %d selected "
                 "(arches=%s newest_only=%s source=%s)"
                 % (seen, len(packages), ",".join(sorted(self.arches)) or "all",
                    self.newest_only, self.include_source))
-            if not packages:
+            if not packages and not self.metadata_only:
                 # Never a warning. Publishing an empty primary.xml would
                 # advertise zero packages to every client, and with delete
                 # enabled prune() would then remove every RPM on disk against
@@ -854,7 +868,10 @@ class RpmRepoMirror(object):
                 self._fetch_meta_into(entries, rest, staging, files,
                                       required=tuple(rest))
 
-            if not self._download(packages):
+            if self.metadata_only:
+                log("  metadata-only: %d packages listed, none downloaded; "
+                    "the pool is served on demand by the cache" % len(packages))
+            elif not self._download(packages):
                 log("  RESULT: %s incomplete - repodata NOT republished, "
                     "clients keep using the previous metadata." % self.repo_id)
                 return EXIT_FAIL
@@ -869,7 +886,14 @@ class RpmRepoMirror(object):
             # gets a 404 mid-transaction.
             self._publish_metadata(entries, revision, files, repomd_raw, asc,
                                    packages)
-            if self.spec.get("delete", True) and not self.args.no_delete:
+            if self.metadata_only:
+                # The package list is the full upstream one but nothing was
+                # downloaded, so the on-disk pool (what the cache already
+                # fetched) is a subset of it. Pruning against the full list is
+                # a no-op at best; skip it to avoid walking the pool for
+                # nothing, exactly as the APT engine does in metadata-only.
+                log("  prune skipped: metadata-only run serves the pool on demand.")
+            elif self.spec.get("delete", True) and not self.args.no_delete:
                 self.prune(packages)
         except SystemExit as exc:
             log(str(exc))
@@ -984,6 +1008,9 @@ def main(argv=None):
     ap.add_argument("--all-versions", action="store_true",
                     help="keep every build, not just the newest (can be TB)")
     ap.add_argument("--sources", action="store_true", help="include .src.rpm")
+    ap.add_argument("--metadata-only", action="store_true",
+                    help="publish upstream repodata verbatim and download no "
+                         "packages; the pool is served on demand by the cache")
     ap.add_argument("--no-delete", action="store_true",
                     help="keep rpms upstream has dropped")
     ap.add_argument("--jobs", type=int, default=int(os.environ.get("MIRRORET_JOBS", "8")))
