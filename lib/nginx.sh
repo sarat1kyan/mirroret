@@ -220,15 +220,17 @@ _nginx_apt_locations() {
     proxy_block="$(_nginx_cache_proxy_directives)"
 
     for dir in "${dirs[@]}"; do
-        if [[ "${on_demand}" == "1" && "${MIRRORET_APT_MODE:-}" == "cache" ]]; then
-            # Pure cache mode: nothing rewrites dists/ on a schedule, so an
-            # index that nginx served straight off disk would never be
-            # revalidated and clients would be pinned to the day-one
-            # InRelease forever - no security update would ever appear.
-            # Metadata therefore always goes through the daemon, which
-            # applies its TTL and conditional GET. Regex locations take
-            # precedence over the prefix location below, so this wins for
-            # every dists/ path. Only the immutable pool is served off disk.
+        if [[ "${on_demand}" == "1" ]]; then
+            # hybrid AND cache: route dists/ through the daemon so metadata is
+            # revalidated on a TTL. In pure cache nothing rewrites dists/ on a
+            # schedule; in hybrid the nightly sync does, but only nightly - an
+            # index served straight off disk would pin clients to the last
+            # sync's InRelease, so a new upstream release (a security update)
+            # would be invisible until the next nightly run. The daemon's
+            # conditional GET makes updates appear within metadata_ttl in both
+            # modes. Regex locations take precedence over the prefix location
+            # below, so this wins for every dists/ path; only the immutable
+            # pool is served off disk.
             printf '    location ~ ^/%s/dists/ {\n' "${dir}"
             printf '%s' "${proxy_block}"
             printf '    }\n'

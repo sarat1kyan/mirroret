@@ -170,6 +170,44 @@ print('ok')"
     [[ "$output" == *"root /srv/mirroret/apt/"* ]]
 }
 
+@test "nginx: hybrid mode revalidates dists through the daemon" {
+    # In hybrid the index tree is on disk, but it must still be revalidated on
+    # a TTL or clients never see a new upstream release between nightly syncs.
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/distro.sh'
+        source '${SCRIPT_DIR}/lib/targets.sh'
+        source '${SCRIPT_DIR}/lib/cache.sh'
+        source '${SCRIPT_DIR}/lib/nginx.sh'
+        export MIRRORET_APT_MODE=hybrid
+        export MIRRORET_TARGETS_DIR='${TMPDIR_TEST}/targets'
+        export MIRRORET_APT_TARGETS='ubuntu:noble'
+        mkdir -p \"\$MIRRORET_TARGETS_DIR\"
+        generate_target_specs >/dev/null 2>&1
+        _nginx_apt_locations /srv/mirroret /legacy"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"location ~ ^/ubuntu/dists/"* ]]
+}
+
+@test "nginx: mirror mode does not revalidate dists through the daemon" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/distro.sh'
+        source '${SCRIPT_DIR}/lib/targets.sh'
+        source '${SCRIPT_DIR}/lib/cache.sh'
+        source '${SCRIPT_DIR}/lib/nginx.sh'
+        export MIRRORET_APT_MODE=mirror
+        export MIRRORET_TARGETS_DIR='${TMPDIR_TEST}/targets'
+        export MIRRORET_APT_TARGETS='ubuntu:noble'
+        mkdir -p \"\$MIRRORET_TARGETS_DIR\"
+        generate_target_specs >/dev/null 2>&1
+        _nginx_apt_locations /srv/mirroret /legacy"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"location ~ ^/ubuntu/dists/"* ]]
+}
+
 @test "nginx: mirror mode keeps the plain alias and adds no proxy" {
     run bash -c "
         source '${SCRIPT_DIR}/lib/logging.sh'
