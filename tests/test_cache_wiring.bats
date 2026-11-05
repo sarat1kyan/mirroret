@@ -283,6 +283,51 @@ print('ok')"
     [[ "$output" != *"location ~ ^/ubuntu/dists/"* ]]
 }
 
+@test "nginx: RPM hybrid serves /redhat via try_files and revalidates repodata" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/cache.sh'
+        source '${SCRIPT_DIR}/lib/nginx.sh'
+        export MIRRORET_RPM_MODE=hybrid
+        _nginx_rpm_location /srv/mirroret"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"try_files \$uri @mirroret_cache"* ]]
+    [[ "$output" == *"rewrite ^/redhat/(.*)\$ /redhat/mirror/\$1"* ]]
+    [[ "$output" == *"location ~ ^/redhat/mirror/.*/repodata/"* ]]
+}
+
+@test "nginx: RPM mirror mode keeps the plain /redhat alias" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/cache.sh'
+        source '${SCRIPT_DIR}/lib/nginx.sh'
+        export MIRRORET_RPM_MODE=mirror
+        _nginx_rpm_location /srv/mirroret"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"alias /srv/mirroret/redhat/mirror/"* ]]
+    [[ "$output" != *"@mirroret_cache"* ]]
+}
+
+@test "nginx: the miss handler is emitted for an RPM-only hybrid (APT mirror)" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/distro.sh'
+        source '${SCRIPT_DIR}/lib/targets.sh'
+        source '${SCRIPT_DIR}/lib/cache.sh'
+        source '${SCRIPT_DIR}/lib/nginx.sh'
+        export MIRRORET_APT_MODE=mirror MIRRORET_RPM_MODE=hybrid
+        export MIRRORET_TARGETS_DIR='${TMPDIR_TEST}/targets'
+        export MIRRORET_APT_TARGETS='ubuntu:noble'
+        mkdir -p \"\$MIRRORET_TARGETS_DIR\"
+        generate_target_specs >/dev/null 2>&1
+        _nginx_apt_locations /srv/mirroret /legacy"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"location @mirroret_cache"* ]]
+}
+
 @test "nginx: mirror mode keeps the plain alias and adds no proxy" {
     run bash -c "
         source '${SCRIPT_DIR}/lib/logging.sh'

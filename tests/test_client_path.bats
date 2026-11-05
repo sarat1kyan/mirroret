@@ -54,12 +54,18 @@ PY
 # with ${base_dir} expanded. Read from source so the test cannot drift from
 # the config that is actually written.
 _nginx_alias_for() {
-    local loc="$1" tmpl
-    tmpl="$(grep -A2 "location ${loc}" "${SCRIPT_DIR}/lib/nginx.sh" \
-            | grep -oE 'alias +[^;]+' | head -1 | awk '{print $2}')"
-    [[ -n "${tmpl}" ]] || return 1
-    local base_dir="${MIRRORET_BASE_DIR}"
-    eval printf '%s' "\"${tmpl}\""
+    local loc="$1" out
+    # Render the actual /redhat/ location block and read its alias, rather than
+    # scraping nginx.sh source: the block is now built by _nginx_rpm_location
+    # (mode-aware), so running it is what keeps this test honest.
+    out="$(bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/cache.sh'
+        source '${SCRIPT_DIR}/lib/nginx.sh'
+        export MIRRORET_RPM_MODE='${MIRRORET_RPM_MODE:-mirror}'
+        _nginx_rpm_location '${MIRRORET_BASE_DIR}'")"
+    printf '%s' "${out}" | grep -oE 'alias +[^;]+' | head -1 | awk '{print $2}'
 }
 
 # _serve <docroot> <port> - background static server, waits until it answers.

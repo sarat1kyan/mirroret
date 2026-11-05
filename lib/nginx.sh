@@ -78,12 +78,7 @@ configure_nginx_unified() {
         "$(cat <<NGINX_EOF
 ${apt_locations}
 
-    # RPM mirror - reposync writes to redhat/mirror/rocky/VER/REPO/
-    # Clients use: baseurl=http://server:PORT/redhat/rocky/VER/baseos
-    location /redhat/ {
-        alias ${base_dir}/redhat/mirror/;
-        autoindex on;
-    }
+$(_nginx_rpm_location "${base_dir}")
 
     location /config {
         alias ${base_dir}/config;
@@ -178,6 +173,41 @@ PROXY_EOF
 # Emits an nginx location block for each APT flavor this server mirrors.
 # Native-engine trees live at <base>/apt/<flavor>/{dists,pool}; a legacy
 # apt-mirror/debmirror tree lives wherever MIRRORET_APT_DATA_PATH points.
+# _nginx_rpm_location <base_dir> - the /redhat/ location block.
+#
+# In mirror mode: a plain alias onto the mirror tree. In hybrid/cache: rewrite
+# the client path /redhat/<f>/<m>/<repo>/... onto the on-disk tree
+# /redhat/mirror/<f>/<m>/<repo>/... so try_files serves hits off disk and
+# hands misses to the daemon, which fetches each .rpm on demand. A regex
+# location over repodata/ forces metadata through the daemon on a TTL so a new
+# upstream repomd (a security update) appears without waiting for a sync.
+_nginx_rpm_location() {
+    local base_dir="$1"
+    if declare -F rpm_cache_mode_enabled >/dev/null 2>&1 && rpm_cache_mode_enabled; then
+        local proxy_block
+        proxy_block="$(_nginx_cache_proxy_directives)"
+        printf '    # RPM metadata is revalidated through the daemon on a TTL.\n'
+        printf '    location ~ ^/redhat/mirror/.*/repodata/ {\n'
+        printf '        rewrite ^/redhat/(.*)$ /redhat/mirror/$1 break;\n'
+        printf '%s' "${proxy_block}"
+        printf '    }\n'
+        printf '    # RPM pull-through: hits off disk, misses to the daemon.\n'
+        printf '    location /redhat/ {\n'
+        printf '        rewrite ^/redhat/(.*)$ /redhat/mirror/$1 break;\n'
+        printf '        root %s;\n' "${base_dir}"
+        printf '        try_files $uri @mirroret_cache;\n'
+        printf '        autoindex on;\n'
+        printf '    }\n'
+        return 0
+    fi
+    # mirror mode: reposync/native writes to redhat/mirror/<flavor>/<ver>/<repo>/
+    # Clients use: baseurl=http://server:PORT/redhat/<flavor>/<ver>/<repo>
+    printf '    location /redhat/ {\n'
+    printf '        alias %s/redhat/mirror/;\n' "${base_dir}"
+    printf '        autoindex on;\n'
+    printf '    }\n'
+}
+
 _nginx_apt_locations() {
     local base_dir="$1" legacy_path="$2"
     local -a dirs=()
@@ -249,9 +279,17 @@ _nginx_apt_locations() {
         printf '    }\n'
     done
 
-    if [[ "${on_demand}" == "1" ]]; then
-        printf '\n    # Cache miss handler (MIRRORET_APT_MODE=%s).\n' \
-            "${MIRRORET_APT_MODE:-mirror}"
+    # The @mirroret_cache miss handler is shared by the APT pool/dists routes
+    # and the RPM /redhat/ routes, so emit it once whenever EITHER subsystem
+    # is on-demand - including an RPM-only hybrid where APT itself is a full
+    # mirror and would not otherwise trigger it.
+    local need_handler="${on_demand}"
+    if declare -F rpm_cache_mode_enabled >/dev/null 2>&1 && rpm_cache_mode_enabled; then
+        need_handler=1
+    fi
+    if [[ "${need_handler}" == "1" ]]; then
+        printf '\n    # Cache miss handler (apt=%s rpm=%s).\n' \
+            "${MIRRORET_APT_MODE:-mirror}" "${MIRRORET_RPM_MODE:-mirror}"
         printf '    location @mirroret_cache {\n'
         printf '%s' "${proxy_block}"
         printf '    }\n'
