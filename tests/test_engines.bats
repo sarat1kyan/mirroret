@@ -198,6 +198,34 @@ PY
     [ "$(find "${TMPDIR_TEST}/mirror/pool" -name '*.deb' | wc -l)" -eq 2 ]
 }
 
+@test "apt engine: all_components publishes every component the Release lists" {
+    # Hybrid/cache completeness: a client asking for a 'universe' package must
+    # find it in the index even when the operator configured only 'main'.
+    _mk_apt_fixture "${TMPDIR_TEST}/up" --packages 2 --component main --component universe
+    local url
+    url="$(serve_fixture "${TMPDIR_TEST}/up")"
+
+    run python3 "$(apt_engine)" --dest "${TMPDIR_TEST}/mirror" --url "${url}" \
+        --suite testsuite --component main --arch amd64 --min-free-gb 0 \
+        --metadata-only --all-components
+    [ "$status" -eq 0 ]
+    [ -f "${TMPDIR_TEST}/mirror/dists/testsuite/main/binary-amd64/Packages.gz" ]
+    [ -f "${TMPDIR_TEST}/mirror/dists/testsuite/universe/binary-amd64/Packages.gz" ]
+}
+
+@test "apt engine: without all_components only the configured component is published" {
+    _mk_apt_fixture "${TMPDIR_TEST}/up" --packages 2 --component main --component universe
+    local url
+    url="$(serve_fixture "${TMPDIR_TEST}/up")"
+
+    run python3 "$(apt_engine)" --dest "${TMPDIR_TEST}/mirror" --url "${url}" \
+        --suite testsuite --component main --arch amd64 --min-free-gb 0 \
+        --metadata-only
+    [ "$status" -eq 0 ]
+    [ -f "${TMPDIR_TEST}/mirror/dists/testsuite/main/binary-amd64/Packages.gz" ]
+    [ ! -f "${TMPDIR_TEST}/mirror/dists/testsuite/universe/binary-amd64/Packages.gz" ]
+}
+
 @test "apt engine: a missing suite fails loudly, not silently" {
     _mk_apt_fixture "${TMPDIR_TEST}/up" --packages 1
     local url

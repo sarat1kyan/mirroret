@@ -353,6 +353,14 @@ class AptMirror(object):
         self.metadata_only = bool(
             getattr(args, "metadata_only", False) or spec.get("metadata_only")
         )
+        # Publish every component the suite's signed Release advertises, not
+        # just spec["components"]. Hybrid/cache completeness: the index must
+        # list a package before the pull-through cache can serve it, so a
+        # client never gets a false "not found". The configured component
+        # list still governs full `mirror` mode, where disk is the limit.
+        self.all_components = bool(
+            getattr(args, "all_components", False) or spec.get("all_components")
+        )
         self.wanted = {}  # relative pool path -> (size, algo, digest, url)
         self.suite_failures = 0
         self.downloaded = 0
@@ -570,6 +578,13 @@ class AptMirror(object):
                 "ERROR: %s: Release carries no checksum table - refusing to "
                 "mirror an unverifiable archive." % suite
             )
+
+        # all_components: widen to the suite's full advertised component set
+        # before entry selection. Read from the signed Release, so the
+        # published index (and the manifest derived from it) is authoritative
+        # for what a client can resolve.
+        if self.all_components and release.components:
+            self.components = list(release.components)
 
         for arch in self.arches:
             if release.architectures and arch not in release.architectures:
@@ -975,6 +990,9 @@ def main(argv=None):
     ap.add_argument("--metadata-only", action="store_true",
                     help="mirror the signed index tree but download no "
                          "packages; the pool is served on demand by the cache")
+    ap.add_argument("--all-components", action="store_true",
+                    help="publish every component the suite's Release lists, "
+                         "not just --component (for hybrid/cache completeness)")
     ap.add_argument("--all-index-compressions", action="store_true",
                     help="mirror every compression of each index, not just the best")
     ap.add_argument("--delete", action="store_true",
