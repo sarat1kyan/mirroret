@@ -78,3 +78,18 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"${MIRRORET_DOCKER_REGISTRY_PORT} Docker registry"* ]]
 }
+
+@test "docker client config: loopback bind points clients at the nginx web port, not the registry port" {
+    MIRRORET_DOCKER_MODE=cache
+    MIRRORET_DOCKER_BIND=loopback
+    generate_docker_client_config "${TMPDIR_TEST}/daemon.json"
+    grep -q "${MIRRORET_SERVER_IP}:${MIRRORET_WEB_PORT}" "${TMPDIR_TEST}/daemon.json"
+    ! grep -q ":${MIRRORET_DOCKER_REGISTRY_PORT}" "${TMPDIR_TEST}/daemon.json"
+}
+
+@test "docker client config: MIRRORET_DOCKER_BIND=all keeps the raw registry port" {
+    MIRRORET_DOCKER_MODE=cache
+    MIRRORET_DOCKER_BIND=all
+    generate_docker_client_config "${TMPDIR_TEST}/daemon.json"
+    grep -q "${MIRRORET_SERVER_IP}:${MIRRORET_DOCKER_REGISTRY_PORT}" "${TMPDIR_TEST}/daemon.json"
+}

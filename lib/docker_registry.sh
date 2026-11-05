@@ -510,13 +510,25 @@ generate_docker_client_config() {
         tls_ready=1
     fi
 
+    # In the default loopback bind the registry is not reachable on its own
+    # port from the LAN; nginx /v2/ on the web port is. So the plain-HTTP
+    # client endpoint is the web port, not the registry port. With
+    # MIRRORET_DOCKER_BIND=all the raw registry port is exposed and used as
+    # before.
+    local http_port
+    if [[ "${MIRRORET_DOCKER_BIND:-loopback}" == "all" ]]; then
+        http_port="${registry_port}"
+    else
+        http_port="${MIRRORET_WEB_PORT:-8080}"
+    fi
+
     local registry_url registry_host_port
     if [[ "${insecure}" != "1" && "${tls_ready}" == "1" ]]; then
         registry_url="https://${server_ip}:${tls_port}"
         registry_host_port="${server_ip}:${tls_port}"
     else
-        registry_url="http://${server_ip}:${registry_port}"
-        registry_host_port="${server_ip}:${registry_port}"
+        registry_url="http://${server_ip}:${http_port}"
+        registry_host_port="${server_ip}:${http_port}"
         if [[ "${insecure}" == "1" ]]; then
             warn_insecure "Docker client config: insecure-registries enabled for ${registry_host_port}"
         else
