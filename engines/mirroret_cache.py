@@ -151,10 +151,17 @@ class Route:
     answered by the main archive and a -security index by the security one.
     """
 
-    def __init__(self, name, upstreams, kind="apt"):
+    def __init__(self, name, upstreams, kind="apt", root=None):
         self.name = name
         self.upstreams = [u.rstrip("/") for u in upstreams]
         self.kind = kind
+        # Absolute on-disk directory this route's files live in. Decoupled
+        # from `name` (the URL-match prefix) because the client URL, the
+        # nginx tree and the disk layout do not share a prefix: an APT route
+        # named `ubuntu` stores under `<base>/apt/ubuntu`, an RPM route named
+        # `redhat/mirror/ol/9/baseos` under `<base>/redhat/mirror/ol/9/baseos`.
+        # None falls back to <cache_dir>/<name> for backward compatibility.
+        self.root = root
 
     @property
     def upstream(self):
@@ -210,7 +217,8 @@ def load_routes(path: str) -> dict:
                     "ERROR: route '%s' upstream must be an http(s) URL, got %r"
                     % (name, url)
                 )
-        routes[name] = Route(name, upstreams, spec.get("kind", "apt"))
+        routes[name] = Route(name, upstreams, spec.get("kind", "apt"),
+                             root=spec.get("root"))
     return routes
 
 
@@ -320,11 +328,19 @@ class Cache:
         clean = urllib.parse.unquote(url_path.split("?", 1)[0]).lstrip("/")
         if not clean:
             return None
-        parts = clean.split("/", 1)
-        route = self.routes.get(parts[0])
+        # Longest matching route prefix wins. A single-segment match (APT's
+        # `ubuntu`) and a multi-segment one (RPM's `redhat/mirror/ol/9/baseos`)
+        # coexist, and a more specific route is never shadowed by a shorter
+        # one that happens to be a prefix of it.
+        route = None
+        rel = ""
+        for name in sorted(self.routes, key=len, reverse=True):
+            if clean == name or clean.startswith(name + "/"):
+                route = self.routes[name]
+                rel = clean[len(name):].lstrip("/")
+                break
         if route is None:
             return None
-        rel = parts[1] if len(parts) > 1 else ""
         if not rel or rel.endswith("/") or "\x00" in rel:
             return None
         # Reject '.'/'..' components outright instead of relying on abspath
@@ -333,8 +349,11 @@ class Cache:
         if any(seg in ("", ".", "..") for seg in rel.split("/")):
             return None
 
-        disk = os.path.abspath(os.path.join(self.cache_dir, route.name, rel))
-        root = os.path.join(self.cache_dir, route.name)
+        # Per-route disk root, falling back to <cache_dir>/<name> when a route
+        # declares none (backward compatibility with older cache.json).
+        route_root = route.root or os.path.join(self.cache_dir, route.name)
+        root = os.path.abspath(route_root)
+        disk = os.path.abspath(os.path.join(root, rel))
         if not disk.startswith(root + os.sep):
             return None
         # A path that is already a directory on disk (GET /ubuntu/dists with

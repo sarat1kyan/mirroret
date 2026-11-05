@@ -352,3 +352,40 @@ PY
     run bash -c "find '${TMPDIR_TEST}/m/pool' -type f | wc -l"
     [ "$output" = "$before" ]
 }
+
+@test "cache daemon: resolve matches the longest route prefix and honours per-route root" {
+    run python3 - <<'PY'
+import os, sys, types
+sys.path.insert(0, "engines")
+import mirroret_cache as mc
+
+args = types.SimpleNamespace(cache_dir="/srv/mirroret", metadata_ttl=300,
+                             offline=False, ca_bundle="", insecure=False)
+routes = {
+    "ubuntu": mc.Route("ubuntu", ["http://up/ubuntu"], kind="apt",
+                       root="/srv/mirroret/apt/ubuntu"),
+    "redhat/mirror/ol/9/baseos": mc.Route(
+        "redhat/mirror/ol/9/baseos", ["http://yum/ol9/baseos"], kind="rpm",
+        root="/srv/mirroret/redhat/mirror/ol/9/baseos"),
+}
+cache = mc.Cache(args, routes)
+
+# RPM: longest multi-segment prefix wins, disk lands under the route root.
+route, rel, disk = cache.resolve("/redhat/mirror/ol/9/baseos/repodata/repomd.xml")
+assert route.name == "redhat/mirror/ol/9/baseos", route.name
+assert rel == "repodata/repomd.xml", rel
+assert disk == "/srv/mirroret/redhat/mirror/ol/9/baseos/repodata/repomd.xml", disk
+
+# APT: single-segment route, root applied.
+route, rel, disk = cache.resolve("/ubuntu/pool/main/x.deb")
+assert route.name == "ubuntu", route.name
+assert disk == "/srv/mirroret/apt/ubuntu/pool/main/x.deb", disk
+
+# No route and traversal both reject.
+assert cache.resolve("/nope/x") is None
+assert cache.resolve("/redhat/mirror/ol/9/baseos/../../../etc/shadow") is None
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
+}
