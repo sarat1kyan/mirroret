@@ -133,6 +133,37 @@ PY
     [ "$status" -eq 0 ]
 }
 
+@test "cache routes: RPM repos get their own routes with a disk root" {
+    MIRRORET_RPM_MODE=hybrid \
+    MIRRORET_APT_TARGETS="ubuntu:noble" MIRRORET_RPM_TARGETS="rocky:9" \
+        generate_cache_config "${TMPDIR_TEST}/cache.json"
+
+    run python3 - "${TMPDIR_TEST}/cache.json" "${MIRRORET_BASE_DIR}" <<'PY'
+import json, sys
+base = sys.argv[2]
+d = json.load(open(sys.argv[1]))["routes"]
+# APT route unchanged in name, now carrying an explicit disk root.
+assert "ubuntu" in d, sorted(d)
+assert d["ubuntu"]["root"] == base + "/apt/ubuntu", d["ubuntu"]
+# RPM repo routes keyed on the full client-tree prefix.
+key = "redhat/mirror/rocky/9/baseos"
+assert key in d, sorted(d)
+assert d[key]["kind"] == "rpm", d[key]
+assert d[key]["root"] == base + "/redhat/mirror/rocky/9/baseos", d[key]
+assert any("rockylinux" in u for u in d[key]["upstreams"]), d[key]
+print("ok")
+PY
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok"* ]]
+}
+
+@test "cache service: the daemon cache-dir is the base dir, not base/apt" {
+    MIRRORET_RPM_MODE=hybrid MIRRORET_APT_MODE=hybrid install_cache_service
+    local launcher="${MIRRORET_BASE_DIR}/scripts/run-cache.sh"
+    grep -qE -- "--cache-dir \"${MIRRORET_BASE_DIR}\"" "${launcher}"
+    ! grep -qE -- "--cache-dir \"${MIRRORET_BASE_DIR}/apt\"" "${launcher}"
+}
+
 @test "cache routes: the generated table is what the engine accepts" {
     # The route table and the daemon's parser are written in different
     # languages in different files; this is the test that keeps them honest.

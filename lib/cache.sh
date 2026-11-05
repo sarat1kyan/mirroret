@@ -101,29 +101,31 @@ generate_cache_config() {
         return 0
     fi
 
-    # The same resolution the mirror uses (explicit MIRRORET_APT_TARGETS, or
-    # the host's own distro when unset). Reading the raw variable meant an
-    # Ubuntu host with no explicit targets got a mirror spec but a daemon
-    # with no routes - which crash-looped and 502'd every pool miss.
-    local -a targets=()
+    local base_dir="${MIRRORET_BASE_DIR}"
+
+    # APT targets (explicit MIRRORET_APT_TARGETS, or the host's own distro).
+    local -a apt_targets=()
     local _t
     while read -r _t; do
-        [[ -n "${_t}" ]] && targets+=("${_t}")
+        [[ -n "${_t}" ]] && apt_targets+=("${_t}")
     done < <(resolved_apt_targets)
-    if [[ ${#targets[@]} -eq 0 ]]; then
-        warn "No APT targets, so the cache has nothing to route."
-        warn "Set MIRRORET_APT_TARGETS and re-run with --upgrade."
-        return 1
+
+    # RPM targets only route to the daemon in a hybrid/cache RPM mode.
+    local -a rpm_targets=()
+    if rpm_cache_mode_enabled; then
+        while read -r _t; do
+            [[ -n "${_t}" ]] && rpm_targets+=("${_t}")
+        done < <(resolved_rpm_targets)
     fi
 
     mkdir -p "$(dirname "$conf")"
 
-    # flavor dir -> newline-separated upstream bases, de-duplicated in order.
+    # Each row: kind \t name(URL-match prefix) \t root(disk dir) \t upstream.
     local tmp
     tmp="$(mktemp_file)"
 
     local target flavor release dir codename _suite url
-    for target in "${targets[@]}"; do
+    for target in "${apt_targets[@]}"; do
         [[ -z "${target}" ]] && continue
         flavor="${target%%:*}"
         release="${target#*:}"
@@ -132,16 +134,41 @@ generate_cache_config() {
         dir="$(apt_flavor_dir "${flavor}")"
         codename="$(apt_codename_for "${flavor}" "${release}")" || continue
 
-        # The suite name is not needed here - a route is keyed on the
-        # flavor directory, and every suite of a flavor shares its upstreams.
+        # A route is keyed on the flavor directory (the URL prefix clients
+        # use); its disk root is the apt subtree the mirror writes into.
         while IFS='|' read -r _suite url; do
             [[ -z "${url}" ]] && continue
-            printf '%s\t%s\n' "${dir}" "${url}" >> "$tmp"
+            printf 'apt\t%s\t%s\t%s\n' \
+                "${dir}" "${base_dir}/apt/${dir}" "${url}" >> "$tmp"
         done < <(apt_suites "${flavor}" "${codename}" || true)
     done
 
+    # RPM routes: one per repo, keyed on the full client-tree prefix
+    # redhat/mirror/<flavor>/<major>/<repo> (the path nginx rewrites /redhat/
+    # requests onto and the directory the metadata-only sync writes into).
+    local major repos repo canon rurl primary_arch
+    for target in "${rpm_targets[@]}"; do
+        [[ -z "${target}" ]] && continue
+        flavor="${target%%:*}"
+        major="${target#*:}"
+        major="${major%%:*}"
+        [[ -z "${major}" || "${major}" == "${flavor}" ]] && continue
+        primary_arch="${MIRRORET_RPM_ARCH%% *}"
+        primary_arch="${primary_arch:-x86_64}"
+        repos="${MIRRORET_RPM_REPOS:-$(rpm_flavor_default_repos "${flavor}" "${major}")}"
+        for repo in ${repos}; do
+            canon="$(rpm_repo_alias "${flavor}" "${major}" "${repo}")"
+            rurl="$(rpm_repo_url "${flavor}" "${major}" "${canon}" "${primary_arch}")" \
+                || continue
+            local rname="redhat/mirror/${flavor}/${major}/${canon}"
+            printf 'rpm\t%s\t%s\t%s\n' \
+                "${rname}" "${base_dir}/${rname}" "${rurl}" >> "$tmp"
+        done
+    done
+
     if [[ ! -s "$tmp" ]]; then
-        warn "Could not derive any cache routes from the APT targets."
+        warn "Could not derive any cache routes from the configured targets."
+        warn "Set MIRRORET_APT_TARGETS / MIRRORET_RPM_TARGETS and re-run --upgrade."
         rm -f "$tmp"
         return 1
     fi
@@ -154,31 +181,29 @@ import sys
 src, dest = sys.argv[1], sys.argv[2]
 
 routes = {}
-with open(src) as fh:
-    for line in fh:
-        line = line.rstrip("\n")
-        if not line:
-            continue
-        directory, _, upstream = line.partition("\t")
-        if not directory or not upstream:
-            continue
-        # Ordered de-duplication: the first upstream seen for a flavor is the
-        # main archive, and any distinct one after it (a separately hosted
-        # security archive) becomes a fallback candidate.
-        bucket = routes.setdefault(directory, [])
-        if upstream not in bucket:
-            bucket.append(upstream)
+for line in open(src):
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    kind, name, root, upstream = (line.split("\t") + ["", "", "", ""])[:4]
+    if not name or not upstream:
+        continue
+    entry = routes.setdefault(
+        name, {"upstreams": [], "kind": kind or "apt", "root": root}
+    )
+    # Ordered de-duplication: the first upstream seen is the main archive,
+    # any distinct one after it (a separately hosted security archive)
+    # becomes a fallback candidate tried in order.
+    if upstream not in entry["upstreams"]:
+        entry["upstreams"].append(upstream)
 
 doc = {
     "_comment": (
-        "Generated by mirroret. Each key is the URL prefix clients use and "
-        "the directory the mirror writes into; upstreams are tried in order "
-        "so a suite hosted on a separate security archive still resolves."
+        "Generated by mirroret. Each key is the URL-match prefix the daemon "
+        "sees; 'root' is the on-disk directory its files live in; upstreams "
+        "are tried in order so a separately hosted security archive resolves."
     ),
-    "routes": {
-        name: {"upstreams": ups, "kind": "apt"}
-        for name, ups in sorted(routes.items())
-    },
+    "routes": {name: routes[name] for name in sorted(routes)},
 }
 with open(dest, "w") as fh:
     json.dump(doc, fh, indent=2)
@@ -223,7 +248,7 @@ $(mirroret_script_preamble)
 
 exec python3 "${base_dir}/engines/mirroret_cache.py" \\
     --config "${MIRRORET_CACHE_CONFIG}" \\
-    --cache-dir "${base_dir}/apt" \\
+    --cache-dir "${base_dir}" \\
     --listen "127.0.0.1:${MIRRORET_CACHE_PORT}" \\
     --metadata-ttl "${MIRRORET_CACHE_METADATA_TTL}" ${extra}
 LAUNCHER
@@ -266,18 +291,19 @@ UNIT
 # configure_cache - the single entry point install.sh calls.
 configure_cache() {
     validate_cache_mode
-    if ! cache_mode_enabled; then
-        debug "MIRRORET_APT_MODE=mirror: no cache daemon needed."
+    validate_rpm_mode
+    if ! cache_mode_enabled && ! rpm_cache_mode_enabled; then
+        debug "mirror mode for both APT and RPM: no cache daemon needed."
         # Switching back to full-mirror mode must also stop the daemon that
         # an earlier hybrid/cache install left enabled.
         if [[ "${DRY_RUN:-0}" != "1" ]] && [[ -f "${MIRRORET_CACHE_UNIT}" ]]; then
             systemctl disable --now mirroret-cache 2>/dev/null || true
-            info "mirroret-cache disabled (MIRRORET_APT_MODE=mirror)."
+            info "mirroret-cache disabled (APT and RPM both in mirror mode)."
         fi
         return 0
     fi
 
-    section "Configuring On-Demand Cache (mode: ${MIRRORET_APT_MODE})"
+    section "Configuring On-Demand Cache (apt: ${MIRRORET_APT_MODE}, rpm: ${MIRRORET_RPM_MODE})"
     if ! generate_cache_config "${MIRRORET_CACHE_CONFIG}"; then
         # No routes means the daemon would die on start-up and restart
         # every 5 s forever while nginx 502s every pool miss. Better to
