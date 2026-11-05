@@ -35,6 +35,33 @@ MIRRORET_DOCKER_MODE="${MIRRORET_DOCKER_MODE:-cache}"
 _docker_valid_image() {
     [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]
 }
+
+# MIRRORET_DOCKER_BIND - loopback (default) or all. Loopback binds the
+# registry to 127.0.0.1 and relies on nginx /v2/ (already proxied) for LAN
+# access on the web port, so the raw registry port is never exposed
+# unauthenticated. 'all' restores the old 0.0.0.0 behaviour for anyone who
+# needs the raw port and also reopens it in the firewall.
+MIRRORET_DOCKER_BIND="${MIRRORET_DOCKER_BIND:-loopback}"
+
+# _docker_bind_addr - the registry http.addr value.
+_docker_bind_addr() {
+    local port="${MIRRORET_DOCKER_REGISTRY_PORT:-5000}"
+    if [[ "${MIRRORET_DOCKER_BIND:-loopback}" == "all" ]]; then
+        printf ':%s' "${port}"
+    else
+        printf '127.0.0.1:%s' "${port}"
+    fi
+}
+
+# _docker_bind_publish - the container -p mapping.
+_docker_bind_publish() {
+    local port="${MIRRORET_DOCKER_REGISTRY_PORT:-5000}"
+    if [[ "${MIRRORET_DOCKER_BIND:-loopback}" == "all" ]]; then
+        printf '%s:%s' "${port}" "${port}"
+    else
+        printf '127.0.0.1:%s:%s' "${port}" "${port}"
+    fi
+}
 MIRRORET_DOCKER_UPSTREAM_URL="${MIRRORET_DOCKER_UPSTREAM_URL:-https://registry-1.docker.io}"
 MIRRORET_DOCKER_IMAGES_FILE="${MIRRORET_DOCKER_IMAGES_FILE:-}"
 
@@ -251,7 +278,7 @@ storage:
   filesystem:
     rootdirectory: ${root_dir}
 http:
-  addr: :${registry_port}
+  addr: $(_docker_bind_addr)
   headers:
     X-Content-Type-Options: [nosniff]
 HEAD
@@ -359,7 +386,7 @@ _setup_container_registry() {
         xrun "${CONTAINER_CMD}" run -d \
             --name "${MIRRORET_DOCKER_CONTAINER_NAME}" \
             --restart=always \
-            -p "${registry_port}:${registry_port}" \
+            -p "$(_docker_bind_publish)" \
             -v "${base_dir}/docker/registry:/var/lib/registry:z" \
             -v "/etc/docker/registry/config.yml:/etc/docker/registry/config.yml:ro,z" \
             ${proxy_args} \

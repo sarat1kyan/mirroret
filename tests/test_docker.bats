@@ -39,3 +39,24 @@ teardown() {
     ! grep -q 'touch' "${out}"
     ! grep -q ';b' "${out}"
 }
+
+@test "docker: registry binds loopback by default, all interfaces only on request" {
+    run _docker_bind_addr
+    [ "$output" = "127.0.0.1:5000" ]
+    run _docker_bind_publish
+    [ "$output" = "127.0.0.1:5000:5000" ]
+
+    MIRRORET_DOCKER_BIND=all
+    run _docker_bind_addr
+    [ "$output" = ":5000" ]
+    run _docker_bind_publish
+    [ "$output" = "5000:5000" ]
+}
+
+@test "docker: emitted registry config addr is loopback by default" {
+    _emit_registry_config "${TMPDIR_TEST}/registry.yml"
+    grep -qE 'addr: 127\.0\.0\.1:5000' "${TMPDIR_TEST}/registry.yml"
+    MIRRORET_DOCKER_BIND=all
+    _emit_registry_config "${TMPDIR_TEST}/registry2.yml"
+    grep -qE 'addr: :5000' "${TMPDIR_TEST}/registry2.yml"
+}
