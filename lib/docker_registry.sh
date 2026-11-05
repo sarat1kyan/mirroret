@@ -27,6 +27,14 @@
 MIRRORET_DOCKER_CONTAINER_NAME="${MIRRORET_DOCKER_CONTAINER_NAME:-mirroret-registry}"
 MIRRORET_DOCKER_BACKEND="${MIRRORET_DOCKER_BACKEND:-auto}"
 MIRRORET_DOCKER_MODE="${MIRRORET_DOCKER_MODE:-cache}"
+
+# _docker_valid_image <ref> - true for a plain image reference only. Used
+# wherever an image name is spliced into a generated root script or a docker
+# CLI argument, so a crafted entry cannot inject shell. Allows the characters
+# a real reference uses (registry host, path, tag, @digest) and nothing else.
+_docker_valid_image() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]
+}
 MIRRORET_DOCKER_UPSTREAM_URL="${MIRRORET_DOCKER_UPSTREAM_URL:-https://registry-1.docker.io}"
 MIRRORET_DOCKER_IMAGES_FILE="${MIRRORET_DOCKER_IMAGES_FILE:-}"
 
@@ -566,6 +574,13 @@ write_docker_sync_script() {
             line="${line%%#*}" # strip inline comments
             line="${line// /}" # strip spaces
             [[ -z "${line}" ]] && continue
+            # The line is spliced into a generated root script. Anything but a
+            # plain image reference is shell the operator (or whoever can write
+            # the list) would run as root at 02:00. Reject it outright.
+            if ! _docker_valid_image "${line}"; then
+                warn "Docker image list: skipping invalid entry: ${line}"
+                continue
+            fi
             images_block+=" \"${line}\""$'\n'
         done < "${images_file}"
         info "Docker image list loaded from: ${images_file}"
