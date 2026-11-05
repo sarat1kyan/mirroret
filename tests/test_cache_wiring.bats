@@ -64,6 +64,50 @@ teardown() {
     MIRRORET_APT_MODE=cache;  ! cache_mode_is_metadata_only
 }
 
+@test "rpm mode: the daemon runs for hybrid and cache, not for mirror" {
+    MIRRORET_RPM_MODE=mirror; ! rpm_cache_mode_enabled
+    MIRRORET_RPM_MODE=hybrid; rpm_cache_mode_enabled
+    MIRRORET_RPM_MODE=cache;  rpm_cache_mode_enabled
+}
+
+@test "rpm mode: hybrid and cache are both metadata-only for RPM" {
+    # RPM has no 'mirror indices, fetch pool up front' middle state; both
+    # on-demand modes publish verbatim metadata and fetch packages on demand.
+    MIRRORET_RPM_MODE=hybrid; rpm_mode_is_metadata_only
+    MIRRORET_RPM_MODE=cache;  rpm_mode_is_metadata_only
+    MIRRORET_RPM_MODE=mirror; ! rpm_mode_is_metadata_only
+}
+
+@test "rpm spec: metadata_only is true under a hybrid RPM mode" {
+    run bash -c "export MIRRORET_RPM_MODE=hybrid MIRRORET_BASE_DIR='${TMPDIR_TEST}/srv'; \
+        source '${SCRIPT_DIR}/lib/logging.sh'; source '${SCRIPT_DIR}/lib/common.sh'; \
+        source '${SCRIPT_DIR}/lib/cache.sh'; source '${SCRIPT_DIR}/lib/targets.sh'; \
+        write_rpm_target_spec rocky 9 x86_64 \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"metadata_only\"])'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "True" ]
+}
+
+@test "rpm spec: metadata_only is false under mirror mode" {
+    run bash -c "export MIRRORET_RPM_MODE=mirror MIRRORET_BASE_DIR='${TMPDIR_TEST}/srv'; \
+        source '${SCRIPT_DIR}/lib/logging.sh'; source '${SCRIPT_DIR}/lib/common.sh'; \
+        source '${SCRIPT_DIR}/lib/cache.sh'; source '${SCRIPT_DIR}/lib/targets.sh'; \
+        write_rpm_target_spec rocky 9 x86_64 \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"metadata_only\"])'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "False" ]
+}
+
+@test "rpm mode: a typo is rejected" {
+    run bash -c "
+        source '${SCRIPT_DIR}/lib/logging.sh'
+        source '${SCRIPT_DIR}/lib/common.sh'
+        source '${SCRIPT_DIR}/lib/cache.sh'
+        MIRRORET_RPM_MODE=cahce validate_rpm_mode"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"mirror, hybrid, cache"* ]]
+}
+
 # -- route table --------------------------------------------------------------
 
 @test "cache routes: security archives become ordered fallbacks" {

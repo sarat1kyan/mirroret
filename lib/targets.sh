@@ -582,6 +582,7 @@ write_rpm_target_spec() {
   "newest_only": $(_json_bool "${MIRRORET_RPM_NEWEST_ONLY:-1}"),
   "sources": $(_json_bool "${MIRRORET_RPM_SOURCE:-0}"),
   "delete": $(_json_bool "${MIRRORET_RPM_DELETE:-1}"),
+  "metadata_only": $(_json_bool "$(declare -F rpm_mode_is_metadata_only >/dev/null 2>&1 && rpm_mode_is_metadata_only && echo 1 || echo 0)"),
   "min_free_gb": $(_json_number "${MIRRORET_SYNC_MIN_FREE_GB:-10}" 10),
   "repos": [${repos_json}]
 }

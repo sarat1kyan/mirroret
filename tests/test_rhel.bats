@@ -214,3 +214,27 @@ teardown() {
     _native_registry_info
     [ "${NATIVE_CONF_DIR}" = "/etc/docker-distribution/registry" ]
 }
+
+# -- RPM mode / native-engine requirement -------------------------------------
+
+@test "rpm hybrid requires the native engine" {
+    # metadata-only exists only on the native Python engine; reposync has no
+    # equivalent, so hybrid/cache must hard-error rather than silently mirror.
+    source "${SCRIPT_DIR}/lib/cache.sh"
+    mock_os_release "rocky" "9.3"; detect_distro_from_mock
+    MIRRORET_RPM_MODE=hybrid
+    MIRRORET_RPM_ENGINE=reposync
+    run configure_rpm_mirroring "testbk"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"requires the native engine"* ]]
+}
+
+@test "rpm mirror mode allows reposync" {
+    source "${SCRIPT_DIR}/lib/cache.sh"
+    mock_os_release "rocky" "9.3"; detect_distro_from_mock
+    MIRRORET_RPM_MODE=mirror
+    MIRRORET_RPM_ENGINE=reposync
+    # Dry-run: must NOT die on the engine check (it may warn about tooling).
+    run configure_rpm_mirroring "testbk"
+    [[ "$output" != *"requires the native engine"* ]]
+}

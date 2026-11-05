@@ -22,6 +22,10 @@
 # hands only misses to the daemon, so a warm cache costs nothing.
 
 MIRRORET_APT_MODE="${MIRRORET_APT_MODE:-mirror}"
+# RPM gets its own mode knob rather than overloading the APT one: a site may
+# want a full RPM mirror beside an on-demand APT one, or the reverse. Default
+# mirror keeps every existing install unchanged.
+MIRRORET_RPM_MODE="${MIRRORET_RPM_MODE:-mirror}"
 MIRRORET_CACHE_PORT="${MIRRORET_CACHE_PORT:-8082}"
 MIRRORET_CACHE_CONFIG="${MIRRORET_CACHE_CONFIG:-/etc/mirroret/cache.json}"
 MIRRORET_CACHE_MAX_SIZE_GB="${MIRRORET_CACHE_MAX_SIZE_GB:-0}"
@@ -51,6 +55,32 @@ validate_cache_mode() {
         *)
             die "MIRRORET_APT_MODE must be one of: mirror, hybrid, cache" \
                 "  got: '${MIRRORET_APT_MODE}'"
+            ;;
+    esac
+}
+
+# rpm_cache_mode_enabled - true when RPM should be served on demand.
+rpm_cache_mode_enabled() {
+    case "${MIRRORET_RPM_MODE:-mirror}" in
+        hybrid|cache) return 0 ;;
+        *)            return 1 ;;
+    esac
+}
+
+# rpm_mode_is_metadata_only - true when the RPM sync should publish verbatim
+# repodata and download no packages. Both on-demand RPM modes do this; the
+# only difference is whether a nightly warm sync also runs.
+rpm_mode_is_metadata_only() {
+    rpm_cache_mode_enabled
+}
+
+# validate_rpm_mode - reject a typo in MIRRORET_RPM_MODE.
+validate_rpm_mode() {
+    case "${MIRRORET_RPM_MODE:-mirror}" in
+        mirror|hybrid|cache) return 0 ;;
+        *)
+            die "MIRRORET_RPM_MODE must be one of: mirror, hybrid, cache" \
+                "  got: '${MIRRORET_RPM_MODE}'"
             ;;
     esac
 }

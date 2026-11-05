@@ -650,6 +650,16 @@ configure_rpm_mirroring() {
     local backup_id="$1"
     local engine
     engine="$(_rpm_resolve_engine)"
+    # Hybrid/cache RPM relies on the native engine's --metadata-only; reposync
+    # has no equivalent, so refuse rather than silently fall back to a full
+    # mirror the operator did not ask for.
+    if declare -F rpm_cache_mode_enabled >/dev/null 2>&1 && rpm_cache_mode_enabled \
+            && [[ "${engine}" != "native" ]]; then
+        die "MIRRORET_RPM_MODE=${MIRRORET_RPM_MODE} requires the native engine," \
+            "  but ${engine} was selected (repo not in catalog, or python3 missing)." \
+            "  Set MIRRORET_RPM_ENGINE=native and use catalog repo ids" \
+            "  (e.g. MIRRORET_RPM_TARGETS=\"rocky:9\"), or use MIRRORET_RPM_MODE=mirror."
+    fi
     MIRRORET_RPM_RESOLVED_ENGINE="${engine}"
     export MIRRORET_RPM_RESOLVED_ENGINE
     case "${engine}" in
